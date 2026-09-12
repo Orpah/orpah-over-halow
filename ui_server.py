@@ -38,7 +38,9 @@ for _s in (sys.stdout, sys.stderr):
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
-HOST_DIR = os.path.join(HERE, "..", "host")
+# 空口仿真：用**本仓副本**（vendor/halow）而不是上游目录 —— 本项目要求零硬件、单进程即可跑 demo
+# （不用先启动 halow-demo；副本来源与同步约定见 vendor/halow/VENDOR.md）
+HOST_DIR = os.path.join(HERE, "vendor", "halow")
 if HOST_DIR not in sys.path:
     sys.path.insert(0, HOST_DIR)
 
@@ -938,8 +940,6 @@ import http.server                                       # noqa: E402
 import socketserver                                      # noqa: E402
 
 STATIC_DIR = os.path.join(HERE, "ui", "static")
-# ui_i18n.js 单一源在 halow-demo 主 UI（simulator/tools/ui/static），这里只读不复制
-TOOLS_STATIC_DIR = os.path.join(HERE, "..", "tools", "ui", "static")
 # 回放单次返回的上报点上限（防一把抱走整库；超了页面提示 truncated）
 REPLAY_MAX_POINTS = 20000
 
@@ -1019,13 +1019,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             rel = "index.html"
         p = os.path.join(STATIC_DIR, rel)
         if not os.path.isfile(p):
-            # ui_i18n.js 是单一源共享字典，放在 halow-demo 主 UI（tools/ui/static）：
-            # 两个 UI 引用同一文件，改一处两边生效（避免复制两份不同步）。
-            if rel == "ui_i18n.js":
-                p = os.path.join(TOOLS_STATIC_DIR, "ui_i18n.js")
-            if not os.path.isfile(p):
-                self._send(404, b"not found", "text/plain")
-                return
+            self._send(404, b"not found", "text/plain")
+            return
         ctype = {"html": "text/html", "js": "application/javascript",
                  "css": "text/css", "png": "image/png", "jpg": "image/jpeg",
                  "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp",

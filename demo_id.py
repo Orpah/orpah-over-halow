@@ -11,7 +11,7 @@ demo_id.py — Orpah ID 端到端验收（纯 Python，无硬件）
   - 负向：篡改、重放、超窗、none+level≠3、未知设备、撤销、坏 CHECK、坏 SN
   - router xport 附加观测（不参与验签，§5.7）
 
-运行：C:\\Python313\\python.exe simulator/orpah/demo_id.py
+运行：C:\Python313\python.exe demo_id.py
 （现有 L1–L4 业务流不动；本 demo 只演示 orpah_id 层。）
 """
 import sys

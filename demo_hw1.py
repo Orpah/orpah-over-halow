@@ -20,7 +20,7 @@
   python demo_hw1.py --raw-sniff --iface 以太网 # 嗅探 0x88B5 帧
 
 为什么读板卡走 tools UI 的 HTTP 而不是直接开串口：AT 方言探测（V1.6 vs V2.4）、逐条错开轮询、
-LMAC/UMAC 块抑制这些坑都已经在 `tools/ui/server.py` 里踩过并修好了 —— 再抄一份必然漂移。
+LMAC/UMAC 块抑制这些坑都已经在 `halow-demo/simulator/tools/ui/server.py` 里踩过并修好了 —— 再抄一份必然漂移。
 """
 import argparse
 import json
@@ -130,7 +130,7 @@ def check_env():
     info = http_json(f"{TOOLS_UI}/api/info")
     if info is None:
         print(f"{WARN} tools UI ({TOOLS_UI}) 不可达 → 读不到板卡状态。")
-        print("      先启动它（VS Code 任务 sim-server-host-<型号>，或 python tools/ui/server.py），")
+        print("      先启动它（halow-demo 的 VS Code 任务 sim-server-host-<型号>，或 python simulator/tools/ui/server.py）",)
         print("      并在页面上把两块板子的串口连上（真机用 tj45/txah 档案，会自动探测固件代次）。")
     else:
         print(f"{OK} tools UI 可达：target={info.get('target')} devices={list((info.get('devices') or {}).keys())}")

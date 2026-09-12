@@ -30,7 +30,7 @@ for _s in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-HOST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "host")
+HOST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "halow")
 if HOST_DIR not in sys.path:
     sys.path.insert(0, HOST_DIR)
 ORPAH_DIR = os.path.dirname(os.path.abspath(__file__))

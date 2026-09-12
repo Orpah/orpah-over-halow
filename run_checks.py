@@ -50,6 +50,7 @@ SUITES = [
     ("抓包解析 / 双源对照", "test_capture.py", []),
     ("设备时钟漂移（长基线）", "demo_clock.py", []),
     ("定位内核（pos.js，node 跑原文）", "test_posjs.py", []),
+    ("文案字典（zh/en 一致 + 页面引用无缺失）", "test_i18n.py", []),
 ]
 # 端到端 demo：会起模拟器/占端口，默认不跑
 E2E = [

@@ -29,7 +29,9 @@ for _s in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-HOST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "host")
+# 空口仿真：用**本仓副本**（vendor/halow，来源 halow-demo，见 vendor/halow/VENDOR.md）——
+# 本项目要求能独立运行（不用先起 halow-demo）
+HOST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor", "halow")
 if HOST_DIR not in sys.path:
     sys.path.insert(0, HOST_DIR)
 ORPAH_DIR = os.path.dirname(os.path.abspath(__file__))

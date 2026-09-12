@@ -1,13 +1,16 @@
 # ORPAH-over-HaLow 演示（纯 PC，无硬件）
 
-> 在 halow-demo 内、基于 PC 模拟器（`host/sim.py`）实现的 ORPAH-over-HaLow 原型。
+> **独立仓库**（2026-09-12 从 `halow-demo/simulator/orpah/` 迁出，`git subtree split` 保留提交历史）。
+> 本仓库自带空口仿真副本（`vendor/halow/`，来源 halow-demo，见 `vendor/halow/VENDOR.md`）
+> —— **零硬件、单进程即可跑全链路 demo**，不需要先启动 halow-demo。
+> **两个仓库的分工**：`halow-demo` = 空口/设备/长距（不碰业务）；**本仓库 = ORPAH 业务全链路**。
+> 真机阶段两者通过 **host 数据口（TCP，帧格式见 `host_bus.py`）** 相接；换真实 SPI 只替换底层收发。
 > **链路/协议**：L1 数据通路最小骨架（SPEC §9 L1）、L2 全消息流 + 走失表 + 跟踪状态
 > （已含双向 Server→Client 下行）、L3 多 Router 漫游/去重 + SN 码号校验（F-04/F-07/F-01）、
 > L3b Router 主动拉表、L3c 发现走失上报（ORPAH-FOUND）。
 > **其上**：Orpah ID 身份/签名层、设备清册与走失案件、告警、指标面板、RSSI 定位与回放、
-> SQLite + IoTDB 双存储。
+> SQLite + IoTDB 双存储、能量轴（免电池客户端）。
 > 只想先看懂系统：直接跳到《能力总览》《页面一览》《走一遍完整剧本》。
-> 成熟后再抽离独立 `orpah-demo` 仓库。
 
 ## 一图流（L1 数据通路）
 
@@ -55,7 +58,8 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 
 ## 页面一览（`ui/static/`，11 页）
 
-全部页面共用 `tools/ui/static/ui_i18n.js`（zh/en 单一源，右上角按钮切换，`?lang=en` 可直开）。
+全部页面共用 `ui/static/ui_i18n.js`（zh/en 双语，**本项目自持一份**；右上角按钮切换，`?lang=en` 可直开）。
+自检：`python test_i18n.py`（zh/en 一一对应 + 每个 key 恰好 2 次 + 页面引用的 key 无缺失）。
 
 | 页面 | 作用 | 主要接口 | 存储 |
 |---|---|---|---|
@@ -82,8 +86,8 @@ POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/�
 |---|---|---|
 | `ui/static/pos.js` | 定位纯函数：RSSI↔距离、三边、WLS、椭圆、质量（GDOP/残差）、观测归集、卡尔曼、**报文流判定（缺口/回退/帧间隔）** | `track.html`、`replay.html` |
 | `ui/static/map.js` | 底图源列表与条款、本地坐标→经纬度、离线回落 | `track.html`、`replay.html` |
-| `tools/ui/static/ui_i18n.js` | **共享 i18n 字典**（zh/en 单一源） | orpah 11 页 + halow-demo 主 UI |
-| `orpah/ui/static/style.css` | 样式与配色变量（告警红 / 上行蓝 / ID 橙 / 发现灰，色弱校验过） | orpah 各页 |
+| `ui/static/ui_i18n.js` | **文案字典**（zh/en，本项目自持一份，2026-09-12 从共享一份拆出） | orpah 各页（见 `test_i18n.py`） |
+| `ui/static/style.css` | 样式与配色变量（告警红 / 上行蓝 / ID 橙 / 发现灰，色弱校验过） | orpah 各页 |
 
 > ⚠ **模型参数（路径损耗 A/n、噪声）以服务端为准**：`motion.py` 是**唯一源** → `GET /api/config` →
 > `track`/`rssi`/`replay` 开页取默认值（输入框仍可手改）。页面 HTML 里的 `value=` 只是**离线兜底**；
@@ -214,21 +218,19 @@ Router 主动拉表已在 **L3b** 落地（见下）。
 ### 方式 1：Web UI（推荐，看得见的 demo）
 
 ```bash
-cd simulator/orpah
-python ui_server.py                  # 自动开浏览器 http://127.0.0.1:8901/
+python ui_server.py                  # 自动开浏览器 http://127.0.0.1:8901/（在本仓库根目录跑）
 # 或：python ui_server.py --every 1.5 --sn CN-WH01-9AF3C1D2
 ```
 - 内嵌 AP+STA 模拟器 + Router 桥 + Server，Client **自动周期上报**。
 - 页面：精简 3 节点拓扑（客户端 →(空口)→ 路由器 →(UDP)→ 服务器）+ ORPAH-REPORT
   实时报文流（客户端注入/路由器上行/服务器收到 三阶段 ✓）+ 三端计数 + 空口收发
   （单向上行：客户端发送/路由器接收增长）+ 暂停/改 sn/改间隔。
-- 文案走共享字典 `tools/ui/static/ui_i18n.js`（zh/en，`?lang=en` 可切英文预览）。
+- 文案走本项目自持字典 `ui/static/ui_i18n.js`（zh/en，`?lang=en` 可切英文预览）。
 - 页面数据链路：SSE 事件（点亮动画）+ `/api/status` 全量（计数/连接/表格真相）。
 
 ### 方式 2：命令行验收
 
 ```bash
-cd simulator/orpah
 python demo_l1.py --n 3        # 进程内建 AP+STA 模拟器 + Server/Router/Client，验收 3 条上行
 # 期望输出结尾：Client 注入: 3 条 / Server 收到: 3 条 / 结果: PASS
 ```
@@ -236,8 +238,7 @@ python demo_l1.py --n 3        # 进程内建 AP+STA 模拟器 + Server/Router/C
 ### 方式 3：一键跑全部检查 + 出报告（推荐做回归时用）
 
 ```bash
-cd simulator/orpah
-python run_checks.py            # 14 个离线套件（各模块自检 + 批量合规 + 抓包解析 + 时钟漂移 + 能量轴 + pos.js 内核），约 2 秒
+python run_checks.py            # 15 个离线套件（各模块自检 + 批量合规 + 抓包解析 + 时钟漂移 + 能量轴 + pos.js 内核 + 文案字典），约 2 秒
 python run_checks.py --e2e      # 再加 5 个端到端 demo（L1/L2/L3/L3b/防 spoof），1-3 分钟
 ```
 - 报告写到 `checks_report.md`（含 git HEAD、每套件结果/耗时/关键输出、失败详情）。
@@ -250,25 +251,27 @@ python run_checks.py --e2e      # 再加 5 个端到端 demo（L1/L2/L3/L3b/防 
 
 ## 分开跑（理解各进程）
 
+> 空口用**本仓库自带的副本** `vendor/halow/sim.py`（也可以拿 halow-demo 里那份跑，参数一样）。
+
 终端 1 — AP 模拟器（Router 侧，开 host 口）：
 ```bash
-python host/sim.py --name Router-AP --role AP --console 9401 --link 9411 --host 9421
+python vendor/halow/sim.py --name Router-AP --role AP --console 9401 --link 9411 --host 9421
 ```
 终端 2 — STA 模拟器（Client 侧，开 host 口，连 AP 空口）：
 ```bash
-python host/sim.py --name Client-STA --role STA --console 9402 --link 9412 --peer 127.0.0.1:9411 --host 9422
+python vendor/halow/sim.py --name Client-STA --role STA --console 9402 --link 9412 --peer 127.0.0.1:9411 --host 9422
 ```
 终端 3 — Server：
 ```bash
-python orpah/server.py --port 19447
+python server.py --port 19447
 ```
 终端 4 — Router 桥（连 AP 的 host 口，转发 UDP）：
 ```bash
-python orpah/router.py --ap-port 9421 --server-port 19447
+python router.py --ap-port 9421 --server-port 19447
 ```
 终端 5 — Client（连 STA 的 host 口，周期上报）：
 ```bash
-python orpah/client.py --sta-port 9422 --sn CN-WH01-9AF3C1D2 --every 3
+python client.py --sta-port 9422 --sn CN-WH01-9AF3C1D2 --every 3
 ```
 > 需先让 STA 关联 AP（同一 SSID，默认自动 halowlink@9080；等 `AT+CONN_STATE`=CONNECTED
 > 再开 Client）。可用 `telnet 127.0.0.1 9402` 看状态。
@@ -276,52 +279,59 @@ python orpah/client.py --sta-port 9422 --sn CN-WH01-9AF3C1D2 --every 3
 ## 代码结构与关键机制
 
 ```
-simulator/
-├── host/
-│   └── sim.py            # PC 模拟器（AP/STA）：host 数据口 --host <port>，语义 = SPI MACBUS
-│                         #   DATA_TX/DATA_RX；帧 AA 55 TYPE LEN CRC payload；另有 24 项回归 run_tests.py
-└── orpah/
-    ├── orpah_proto.py    # 【协议】报文全集编解码 + 以太网帧(0x88B5) + SN 校验 + effective_ts（时钟归一化）
-    ├── host_bus.py       # 【链路】host 数据口驱动（只依赖 TCP+帧格式，不 import sim）
-    ├── client.py         # 【链路】Client host：REQ-CONNECT→REPORT + 收下行回执
-    ├── router.py         # 【链路】Router 桥：上行转发/下行注入、走失缓存、主动拉表 sync()、FOUND 上报
-    ├── server.py         # 【链路】Server：权威走失库、(sn,seq) 去重、TRACKING-STATUS/LOST-TABLE/FOUND
-    ├── waiting.py        # 【工具】共享等待：wait_until / wait_new（按截止时间，不猜循环次数）
-    ├── orpah_id.py       # 【身份】Crockford32 / SN+CHECK / JCS / ES256·HS256 / 验签 / 多代密钥状态机
-    ├── keystore.py       # 【身份】密钥库写穿透（SQLite keys/key_revocations；私钥不入库）
-    ├── damm32.py         # 【身份】SN 校验位算法**单一源**（与 luhn32.py / mod97.py 同；前后端都调它）
-    ├── luhn32.py         # 【身份】同上（Luhn mod 32）
-    ├── mod97.py          # 【身份】同上（Mod 97 两位）
-    ├── spoof.py          # 【安全】攻击构造**单一源**（13 种 + 合法对照），脚本与页面共用
-    ├── registry.py       # 【业务】人员↔设备台账（SQLite persons/devices，写穿透 + 首启播种）
-    ├── cases.py          # 【业务】案件状态机（立案→发现→找回/撤销→结案；handler 与 status 正交）
-    ├── alerts.py         # 【业务】告警规则（无存储、按快照重算；阈值走 ORPAH_ALERT_* 环境变量）
-    ├── metrics.py        # 【业务】指标纯计算（验签失败率/算法分布/平均 RSSI/处置时长）
-    ├── clock.py          # 【业务】设备时钟偏移/漂移估计（纯计算；只估计不改数据，短窗/跳变/噪声里给 None）
-    ├── energy.py         # 【业务】能量轴三参数模型（采集/储能/上报代价 → 间隔与降级；参数是**演示标定值**）
-    ├── stations.py       # 【定位】站位 = 已知坐标观测点（绑定 > 时间窗中位数 > 路由器序列）
-    ├── motion.py         # 【定位】演示用「移动的人」+ 路径损耗/噪声（A/n **唯一源** → /api/config）
-    ├── tsdb.py           # 【存储】IoTDB 接入（设备流/各路由器观测/事件；未就绪优雅降级）
-    ├── ui_server.py      # 【UI】Web 服务：内嵌整条链路 + HTTP/SSE（方式 1）
-    ├── ui/static/        # 【UI】11 个页面 + pos.js / map.js / app.js / style.css / vendor/leaflet
-    ├── demo_l1.py        # 【验收】L1 数据通路（内嵌 2 模拟器，命令行）
-    ├── demo_l2.py        # 【验收】L2 全消息流（双向 + 走失两分支）
-    ├── demo_l3.py        # 【验收】L3 多 Router 漫游/去重 + SN 校验（2×Router）
-    ├── demo_l4.py        # 【验收】L3b Router 主动拉表（启动 / 缓存未命中拉取）
-    ├── demo_clock.py     # 【验收】设备时钟估计（合成几小时数据：准/偏快/短基线/拨表/乱报 + 分辨率）
-    ├── demo_spoof.py     # 【验收】防 spoof 真·端到端（攻击注入空口，Server 侧断言）
-    ├── demo_id.py        # 【验收】Orpah ID 22 用例（四级降级签名 + 篡改/重放/超窗/坏 CHECK/撤销）
-    ├── demo_hw1.py       # 【验收·未真机验证】阶段二真机自检：代次/族、关联、跨空口 UDP、raw 0x88B5
-    ├── run_checks.py     # 【测试台】14 个离线套件一键跑 + 出报告（--e2e 再加 5 个 demo）
-    ├── test_*.py         # 【测试台】各模块自检：motion / keys / spoof / alerts / metrics / clock /
-    │                     #   energy / tsdb_audit / server / levels / capture / posjs（pos.js 原文用 node 跑）
-    ├── test_posjs.py     # 【测试台】定位内核 pos.js 的离线自检（node 执行同一份源码，不复制算法）
-    ├── capture.py        # 【工具】pcap → ORPAH 报文解析 + 双源对照（真机抓包在网口侧；见文件头）
-    ├── checks_batch.py   # 【测试台】表驱动批量用例（黄金样本 / SN 边界 / parse_sn / 报文编解码）
-    ├── checks_report.md  # 【测试台】最近一次报告（入库，同 host/test_results.txt 惯例）
-    └── docs/
-        └── real-hw-stage2.md   # 上机手册 + 五组验证清单（不预设通路；烧录由用户执行）
+orpah-over-halow/                      # 本项目（ORPAH 业务全链路；纯 PC + Python，无硬件）
+├── vendor/halow/                      # 【空口副本】sim.py / devprofiles.py / blang.py
+│                                      #   来源 halow-demo，逐字节复制，见 VENDOR.md。
+│                                      #   demo 就靠它零依赖、单进程跑起来；改空口必须回上游。
+├── host_bus.py         # 【链路】host 数据口驱动（只依赖 TCP+帧格式，不 import sim）→ 真机换 SPI 只改底层
+├── orpah_proto.py      # 【协议】报文全集编解码 + 以太网帧(0x88B5) + SN 校验 + effective_ts（时钟归一化）
+├── client.py           # 【链路】Client host：REQ-CONNECT→REPORT + 收下行回执
+├── router.py           # 【链路】Router 桥：上行转发/下行注入、走失缓存、主动拉表 sync()、FOUND 上报
+├── server.py           # 【链路】Server：权威走失库、(sn,seq) 去重、TRACKING-STATUS/LOST-TABLE/FOUND
+├── waiting.py          # 【工具】共享等待：wait_until / wait_new（按截止时间，不猜循环次数）
+├── orpah_id.py         # 【身份】Crockford32 / SN+CHECK / JCS / ES256·HS256 / 验签 / 多代密钥状态机
+├── keystore.py         # 【身份】密钥库写穿透（SQLite keys/key_revocations；私钥不入库）
+├── damm32.py           # 【身份】SN 校验位算法**单一源**（与 luhn32.py / mod97.py 同；前后端都调它）
+├── luhn32.py           # 【身份】同上（Luhn mod 32）
+├── mod97.py            # 【身份】同上（Mod 97 两位）
+├── spoof.py            # 【安全】攻击构造**单一源**（13 种 + 合法对照），脚本与页面共用
+├── registry.py         # 【业务】人员↔设备台账（SQLite persons/devices，写穿透 + 首启播种）
+├── cases.py            # 【业务】案件状态机（立案→发现→找回/撤销→结案；handler 与 status 正交）
+├── alerts.py           # 【业务】告警规则（无存储、按快照重算；阈值走 ORPAH_ALERT_* 环境变量）
+├── metrics.py          # 【业务】指标纯计算（验签失败率/算法分布/平均 RSSI/处置时长）
+├── clock.py            # 【业务】设备时钟偏移/漂移估计（纯计算；只估计不改数据，短窗/跳变/噪声里给 None）
+├── energy.py           # 【业务】能量轴三参数模型（采集/储能/上报代价 → 间隔与降级；参数是**演示标定值**）
+├── stations.py         # 【定位】站位 = 已知坐标观测点（绑定 > 时间窗中位数 > 路由器序列）
+├── motion.py           # 【定位】演示用「移动的人」+ 路径损耗/噪声（A/n **唯一源** → /api/config）
+├── tsdb.py             # 【存储】IoTDB 接入（设备流/各路由器观测/事件；未就绪优雅降级）
+├── ui_server.py        # 【UI】Web 服务：内嵌整条链路 + HTTP/SSE（方式 1）→ http://127.0.0.1:8901/
+├── ui/static/          # 【UI】11 个页面 + pos.js / map.js / app.js / ui_i18n.js / style.css / vendor/leaflet
+├── demo_l1.py          # 【验收】L1 数据通路（内嵌 2 模拟器，命令行）
+├── demo_l2.py          # 【验收】L2 全消息流（双向 + 走失两分支）
+├── demo_l3.py          # 【验收】L3 多 Router 漫游/去重 + SN 校验（2×Router）
+├── demo_l4.py          # 【验收】L3b Router 主动拉表（启动 / 缓存未命中拉取）
+├── demo_clock.py       # 【验收】设备时钟估计（合成几小时数据：准/偏快/短基线/拨表/乱报 + 分辨率）
+├── demo_spoof.py       # 【验收】防 spoof 真·端到端（攻击注入空口，Server 侧断言）
+├── demo_id.py          # 【验收】Orpah ID 22 用例（四级降级签名 + 篡改/重放/超窗/坏 CHECK/撤销）
+├── demo_hw1.py         # 【验收·未真机验证】阶段二真机自检：代次/族、关联、跨空口 UDP、raw 0x88B5
+├── run_checks.py       # 【测试台】15 个离线套件一键跑 + 出报告（--e2e 再加 5 个 demo）
+├── test_*.py           # 【测试台】各模块自检：motion / keys / spoof / alerts / metrics / clock /
+│                       #   energy / tsdb_audit / server / levels / capture / posjs（node 跑原文）/ i18n
+├── capture.py          # 【工具】pcap → ORPAH 报文解析 + 双源对照（真机抓包在网口侧；见文件头）
+├── checks_batch.py     # 【测试台】表驱动批量用例（黄金样本 / SN 边界 / parse_sn / 报文编解码）
+├── checks_report.md    # 【测试台】最近一次报告（入库）
+├── AGENTS.md           # 开发规则与踩坑记录（改代码前先读）
+├── ROADMAP.md / API.md # 缺口清单与接口契约
+└── docs/
+    └── real-hw-stage2.md   # 上机手册 + 五组验证清单（不预设通路；烧录由用户执行）
 ```
+
+### 与 halow-demo 的关系
+- **空口侧**（AP/STA、关联、信道/带宽、RSSI/路径损耗、host 数据口、真机 AT 与抓包）在 `halow-demo`
+  —— 那才是空口权威源；本仓库只带一份**逐字节副本**用于零依赖 demo（`vendor/halow/VENDOR.md`
+  记了来源 SHA、校验命令与"改了要回上游"的约定）。
+- **跨仓库接口 = host 数据口（TCP）**：帧 `AA 55 TYPE LEN_H LEN_L CRC payload`（CRC-8/ATM 0x07），
+  语义 = SPI MACBUS `DATA_TX`/`DATA_RX`。真机阶段把底层收发换成 SPI 即可，**业务代码不用改**。
 
 ### sim.py host 数据口（本次给模拟器加的最小扩展）
 - `HostPort` 类：TCP server，host 连入后：

@@ -845,7 +845,7 @@ function gpxOf(groups, sn) {
            SRC_LABEL[g.src] + "</type>\n" + segs + "  </trk>\n";
   }).join("");
   return '<?xml version="1.0" encoding="UTF-8"?>\n' +
-    '<gpx version="1.1" creator="ORPAH simulator (halow-demo)" xmlns="http://www.topografix.com/GPX/1/1">\n' +
+    '<gpx version="1.1" creator="ORPAH-over-HaLow simulator" xmlns="http://www.topografix.com/GPX/1/1">\n' +
     "  <metadata><name>" + xmlEsc(sn) + "</name><time>" + new Date().toISOString() + "</time></metadata>\n" +
     tracks + "</gpx>\n";
 }
