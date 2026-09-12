@@ -220,7 +220,7 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 - 数据模型：设备上报 `root.orpah.devices.<sn>`（测点 rssi/seq/router_id）；
   路由器测量 `root.orpah.routers.<sid>.<sn>`（测点 rssi/seq）；业务事件 `root.orpah.events`（etype/sn/detail/actor）。
 - 路由器测量**必须单独一条路径**：同一设备的同一时间戳在 IoTDB 是 last-write-wins，
-  三台路由器的测量挤进 `devices.<sn>` 会互相覆盖（每台一条序列也便于各取各的窗口）。
+  多台路由器的测量挤进 `devices.<sn>` 会互相覆盖（每台一条序列也便于各取各的窗口）。
 - IoTDB 未启动时写入静默降级、每 10s 重连一次，不影响 SQLite/UI。
 - 写入接口的 `ts` 参数是 **epoch 秒**（`write_report` / `write_router_obs` 一致）；传毫秒会被当成
   天文数字的时间戳而写失败（异常被吞 → 只表现为 `/api/status.tsdb=false`）。

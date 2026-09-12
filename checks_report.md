@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 01:36:38
-- git HEAD：`6d97444`
+- 时间：2026-09-13 01:49:32
+- git HEAD：`5db7cd1`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（15/15 套件通过）
 
@@ -15,14 +15,14 @@
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
 | 时钟可信（ts=0 无 RTC） | `test_clock.py` | ✅ PASS | 0.5s | 通过 |
-| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.6s | 通过 |
-| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.7s | 通过 |
+| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.5s | 通过 |
+| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.6s | 通过 |
 | 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.1s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
 | 能量轴（免电池客户端） | `test_energy.py` | ✅ PASS | 0.0s | 通过 |
 | 抓包解析 / 双源对照 | `test_capture.py` | ✅ PASS | 0.1s | 通过 |
 | 设备时钟漂移（长基线） | `demo_clock.py` | ✅ PASS | 0.1s | 通过 |
-| 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
+| 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.1s | 通过 |
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.1s | 通过 |
 
 ## 关键输出
@@ -88,7 +88,7 @@
       OK   并发：4 写 × 50 条 + 2 读线程 → 无异常且一条不丢
     时钟可信测试全部通过
 
-### IoTDB 审计/时间窗 — PASS（0.6s）
+### IoTDB 审计/时间窗 — PASS（0.5s）
 
     == 1. actor �ֶ� ==
     == 2. query_events �ض� actor ==
@@ -99,7 +99,7 @@
       OK   �Ϸ�ֵ��Ч
     ȫ��ͨ��
 
-### UI 服务器契约 — PASS（0.7s）
+### UI 服务器契约 — PASS（0.6s）
 
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
@@ -107,7 +107,7 @@
     [server] [id 3] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=- accepted=False
-    Ran 29 tests in 0.486s
+    Ran 29 tests in 0.458s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -161,7 +161,7 @@
       [PASS] B：offset ≈ +0.2s（当前时刻的偏差：漂移 1h 累计 +0.72s − 截断 0.5s）
       [PASS] B：漂移估出 +200ppm（晶振级，短窗做不到）
 
-### 定位内核（pos.js，node 跑原文） — PASS（0.2s）
+### 定位内核（pos.js，node 跑原文） — PASS（0.1s）
 
       OK   RSSI→距离→RSSI 往返（A=-40 n=2.5, -70dBm）
       OK   三边定位（精确距离）复原 (5,5)

@@ -25,8 +25,9 @@ def ck(name, cond, extra=""):
         FAIL.append(name)
 
 
-# 演示三台路由器的坐标（与 ui_server._seed_stations 一致）
-ROUTERS = [("S1", 30.0, 0.0), ("S2", -15.0, 26.0), ("S3", -15.0, -26.0)]
+# 演示四台路由器的坐标（与 ui_server.DEMO_STATIONS 一致）
+ROUTERS = [("S1", 30.0, 0.0), ("S2", -15.0, 26.0), ("S3", -15.0, -26.0),
+           ("S4", -20.0, 0.0)]
 
 print("== 1. 构造与几何 ==")
 w = motion.Walk()

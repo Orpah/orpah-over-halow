@@ -193,8 +193,7 @@ class OrpahApp:
         self.stations = sta.StationTable(db_path)   # 定位站位（全局一张）
         if not self.registry.persons:
             self._seed_registry()
-        if not self.stations.list():
-            self._seed_stations()
+        self._ensure_demo_stations()
         # IoTDB 时序库（上报流 + 业务事件；未启动时优雅降级）
         self.tsdb = tsdb.Tsdb()
         # 组件
@@ -224,18 +223,36 @@ class OrpahApp:
                         clothing="粉色连衣裙、白色凉鞋",
                         contact_phone="13800001234")
 
-    def _seed_stations(self):
-        """演示种子：三台路由器（= 三个站位，坐标为各自安装位置，单位米）。
+    # 演示用四台路由器（= 四个站位；坐标为各自安装位置，单位米）。
+    # **为什么是四台**：定位需要同一时刻 ≥2 个观察者；而"某台在撒谎能不能**指认出是谁**"
+    # 需要 ≥4 台（排除一台后还剩 ≥3 台可互证）—— 三台只能报"观测冲突、判不出是谁"。
+    # 这条是 `pos.js` 的 `consensus()` 实测出来的（见 SPEC §8 威胁 2 / §10 F-12）。
+    # 第 4 台的位置不是随手放的：按"剔掉任意一台后剩下 3 台的几何"（最坏 3 台子集 GDOP，
+    # 在整条演示路线上取值）在候选里选的 —— 西侧 (-20,0) 为 1.89；北侧 (0,40) 只能到 4.31。
+    DEMO_STATIONS = (("路由器A", 30.0, 0.0),
+                     ("路由器B", -15.0, 26.0),
+                     ("路由器C", -15.0, -26.0),
+                     ("路由器D", -20.0, 0.0))
 
-        为什么要有坐标：定位需要**同一时刻 ≥2 个观察者**。演示里由 ui_server 扮三台
-        路由器，每个上报周期按「人到各台的距离 + 路径损耗」各测一个 RSSI
-        （见 `motion.py`）→ 回放里能看到人走动时的连续轨迹。
-        不设时间窗/不绑定：观测走「路由器序列」分支（见 `pos.js` obsOfStation）。
+    def _ensure_demo_stations(self):
+        """确保演示站位都在（**幂等，且不覆盖用户改动**）。
+
+        为什么不是"空表才播种"（原先的写法）：老库（`orpah.db`）里已经有 3 台，
+        新增第 4 台时"空表才播种"永远不生效 —— 而删库重来会连清册/案件/密钥一起清掉。
+        这里只补**缺的**：按名字或坐标（±0.5 m）判定已存在，已存在就原样不动
+        （在页面上改过坐标的以用户为准）；补完打印一行说明补了什么，**不静默**。
         """
-        for name, x, y in (("路由器A", 30.0, 0.0),
-                           ("路由器B", -15.0, 26.0),
-                           ("路由器C", -15.0, -26.0)):
-            self.stations.add(x=x, y=y, name=name)
+        have = self.stations.list()
+        added = []
+        for name, x, y in self.DEMO_STATIONS:
+            if any(s.name == name or (abs(s.x - x) < 0.5 and abs(s.y - y) < 0.5)
+                   for s in have):
+                continue
+            s = self.stations.add(x=x, y=y, name=name)
+            have.append(s)
+            added.append(f"{s.sid}({name})")
+        if added:
+            print(f"[stations] 补齐演示站位：{', '.join(added)}")
 
     # ---------------- 消息流日志 ----------------
     def _push_flow(self, dirn, msg, stage=""):
@@ -332,7 +349,7 @@ class OrpahApp:
                 self.tsdb.write_event("case_found", sn=sn, detail="report")
 
     def _write_router_obs(self, sn, msg, ts_s):
-        """演示：把「三台路由器各自测到该设备」的观测写库（多路由器定位的数据源）。
+        """演示：把「各台路由器各自测到该设备」的观测写库（多路由器定位的数据源）。
 
         位置由上报时刻决定（`motion.Walk.pos`，确定性）—— 同一份报文无论何时回放，
         得到的位置一致。写进 root.orpah.routers.<sid>.<sn>（每台一条序列，互不覆盖；
