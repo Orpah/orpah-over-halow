@@ -333,6 +333,141 @@ function resGrade(rms, medDist) {
   return "bad";
 }
 
+/* ---------------- 多观测一致性判定（「孤证不立」的落地） ----------------
+   为什么需要：`xport`（路由器自报观测）**不在签名预像内** —— 能冒充/控制一台路由器的人就能
+   伪造定位，而多路由器粗定位用的恰恰是它。身份类手段（白名单 / 运营商线路绑定）只能回答
+   "谁在说"，回答不了"说得对不对"；**冗余**（多个互不依赖的观测互相印证）才是去伪存真的手段。
+
+   判定（改这里必须同步改规格：`Protocol/docs/orpah-over-halow/SPEC.md` §8 原则 P-1 / §10 F-12）：
+   - 观测 < 2 → 连位置都解不出 → `none`（如实说"没解"，不编一个点）；
+   - 2 台 → 解得出，但**无冗余**：任一台说谎都看不出来 → `single`（不可交叉校验）；
+   - ≥3 台 → 看**整体**残差是否与噪声模型相符（判据 = 后验单位权标准差 `sigma0` ≤ √(χ²(0.99)/dof)）：
+       · 相符 → `verified`（**这才是"交叉校验通过"**）；
+       · 不符 → 用**留一法标准化残差**找离群：z_i = |该台实测 − 其余台解出的位置应有的值| / σ_i；
+         z 最大的那台还要**剔掉它之后其余台真的自洽**才敢定案 → 剔除后 `verified` + `dropped=[它]`
+         （**离群 ≠ 没事**：它是一条安全线索，页面要显示、要进安全事件）；
+         否则 → `conflict`（观测互相矛盾 → 不输出"看着很确定"的假位置），并把 `suspects`
+         作为**参考线索**带出去（最可疑的那些台，**仅线索、不是结论**）。
+   **为什么判据是 σ0，而不是"单台残差 > k·σ_i"**（实测踩过）：单个离群观测会把**整体拟合
+   带弯**，各台残差被摊平到各自阈值以内 —— 4 台里 1 台把距离报成 1/4，照样"全部残差合格"（漏检）。
+   σ0 是**整体**统计量，带不弯：同一份数据它给出 2.3（dof=2 的 99% 上限 √(9.21/2)=2.15）→ 抓得住。
+   **能被抓的偏差下界 = 噪声的可分辨下界**：与测距噪声同量级的偏差在原理上与噪声不可分
+   （σ0 不超限就不报）。这是老实话、不是漏检 —— 别为了"提高检出率"调低判据，
+   那只会把正常噪声当攻击（**假警报最害人**）。
+   **辨识性的硬边界**：**3 台里有 1 台不一致时，能测出"不一致"，但判不出是谁** —— 排除一台后
+   只剩 2 台，而 2 台永远能拟合得天衣无缝（dof=0），没有冗余可供辨识。要**识别**单台离群需要
+   **≥4 台**（排除一台后仍有 ≥3 台可互证）。这不是实现偷懒，是信息论边界（规格同步写明）。
+
+   **移动目标**：各台观测取得于**各自时刻**，把不同时刻的观测算成"同一时刻"会把正常走动判成
+   互相矛盾。给了 `opts.vel`（m/s，来自卡尔曼状态）与各观测的 `ts` 后，把测量等价搬到参考时刻
+   `tref`：目标在 p(tref) 时于 t_i 测得 d_i ⟺ 站位在 `s_i − v·(t_i−tref)` 处对**静止**目标测得 d_i
+   —— 于是只需**平移站位**，残差判定与测量模型一字不改。没给速度/时刻就按静止处理，
+   `moved=false` 如实带出来（页面可据此提示"未做运动补偿"）。
+
+   返回 `{trust, est, kept, dropped, obs, rms, maxRes, tol, reason, moved, k}`；
+   `trust ∈ none|single|verified|conflict`；`est` 与 `wlsLocate` 同形（解不出时 `ok:false`）。
+   **纯函数**（不读 `Date.now()`、不用随机）→ 实时页与回放页对同一输入给逐位相同的结果。 */
+const CONS_MIN = 3;       // 「自洽」至少要几台：3 —— 2 台永远能拟合得天衣无缝，判不出谁在撒谎
+const CONS_Z = 4;         // 留一法标准化残差的定罪阈值（4σ：单台误报率 ~6e-5 —— 不冤枉任何一台）
+/* χ²(0.99) 分位（自由度 1..10 查表，>10 用 dof + 2.33·√(2·dof)）→ 判据上限 √(χ²/dof)。 */
+const CHI2_99 = [0, 6.63, 9.21, 11.34, 13.28, 15.09, 16.81, 18.48, 20.09, 21.67, 23.21];
+function chi2Of(dof) {
+  return dof < CHI2_99.length ? CHI2_99[dof] : dof + 2.33 * Math.sqrt(2 * dof);
+}
+function sig0MaxOf(m) {                   // m = 参与的观测数；dof = m − 2
+  const dof = Math.max(1, m - 2);
+  return Math.sqrt(chi2Of(dof) / dof);
+}
+function consensus(obs, opts) {
+  const o = opts || {};
+  const k = o.k !== undefined ? o.k : 1;   // 判据宽容系数（1 = 99% 分位；调大 = 更宽容）
+  const vel = o.vel || null;
+  const tref = (o.tref !== undefined && o.tref !== null) ? o.tref : null;
+  const list = (obs || []).filter(x => x && x.s && isFinite(x.dist));
+
+  /* 折算到参考时刻：等价于把**站位**平移 −v·Δt（目标当静止处理）。 */
+  let moved = false;
+  const shifted = list.map(x => {
+    const ts = (x.ts !== undefined && x.ts !== null) ? x.ts : tref;
+    if (!vel || tref === null || ts === null || ts === tref) return x;
+    const dt = (ts - tref) / 1000;            // 秒
+    moved = true;
+    return { ...x, dt,
+             s: { ...x.s, x: x.s.x - vel.vx * dt, y: x.s.y - vel.vy * dt } };
+  });
+  const n = shifted.length;
+  const sidOf = (i) => shifted[i].s.sid;
+
+  const resOf = (e, idx) =>
+    idx.map(i => shifted[i].dist - Math.hypot(e.x - shifted[i].s.x, e.y - shifted[i].s.y));
+  const fit = (idx) => {                      // init 一律给**线性解**（2 台给两圆交点）
+    const arr = idx.map(i => shifted[i]);
+    return wlsLocate(arr, trilaterate(arr.map(x => x.s), arr.map(x => x.dist), null));
+  };
+  const pack = (trust, reason, est, idx, dropped, suspects) => {
+    const r = est && est.ok ? resOf(est, idx) : [];
+    return { trust, reason, est: est || null, kept: idx.map(sidOf), dropped,
+             suspects: (suspects || []).map(sidOf), obs: shifted,
+             rms: est && est.ok ? est.rms : null,
+             maxRes: r.length ? Math.max(...r.map(Math.abs)) : null,
+             sig0: est && est.ok ? est.sigma0 : null,   // 后验单位权标准差（≈0 = 与噪声模型相符）
+             sig0Max: idx.length >= CONS_MIN ? k * sig0MaxOf(idx.length) : null,
+             moved, k };
+  };
+
+  if (n < 2) {                                // 连位置都解不出：如实说"没解"，不编一个点
+    return pack("none", n ? "single_obs" : "no_obs", null, [], [], []);
+  }
+  const all = shifted.map((_, i) => i);
+  const est0 = fit(all);
+  if (!est0 || !est0.ok) {
+    return pack("none", (est0 && est0.reason) || "no_solution", est0, [], [], []);
+  }
+  if (n === 2) {                              // 2 台：解得出，但**无冗余** —— 任一台说谎都看不出来
+    return pack("single", "no_redundancy", est0, all, [], []);
+  }
+
+  /* 「自洽」= 该子集整体残差与噪声模型相符（sigma0 ≤ 上限）；< 3 台时返回 null（无冗余，不可判定）。 */
+  const consistent = (idx) => {
+    if (idx.length < CONS_MIN) return null;
+    const e = fit(idx);
+    return (e && e.ok) ? e.sigma0 <= k * sig0MaxOf(idx.length) : false;
+  };
+
+  if (consistent(all) === true) {             // 全部自洽 → 这才是"交叉校验通过"
+    return pack("verified", "consistent", est0, all, [], []);
+  }
+
+  /* 不一致时怎么找离群：**留一法标准化残差** z_i = (该台实测值 − 其余台解出的位置应有的值)/σ_i。
+     为什么不能只看"排除它后整体是否自洽"：4 台剔到 3 台时 dof=1、χ² 上限很松，
+     排除**诚实**那台也可能"自洽"（实测：S3 是离群时，排除 S2 也得 sigma0=1.67 < 上限 2.58）
+     → 单靠它定不了谁。z 的分离度却很大（同一组数据：12.0 vs 2.98 / 2.03 / 0.45）。 */
+  const zMin = o.z !== undefined ? o.z : CONS_Z;
+  const zOf = (i) => {
+    const idx = all.filter(j => j !== i);
+    const e = fit(idx);
+    if (!e || !e.ok) return null;             // 其余台连解都解不出 → 这台无从评价
+    return Math.abs(shifted[i].dist
+      - Math.hypot(e.x - shifted[i].s.x, e.y - shifted[i].s.y)) / sigOf(shifted[i]);
+  };
+  const zs = all.map(zOf);
+  const suspects = all.filter(i => zs[i] !== null && zs[i] >= zMin);
+  let imax = -1;
+  all.forEach(i => { if (zs[i] !== null && (imax < 0 || zs[i] > zs[imax])) imax = i; });
+
+  /* **辨识性的硬边界**：只有"排除一台后还剩 ≥3 台"才谈得上判定是谁在撒谎（即观测数 ≥4）。
+     3 台里有 1 台不一致时，排除一台只剩 2 台：要么拟合得天衣无缝（dof=0，无从检验）、
+     要么两圆根本不相交 —— 两种都不能定谁，硬指着某台就是**冤枉**（宁可说"不可判定"）。
+     所以 3 台一律报 conflict，只把 suspects 当参考线索带出去。 */
+  if (n >= CONS_MIN + 1 && imax >= 0 && zs[imax] >= zMin) {
+    const idx = all.filter(j => j !== imax);
+    if (consistent(idx) === true) {           // 剔掉它之后**其余台真的自洽** → 才敢定案
+      return pack("verified", "outlier_dropped", fit(idx), idx, [sidOf(imax)], suspects);
+    }
+  }
+  return pack("conflict", "conflict_unresolved", est0, [], [], suspects);
+}
+
 /* ---------------- 补站位建议（几何不行时「往哪儿再放一台」） ----------------
    起因：页面已经能如实报出「站位共线 → 无解」「GDOP 大 → 估计不可信」，但**没说怎么办**。
    现场要的是一句可执行的话：往 (x, y) 再放一台。

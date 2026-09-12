@@ -8,7 +8,9 @@
 原文塞进 node 执行（`new Function` 的独立作用域，`"use strict"` 下也能取到导出）。
 
 覆盖：RSSI↔距离往返、三边定位复原、WLS（含远端差站权重）、95% 椭圆、观测归集（不看未来）、
-卡尔曼因果性、轨迹抖动、**误差 CDF/分位数/真值插值**（回放页那张误差 CDF 就靠它们）。
+卡尔曼因果性、轨迹抖动、**误差 CDF/分位数/真值插值**（回放页那张误差 CDF 就靠它们）、
+**多观测一致性判定 `consensus`（「孤证不立」）**：一致→verified、谎报→剔除、无冗余→如实降级、
+互相矛盾→conflict、**移动目标不做补偿就会把诚实观测当成离群（假警报）**。
 
 运行：C:\\Python313\\python.exe test_posjs.py     （需要 node 在 PATH 上）
 """
@@ -35,7 +37,7 @@ const EXPORT = ["rssiFromDist", "distFromRssi", "trilaterate", "wlsLocate", "ell
                 "resGrade", "latestAt", "obsOfStation", "obsAt", "kalmanTrack",
                 "pathJitter", "obsSegments", "segIndexAt", "nextValidAt",
                 "truthAt", "errorsOf", "quantileOf", "cdfOf",
-                "gdopOf", "suggestStation", "samplesFor", "frameGaps"];
+                "gdopOf", "suggestStation", "samplesFor", "frameGaps", "consensus"];
 const src = fs.readFileSync(process.argv[2], "utf8")
           + "\nmodule.exports = {" + EXPORT.join(",") + "};\n";
 const m = { exports: {} };
@@ -275,6 +277,78 @@ ck("报文流：空表/undefined 不炸（n=0，统计给 null 不给 0）",
    && P.frameGaps([]).dt.med === null && P.frameGaps([]).gap_total === 0);
 ck("报文流：单帧不给 delta（不能凭空造一条间隔）",
    P.frameGaps(pts([[1, 1]])).dt.n === 0);
+
+/* ---- 多观测一致性判定 consensus（「孤证不立」：位置可信度不依赖单台路由器）----
+   场景：站位 S1..S4，目标静止在 (12,9) 或沿 +x 以 1.2 m/s 行走；观测由真值距离经
+   「距离→RSSI→距离」往返生成（与页面同一条链路，不手工塞 dist）。
+   谎报 = 某台把测距按倍数改小（等价于它把 RSSI 报高 —— 被改装/被冒充的路由器能做的正是这件）。 */
+const A0 = -40, N0 = 2.5, TR = { x: 12, y: 9 };
+const ST = [{ sid: "S1", x: 0, y: 0 }, { sid: "S2", x: 30, y: 0 },
+            { sid: "S3", x: 0, y: 26 }, { sid: "S4", x: 30, y: 26 }];
+function mk(at, ids) {
+  return ids.map(sid => {
+    const s = ST.find(z => z.sid === sid);
+    const rssi = P.rssiFromDist(Math.hypot(at.x - s.x, at.y - s.y), A0, N0);
+    return { s, rssi, dist: P.distFromRssi(rssi, A0, N0) };
+  });
+}
+const spoil = (arr, sid, f) => arr.map(o => o.s.sid === sid ? { ...o, dist: o.dist * f } : o);
+const ids3 = ["S1", "S2", "S3"], ids4 = ["S1", "S2", "S3", "S4"];
+
+const c3 = P.consensus(mk(TR, ids3), {});
+ck("consensus：3 台一致 → verified（交叉校验通过），全留、零剔除",
+   c3.trust === "verified" && c3.kept.length === 3 && c3.dropped.length === 0
+   && c3.reason === "consistent", JSON.stringify([c3.trust, c3.kept, c3.dropped]));
+ck("consensus：verified 时估计回真值 (12,9)",
+   near(c3.est.x, TR.x, 0.05) && near(c3.est.y, TR.y, 0.05), JSON.stringify(c3.est));
+ck("consensus：无速度/无时刻 → moved=false（如实标“未做运动补偿”）", c3.moved === false);
+
+const c3l = P.consensus(spoil(mk(TR, ids3), "S2", 0.25), {});
+ck("consensus：★3 台里 1 台谎报 → 测得出“不一致”，但**判不出是谁**（排除一台只剩 2 台无冗余）→ conflict",
+   c3l.trust === "conflict" && c3l.reason === "conflict_unresolved",
+   JSON.stringify([c3l.trust, c3l.reason, c3l.dropped]));
+
+const c4l = P.consensus(spoil(mk(TR, ids4), "S3", 0.25), {});
+ck("consensus：4 台里 1 台谎报 → 排出它后其余 3 台自洽 → verified + dropped=[S3]",
+   c4l.trust === "verified" && c4l.dropped.join() === "S3" && c4l.kept.length === 3
+   && c4l.reason === "outlier_dropped", JSON.stringify([c4l.trust, c4l.dropped, c4l.kept]));
+ck("consensus：剔除后估计回到真值附近（没被谎报那台带偏）",
+   Math.hypot(c4l.est.x - TR.x, c4l.est.y - TR.y) < 1, JSON.stringify(c4l.est));
+ck("consensus：小偏差（与测距噪声同量级，0.9 倍）→ **不报**（原理上不可分辨，如实漏检）",
+   P.consensus(spoil(mk(TR, ids4), "S3", 0.9), {}).trust === "verified"
+   && P.consensus(spoil(mk(TR, ids4), "S3", 0.9), {}).dropped.length === 0);
+
+const c2 = P.consensus(mk(TR, ["S1", "S2"]), {});
+ck("consensus：2 台 → single（无冗余：任一台说谎都看不出来）",
+   c2.trust === "single" && c2.reason === "no_redundancy" && c2.dropped.length === 0
+   && isFinite(c2.est.x), JSON.stringify([c2.trust, c2.reason]));
+ck("consensus：1 台 → none(single_obs)；0 台 → none(no_obs)",
+   P.consensus(mk(TR, ["S1"]), {}).trust === "none"
+   && P.consensus(mk(TR, ["S1"]), {}).reason === "single_obs"
+   && P.consensus([], {}).trust === "none" && P.consensus([], {}).reason === "no_obs");
+ck("consensus：空/undefined 不炸", P.consensus(undefined, undefined).trust === "none");
+
+const cBad = P.consensus([{ s: ST[0], dist: 5 }, { s: ST[1], dist: 5 }, { s: ST[2], dist: 5 }], {});
+ck("consensus：三台互相矛盾（距离环不相交）→ conflict，不硬给位置",
+   cBad.trust === "conflict" && cBad.reason === "conflict_unresolved",
+   JSON.stringify([cBad.trust, cBad.reason]));
+
+/* 移动目标：t=0/30/60 s，目标 1.2 m/s 沿 +x（12 → 48 → 84），参考时刻 = 最后一个观测 */
+const MOV = [{ t: 0, at: { x: 12, y: 9 } }, { t: 30000, at: { x: 48, y: 9 } },
+             { t: 60000, at: { x: 84, y: 9 } }];
+const mObs = [].concat(...MOV.map(m => mk(m.at, ids3).map(o => ({ ...o, ts: m.t }))));
+const cNo = P.consensus(mObs, {});
+ck("consensus：运动目标**不做**补偿 → 诚实观测被当成不一致（假警报，这正是要防的）",
+   cNo.moved === false && !(cNo.trust === "verified" && cNo.dropped.length === 0)
+   && Math.hypot(cNo.est.x - 84, cNo.est.y - 9) > 5,
+   JSON.stringify([cNo.trust, cNo.dropped, cNo.est && Math.round(cNo.est.x)]));
+const cYes = P.consensus(mObs, { vel: { vx: 1.2, vy: 0 }, tref: 60000 });
+ck("consensus：给了速度 → 补偿后 verified、零剔除，且估计回参考时刻真值 (84,9)",
+   cYes.moved === true && cYes.trust === "verified" && cYes.dropped.length === 0
+   && near(cYes.est.x, 84, 0.05) && near(cYes.est.y, 9, 0.05), JSON.stringify(cYes.est));
+ck("consensus：纯函数（同一输入两次调用逐位相同）",
+   JSON.stringify(P.consensus(mObs, { vel: { vx: 1.2, vy: 0 }, tref: 60000 }))
+   === JSON.stringify(cYes));
 
 console.log("");
 if (fails.length) {
