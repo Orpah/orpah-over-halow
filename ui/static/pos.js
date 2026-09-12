@@ -341,16 +341,21 @@ function resGrade(rms, medDist) {
    判定（改这里必须同步改规格：`Protocol/docs/orpah-over-halow/SPEC.md` §8 原则 P-1 / §10 F-12）：
    - 观测 < 2 → 连位置都解不出 → `none`（如实说"没解"，不编一个点）；
    - 2 台 → 解得出，但**无冗余**：任一台说谎都看不出来 → `single`（不可交叉校验）；
-   - ≥3 台 → 看**整体**残差是否与噪声模型相符（判据 = 后验单位权标准差 `sigma0` ≤ √(χ²(0.99)/dof)）：
-       · 相符 → `verified`（**这才是"交叉校验通过"**）；
-       · 不符 → 用**留一法标准化残差**找离群：z_i = |该台实测 − 其余台解出的位置应有的值| / σ_i；
-         z 最大的那台还要**剔掉它之后其余台真的自洽**才敢定案 → 剔除后 `verified` + `dropped=[它]`
-         （**离群 ≠ 没事**：它是一条安全线索，页面要显示、要进安全事件）；
-         否则 → `conflict`（观测互相矛盾 → 不输出"看着很确定"的假位置），并把 `suspects`
+   - ≥3 台 → 用**留一法标准化残差**逐台查：
+       · 全都在噪声可解释范围内 → `verified`（**这才是"交叉校验通过"**）；
+       · 有台超出 → 取 z 最大者，还要**剔掉它之后其余台真的自洽**才敢定案 →
+         剔除后 `verified` + `dropped=[它]`（**离群 ≠ 没事**：它是一条安全线索，页面要显示、要进安全事件）；
+       · 定不了案 → `conflict`（观测互相矛盾 → 不输出"看着很确定"的假位置），并把 `suspects`
          作为**参考线索**带出去（最可疑的那些台，**仅线索、不是结论**）。
-   **为什么判据是 σ0，而不是"单台残差 > k·σ_i"**（实测踩过）：单个离群观测会把**整体拟合
-   带弯**，各台残差被摊平到各自阈值以内 —— 4 台里 1 台把距离报成 1/4，照样"全部残差合格"（漏检）。
-   σ0 是**整体**统计量，带不弯：同一份数据它给出 2.3（dof=2 的 99% 上限 √(9.21/2)=2.15）→ 抓得住。
+   判据为什么是留一法 z（两道实测碰出来的墙，别再重踩）：
+   ① **不能用"单台残差 > k·σ_i"**：单个离群观测会把**整体拟合带弯**，各台残差被摊平到各自阈值以内
+     —— 4 台里 1 台把距离报成 1/4，照样"全部残差合格"（漏检）。
+   ② **z 的 σ 必须锜在"其余台推出的距离"上，不能锜在它自己报的距离上**：
+     锜在自报距离上时，谎报"我在更远处"会把自己的 σ 一起放大（z = 4|f−1|/f，最大只有 4.0）
+     → **谎报更远永远抓不住**：实测 ×4 谎报在整条路线上 **0/120 全没发现**，还照样报"交叉校验通过"。
+     锜在推出距离上则两边对称：z = 4|f−1| → ×4 → 12.0、×0.25 → 3.0。
+   由此得到**能被抓的偏差下界（对称）**：距离偏差 ≥75% 才够 3σ_rel；偏差在 ±75% 以内与 25% 的
+   测距噪声**原理上不可分** —— 如实不报，而不是调松阈值（那只会把正常噪声当攻击）。
    **能被抓的偏差下界 = 噪声的可分辨下界**：与测距噪声同量级的偏差在原理上与噪声不可分
    （σ0 不超限就不报）。这是老实话、不是漏检 —— 别为了"提高检出率"调低判据，
    那只会把正常噪声当攻击（**假警报最害人**）。
@@ -368,19 +373,10 @@ function resGrade(rms, medDist) {
    `trust ∈ none|single|verified|conflict`；`est` 与 `wlsLocate` 同形（解不出时 `ok:false`）。
    **纯函数**（不读 `Date.now()`、不用随机）→ 实时页与回放页对同一输入给逐位相同的结果。 */
 const CONS_MIN = 3;       // 「自洽」至少要几台：3 —— 2 台永远能拟合得天衣无缝，判不出谁在撒谎
-const CONS_Z = 4;         // 留一法标准化残差的定罪阈值（4σ：单台误报率 ~6e-5 —— 不冤枉任何一台）
-/* χ²(0.99) 分位（自由度 1..10 查表，>10 用 dof + 2.33·√(2·dof)）→ 判据上限 √(χ²/dof)。 */
-const CHI2_99 = [0, 6.63, 9.21, 11.34, 13.28, 15.09, 16.81, 18.48, 20.09, 21.67, 23.21];
-function chi2Of(dof) {
-  return dof < CHI2_99.length ? CHI2_99[dof] : dof + 2.33 * Math.sqrt(2 * dof);
-}
-function sig0MaxOf(m) {                   // m = 参与的观测数；dof = m − 2
-  const dof = Math.max(1, m - 2);
-  return Math.sqrt(chi2Of(dof) / dof);
-}
+const CONS_Z = 3;         // 定罪阈值：z ≥ 3σ_rel（距离偏差 ≥75%；再小就与 25% 测距噪声不可分）
 function consensus(obs, opts) {
   const o = opts || {};
-  const k = o.k !== undefined ? o.k : 1;   // 判据宽容系数（1 = 99% 分位；调大 = 更宽容）
+  const zMin = o.z !== undefined ? o.z : CONS_Z;
   const vel = o.vel || null;
   const tref = (o.tref !== undefined && o.tref !== null) ? o.tref : null;
   const list = (obs || []).filter(x => x && x.s && isFinite(x.dist));
@@ -410,9 +406,8 @@ function consensus(obs, opts) {
              suspects: (suspects || []).map(sidOf), obs: shifted,
              rms: est && est.ok ? est.rms : null,
              maxRes: r.length ? Math.max(...r.map(Math.abs)) : null,
-             sig0: est && est.ok ? est.sigma0 : null,   // 后验单位权标准差（≈0 = 与噪声模型相符）
-             sig0Max: idx.length >= CONS_MIN ? k * sig0MaxOf(idx.length) : null,
-             moved, k };
+             zs: (est && est.ok) ? (zAll || []) : null,   // 各台的 z（诊断用，页面可显示）
+             moved, zMin };
   };
 
   if (n < 2) {                                // 连位置都解不出：如实说"没解"，不编一个点
@@ -423,43 +418,40 @@ function consensus(obs, opts) {
   if (!est0 || !est0.ok) {
     return pack("none", (est0 && est0.reason) || "no_solution", est0, [], [], []);
   }
+  /* 留一法：用**其余台**解出位置，再看这一台的实测距离"应该是多少"。
+     σ 锚在**推出的**距离上（不是它自报的）—— 理由见函数头注释的两道墙。 */
+  const zOf = (i, subset) => {
+    const rest = (subset || all).filter(j => j !== i);
+    if (rest.length < 2) return null;
+    const arr = rest.map(j => shifted[j]);
+    const e = wlsLocate(arr, trilaterate(arr.map(x => x.s), arr.map(x => x.dist), null));
+    if (!e || !e.ok) return null;             // 其余台连解都解不出 → 这台无从评价
+    const dpred = Math.hypot(e.x - shifted[i].s.x, e.y - shifted[i].s.y);
+    return Math.abs(shifted[i].dist - dpred) / sigOf({ dist: dpred });
+  };
+  const consistent = (idx) => {
+    if (idx.length < CONS_MIN) return null;
+    let ok = true;
+    idx.forEach(i => { const z = zOf(i, idx); if (z === null || z >= zMin) ok = false; });
+    return ok;
+  };
+  const zAll = all.map(i => zOf(i, all));
+  const suspects = all.filter(i => zAll[i] !== null && zAll[i] >= zMin);
+
   if (n === 2) {                              // 2 台：解得出，但**无冗余** —— 任一台说谎都看不出来
     return pack("single", "no_redundancy", est0, all, [], []);
   }
-
-  /* 「自洽」= 该子集整体残差与噪声模型相符（sigma0 ≤ 上限）；< 3 台时返回 null（无冗余，不可判定）。 */
-  const consistent = (idx) => {
-    if (idx.length < CONS_MIN) return null;
-    const e = fit(idx);
-    return (e && e.ok) ? e.sigma0 <= k * sig0MaxOf(idx.length) : false;
-  };
-
   if (consistent(all) === true) {             // 全部自洽 → 这才是"交叉校验通过"
     return pack("verified", "consistent", est0, all, [], []);
   }
-
-  /* 不一致时怎么找离群：**留一法标准化残差** z_i = (该台实测值 − 其余台解出的位置应有的值)/σ_i。
-     为什么不能只看"排除它后整体是否自洽"：4 台剔到 3 台时 dof=1、χ² 上限很松，
-     排除**诚实**那台也可能"自洽"（实测：S3 是离群时，排除 S2 也得 sigma0=1.67 < 上限 2.58）
-     → 单靠它定不了谁。z 的分离度却很大（同一组数据：12.0 vs 2.98 / 2.03 / 0.45）。 */
-  const zMin = o.z !== undefined ? o.z : CONS_Z;
-  const zOf = (i) => {
-    const idx = all.filter(j => j !== i);
-    const e = fit(idx);
-    if (!e || !e.ok) return null;             // 其余台连解都解不出 → 这台无从评价
-    return Math.abs(shifted[i].dist
-      - Math.hypot(e.x - shifted[i].s.x, e.y - shifted[i].s.y)) / sigOf(shifted[i]);
-  };
-  const zs = all.map(zOf);
-  const suspects = all.filter(i => zs[i] !== null && zs[i] >= zMin);
-  let imax = -1;
-  all.forEach(i => { if (zs[i] !== null && (imax < 0 || zs[i] > zs[imax])) imax = i; });
 
   /* **辨识性的硬边界**：只有"排除一台后还剩 ≥3 台"才谈得上判定是谁在撒谎（即观测数 ≥4）。
      3 台里有 1 台不一致时，排除一台只剩 2 台：要么拟合得天衣无缝（dof=0，无从检验）、
      要么两圆根本不相交 —— 两种都不能定谁，硬指着某台就是**冤枉**（宁可说"不可判定"）。
      所以 3 台一律报 conflict，只把 suspects 当参考线索带出去。 */
-  if (n >= CONS_MIN + 1 && imax >= 0 && zs[imax] >= zMin) {
+  let imax = -1;
+  all.forEach(i => { if (zAll[i] !== null && (imax < 0 || zAll[i] > zAll[imax])) imax = i; });
+  if (n >= CONS_MIN + 1 && imax >= 0 && zAll[imax] >= zMin) {
     const idx = all.filter(j => j !== imax);
     if (consistent(idx) === true) {           // 剔掉它之后**其余台真的自洽** → 才敢定案
       return pack("verified", "outlier_dropped", fit(idx), idx, [sidOf(imax)], suspects);

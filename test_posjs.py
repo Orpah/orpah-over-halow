@@ -318,6 +318,19 @@ ck("consensus：小偏差（与测距噪声同量级，0.9 倍）→ **不报**�
    P.consensus(spoil(mk(TR, ids4), "S3", 0.9), {}).trust === "verified"
    && P.consensus(spoil(mk(TR, ids4), "S3", 0.9), {}).dropped.length === 0);
 
+/* ★回归锁（2026-09-13 实测踩过）：**谎报"我在更远处"（×4）必须也抓得住**。
+   把 σ 锚在**它自报的**距离上时，谎报更远会把自己的 σ 一起放大（z = 4|f−1|/f 封顶 4.0）
+   → 整条路线上 0/120 全没发现，还照样报"交叉校验通过"。σ 锚在**推出的**距离上才两边对称。 */
+const farLiar = P.consensus(spoil(mk(TR, ids4), "S1", 4.0), {});
+ck("consensus：★谎报“更远”（×4）也抓得住（σ 必须锚在推出距离上）",
+   farLiar.trust === "verified" && farLiar.dropped.join() === "S1",
+   JSON.stringify([farLiar.trust, farLiar.dropped, (farLiar.zs || []).map(z => z && z.toFixed(1))]));
+ck("consensus：更远（×4）与更近（×0.25）两边对称，都判得出离群",
+   P.consensus(spoil(mk(TR, ids4), "S4", 0.25), {}).dropped.join() === "S4");
+ck("consensus：偏差在 ±75% 以内（×0.5 → z=2）**不报** —— 与 25% 测距噪声原理上不可分（如实）",
+   P.consensus(spoil(mk(TR, ids4), "S1", 0.5), {}).trust === "verified"
+   && P.consensus(spoil(mk(TR, ids4), "S1", 0.5), {}).dropped.length === 0);
+
 const c2 = P.consensus(mk(TR, ["S1", "S2"]), {});
 ck("consensus：2 台 → single（无冗余：任一台说谎都看不出来）",
    c2.trust === "single" && c2.reason === "no_redundancy" && c2.dropped.length === 0
