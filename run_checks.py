@@ -53,6 +53,7 @@ SUITES = [
     ("设备时钟漂移（长基线）", "demo_clock.py", []),
     ("定位内核（pos.js，node 跑原文）", "test_posjs.py", []),
     ("限频（§5.8 令牌桶 / 两条防线）", "test_ratelimit.py", []),
+    ("设备侧自限频（§5.8 设备那一环，自愿）", "test_selflimit.py", []),
     ("Router 下行路径（来源校验）", "test_router.py", []),
     ("下行真实性（F-14 B：签名/重放/时间窗）", "test_downlink.py", []),
     ("文案字典（zh/en 一致 + 页面引用无缺失）", "test_i18n.py", []),

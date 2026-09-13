@@ -134,6 +134,9 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 | **`spoof`** | **攻击流量面板（`attack.html`）状态**，2026-09-13：`{injected, lost, wait, waiting[], results{}, recent[], defenses[]}`。`results` = **每种用例最近一次结果**（`{kind, nonce, t, epoch, expect, got, state, ok, line, sn, alg, level, trust}`），`state ∈ accepted/blocked/lost`，**`lost`（没等到结果）时 `ok=null`**（不假装判定过）。**只装攻击报文**：与 `id_reports`（正常上报 + 攻击混排）**分开**，靠 **nonce 认领**（注入时记下、验签回来时对上）—— 正常周期上报永远进不了这张表（实测：`id_report_total` 继续涨，`spoof.injected` 与 `recent` 不动）。`defenses` 随视图下发，页面**不写死**防线清单 |
 | **`ratelimit`** | **限频（§5.8）状态 —— Server 侧**：`{on, params:{sn_rate,sn_burst,router_rate,router_burst,max_keys}, allowed, dropped:{sn,router,total}, sn_table, router_table, top_sn, recent[≤5], since}`。**参数以服务端为单一源**（页面不写死）；`recent` 只 5 条、**不含全表**（桶表可能几千 key，不该每秒重传）|
 | **`ratelimit_rtr`** | **限频状态 —— Router 侧**（§5.8 的行 1/2）：同 `ratelimit` 的形状（`params.sn_*` = 转发按 SN、`params.router_*` = REQ-CONNECT 按源 MAC），另加 `dropped_total` 与 `recent`。**必须与 `ratelimit` 分开报**：两侧参数不同（Router 侧更宽）、丢的后果也不同（砍带宽 vs 砍 CPU），合成一个数就说不清“报文死在哪一段”—— 而且 **Server 侧计数里不含 Router 丢掉的报文** |
+| **`selflimit`** | **限频状态 —— 设备侧（§5.8 的“设备自己那一环”，2026-09-13）**：`{on, params:{min_interval,rate,burst}, allowed, held, last_hold, recent[≤5], since}`。
+**它不是一道防线**：设备对自己限频是**自愿**的，被改过/失控的设备不会做（协议也要求不了）。实际好处只有三个：不占满空口（帧丢在 Router 前**已经上过空口**）、省电、不撞上游的桶。
+`held` 是**延后**（下一拍还会发）——**不是丢弃**：丢自己的报等于漏报。页面把它渲染成「已延后」，并用 `side="client"`/`which="interval"` 合进同一张最近表。参数默认 `0.6s / 4 条`（`ORPAH_SELF_*` 可改），**演示配置**、真机要实测定。 |
 | **`router_down_rejected`** | **被下行来源校验丢掉的下行报文数**（A 方案，2026-09-13）：下行只接受来自 Server 源地址（IP+端口）的报文，别的在**解析之前**就丢。非 0 意味着“有东西不是在从 Server 发包给 Router”—— 页面 Router 行有显示与 tooltip；**它只挡来源，不等于真实性**（同源伪造仍能过，那部分由 B 兼）|
 | **`downlink`** | **下行真实性（F-14）状态**（2026-09-13）：`{server: {on,signed,unsigned,n}, router: {on,verified,unverified,failed,rejects[],sig_fails[]}, pub_path, key_src}`。`router.on=false`（没配公钥）或 `unverified>0` **必须看得见** —— 那意味着这段路现在只有来源校验；页面 Router 行显示「下行签名校验 / 未启用（只有来源校验）」 |
 | **`energy`** | 能量轴（免电池客户端，2026-09-13）：`{on, params, state}` —— 形状与 GET `/api/energy` 的三项**一致**（页面同一份渲染代码吃两种来源）。**不含扫描表**（那个在 `energy_axis`，见 §13） |
@@ -261,10 +264,15 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
   - `n` 上限 2000（防手滑）；`ok:false` = 两侧合计在 timeout（默认 30s）内**没处理完**，
     此时数字偏小、**不静默**（日志里也有 `[ui] 警告：刷量 …`）。
   - 返回的 `accepted`/`dropped` 含**同一时刻的周期报文**（同一 SN 的 L2 REPORT 也会被限）。
+  - **本动作的报文一律 `force=True`**（绕过设备侧自限频）：它模拟的就是“一台失控/被改的设备”，
+    而那正是设备侧自限频**不会**发生的情形 —— 不绕过它就看不到 Router/Server 的桶拦下任何东西。
 - `{action:"rl_reset"}` —— 只清计数（便于页面数字对得上），**不清桶**：
-  清桶等于“把限频关一下”，演示就假了。
-- 限频本体在 `ratelimit.py`（令牌桶 + 计数 + 快照；参数全走环境变量）；服务端接线在
-  `server._handle`（**验签之前**）；端到端脚本 `demo_ratelimit.py`、自检 `test_ratelimit.py`。
+  清桶等于“把限频关一下”，演示就假了。**三侧一起清**（Server / Router / 设备侧），
+  否则页面上的三个数不在同一时间起点。
+- 限频本体在 `ratelimit.py`（`RateLimiter` = Server/Router 两侧、`DeviceLimiter` = 设备侧，
+  **复用同一个令牌桶**；参数全走环境变量）；服务端接线在 `server._handle`（**验签之前**）、
+  Router 侧在 `router.RouterBridge`、设备侧在 `client.ClientHost._gate`；
+  端到端脚本 `demo_ratelimit.py`（含第 ⑦ 组设备侧自限频）、自检 `test_ratelimit.py` / `test_selflimit.py`。
 
 ---
 

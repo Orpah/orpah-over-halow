@@ -271,7 +271,7 @@
     `CREATE TABLE IF NOT EXISTS` **不给老表补列** → `_init_db` 里用 `PRAGMA table_info` + `ALTER TABLE`
     兜迁移（否则老 `orpah.db` 写库报 `no such column`）。`test_alerts.py` 里的假 `Case` 必须带 `handler`
     （缺属性→测试直接崩；多给属性→掩盖真 AttributeError，两种都踩过）。
-  - **一键回归 = `run_checks.py`**（2026-09-12）：跑 `test_*.py` 全部离线套件（现 19 个）+
+  - **一键回归 = `run_checks.py`**（2026-09-12）：跑 `test_*.py` 全部离线套件（现 21 个）+
     批量合规用例（`checks_batch.py`，表驱动：黄金样本/SN 边界/parse_sn/报文编解码），
     报告写到 `checks_report.md`（**入库**，同 `host/test_results.txt` 惯例）。
     **改完任何 orpah 代码先跑它**。两条硬规则：① 判定 = 退出码 0 **且** 输出无 `FAIL`/`Traceback`
@@ -370,6 +370,35 @@
     - 测法照做：**在真实演示数据上刷量**（页面 `flood` / `demo_ratelimit.py`）——
       单帧验签层对“高频刷量”**毫无反应**，只有限频层会动，这就是它存在的理由；
       单看一侧也会误判（Router 侧一开，`demo_ratelimit.py` 的“等 server 处理完 200 条”永远等不到）。
+  - **设备侧（客户端）自限频（§5.8 里“设备自己那一环”，2026-09-13）**：`ratelimit.DeviceLimiter`
+    （复用同一个 `TokenBucket`，不写第二份）+ `client.ClientHost._gate` 接在三处上行上
+    （`send_req_connect` / `report_once` / `send_id_report`）。
+    - **它不是防线**（措辞硬规则）：一台被改过或失控的设备**根本不会做**，协议也要求不了它。
+      实际好处只有三个：① 空口是共享介质（Router 侧虽然会丢，但那些帧**已经上过空口**、带宽已花掉）；
+      ② 省电（每次上报花 `energy.COST_MJ`）；③ 不撞上游的桶（撞上 = 没被听见 + 添流量 + 记一次丢弃）。
+    - **语义是「延后（hold）」不是丢弃**：丢自己的业务报 = **漏报** = 找人失败。所以 `check()` 只回答
+      “现在能不能发 / 还差多久”，**不睡眠不轮询**；`held` 计的是延后条数（下一拍还会发），
+      页面/文案**不许**把它写成“丢弃”。
+    - **三套参数前缀各管各的**：设备侧是 `ORPAH_SELF_*`（默认 `min_interval=0.6s`、`burst=4`），
+      与 `ORPAH_RL_*`（Server）/`ORPAH_RLR_*`（Router）互不影响。
+    - **默认值是按本 demo 真实节奏定的**（不是拍的）：`ui_server._report_loop` 一个周期 3 条挤在
+      ~0.25s 内、然后歇 `every`（默认 2s；能量轴最小也是 2s）→ 长期 1.5 条/秒、瞬时 3 条；
+      `0.6s`（≈1.67 条/秒）**高于**长期速率 → 正常永不触发（回归锁：`test_selflimit.py` 里
+      300 周期/1 条每秒均“零延后”），又**低于** Server 侧 per-SN 的 2 条/秒 → 守规矩的设备不撞上游桶。
+    - **`ClientHost` 默认不开**（它是验收脚本的“精确控节奏工装”）：`ui_server` 与 `client.py` 的
+      `main` 显式开。**演示注入类动作一律 `force=True`**（攻击 `spoof_attack` / 刷量 `flood` /
+      重放 / 超窗）—— 那注入的是“另一台设备或一台失控设备”的报文，**不是本机业务上报**；
+      这不是后门（自限频本来就自愿），而是把边界诚实地摆出来。`test_selflimit.py` 锁住
+      “`force` 不扣令牌”“被延后时**不发**（看假 STA 收到的帧数）”。
+    - **实测踩过**：`TokenBucket` 的时钟必须与调用方给的 `now` 同一套 → 必须**惰性建桶**
+      （构造时用 `time.monotonic()` 建好，测试传假时钟 `now=0` 会被算成“负时间差”→ 满桶瞬间扣光，
+      60 条全被延后）；讲“不撞上游的桶”时**必须先等上游桶回补到够这一段突发**
+      （`_Buckets.tokens()` 只读观测；只等“有额度”不够，桶边缘 1 个令牌仍会丢剩下的）。
+    - 验收：`test_selflimit.py`（24 项，含零误伤回归锁与口径守卫）+ `demo_ratelimit.py` 第 ⑦ 组
+      （真链路：守规矩 20 条 → 发出 4 / 延后 16、上游两侧零丢弃；同节奏 `force=True` 对照 → 上游丢 16）。
+      页面：限频卡片第 7–9 行（设备侧状态/参数/已延后）+ 最近表 `side=client`、`which=interval`
+      （表头已改「最近被丢弃/延后的」）。真机实测（`every=0.15s`）：设备侧延后 32 条，
+      Server/Router **丢弃都是 0**；换页面「刷量」按钮（模拟失控设备）→ Router 丢 79 / Server 丢 14。
   - **地图代码分两层**：`ui/static/map.js` = **底图源列表 / 条款说明 / 本地坐标↔经纬度换算 /
     底图图层 + 离线回落**的**单一源**（track.html 与 replay.html 共用，两页 `ensureMap()` 都调
     `addBaseLayer(lmap)`）—— 那是**合规相关**的东西

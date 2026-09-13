@@ -41,6 +41,11 @@ ENV（全都可选；非法值一律回退默认，不抛异常 —— 起不来
     / _ROUTER_BURST（5）/ _MAX_KEYS。
   **两边默认值不同是有意的**：Router 侧限带宽、Server 侧限 CPU（详见下面 `RTR_*` 注释）。
 
+  设备侧（`DeviceLimiter`，**自愿**自限频，第三套前缀 `ORPAH_SELF_*`，2026-09-13）：
+    ORPAH_SELF_ENABLE（默认 1）/ _MIN_INTERVAL（默认 0.6 s）/ _BURST（默认 4）。
+    **它不是防线** —— 一台被改过的设备不会做（协议也要求不了它）；只让守规矩的设备
+    别占满空口、别白花电、别撞上游的桶。语义是**延后**不是丢弃（丢自己的报 = 漏报）。
+
 默认值怎么来的（**演示/开发配置，不是实测标定**）：
   - 正常流量 = 每台设备 ~1 条/秒（`ui_server` 的 2s 会话周期 + 1s ID 周期）→
     `SN_RATE=2.0` 留 1 倍余量，长期 1 条/秒**永远不会被限**；
@@ -196,6 +201,19 @@ class _Buckets:
                     "created": self.created, "evicted": self.evicted,
                     "rate": self.rate, "burst": self.burst}
 
+    def tokens(self, key, now=None):
+        """某 key 现在剩几个令牌（**只读观测**：演示/页面前置判断“桶回补够了没”）。
+
+        `peek()` 会顺带把令牌补到当前时刻（延迟补充），所以这个读数是最新的。
+        为什么需要它：讲“守规矩的设备不撞上游的桶”时，必须**先确认桶里有额度** ——
+        否则上一轮刷量刚把桶刷空，测出来的就是“桶还没回补”，而不是设备侧重不要限。
+        """
+        now = time.monotonic() if now is None else float(now)
+        with self._lock:
+            b = self._get(key, now)
+            b.peek(now)
+            return round(b.tokens, 2)
+
     def top(self, n=3, now=None):
         """令牌最少的几台（"被刷得最狠"的线索；只给线索，不指认谁在攻击）。"""
         now = time.monotonic() if now is None else float(now)
@@ -346,6 +364,144 @@ class RateLimiter:
             "sn_table": self.sn.state(now),
             "router_table": self.router.state(now),
             "top_sn": self.sn.top(3, now),
+            "recent": self.recent(5),
+            "since": self.since,
+        }
+
+
+# ---- 设备侧（客户端）自限频：第三套前缀 `ORPAH_SELF_*`（别与上面两套混用） ----
+# 默认值怎么来的（**演示配置，不是真机标定**，2026-09-13 按本 demo 的真实节奏定的）：
+#   · 本 demo 里「设备**自己**的业务上报」的真实节奏（`ui_server._report_loop`）=
+#     每个周期 3 条集中在 ~0.25s 内（REQ-CONNECT → +0.25s REPORT → 同拍 ID-REPORT），
+#     然后歇 `every`（默认 2s；能量轴给的最小间隔也是 2s）→ **长期 1.5 条/秒、瞬时 3 条**。
+#   · `min_interval=0.6`（≈1.67 条/秒）**高于**长期 1.5 条/秒 → 正常节奏**永不触发**
+#     （这就是"默认参数不该误伤好设备"的那条回归锁）；同时它**低于** Server 侧 per-SN 的
+#     2 条/秒 → 守规矩的设备根本不该撞上上游的桶（撞上 = 白花空口 + 被丢）。
+#   · `burst=4` > 一个周期内的 3 条 → 周期内的突发不会被自己延后。
+SELF_ENABLE = _env_bool("ORPAH_SELF_ENABLE", True)
+SELF_MIN_INTERVAL = _env_float("ORPAH_SELF_MIN_INTERVAL", 0.6)
+SELF_BURST = _env_int("ORPAH_SELF_BURST", 4)
+
+
+class DeviceLimiter:
+    """设备**自己**的上行限频（§5.8「各环节」里设备这一环，2026-09-13 补）。
+
+    ## 与 Server / Router 两侧的**根本区别**（这条决定了一切措辞）
+    那两处是对**别人**限频（且不相信报文内容）；这里是设备对自己限频 —— **自愿的**：
+    一台被改过的、或本来就失控的设备**根本不会做**（协议里也没法要求它做）。
+    所以它**不是防线**，不得写成「防住了」；它只让**守规矩的设备**不给自己和邻居添堵：
+
+    1. **空口是共享介质**：Router 侧的桶虽然会把它丢掉，但那些帧**已经上过空口了**
+       （带宽已经花掉，丢在 Router 只是省了后面那段的 UDP/CPU）；
+    2. **省电**：每次上报都要花 `energy.COST_MJ`（免电池设备最紧的正是这个）；
+    3. **不撞上游的桶**：撞上 = 既没被听见、又占了空口、又被记一次丢弃。
+
+    ## 语义是**延后（hold）**，不是丢弃
+    丢自己的业务报 = **漏报** = 找人失败。所以这里只回答「现在能不能发」，
+    不能发就给「还差多久」（`Decision.retry_after`）——**不睡眠、不轮询**（同本模块纪律），
+    调用方要么下一拍再发，要么用 `waiting.wait_until(...)` 等。
+
+    ## 演示里的边界（写在代码里，免得下一个人误读）
+    攻击注入 / 刷量 / 重放这些演示动作**不是本机自己的业务上报**（那是"另一台设备"或
+    "一台失控设备"的行为）→ 调用方用 `ClientHost.send_*(force=True)` 明确绕过它。
+    这不是"留后门"：自限频本来就是自愿的，**被改的设备不绕也拦不住**。
+    """
+
+    def __init__(self, enabled=SELF_ENABLE, min_interval=SELF_MIN_INTERVAL,
+                 burst=SELF_BURST, name="client"):
+        self.enabled = bool(enabled)
+        self.min_interval = max(0.0, float(min_interval))
+        self.name = name
+        self.burst = int(max(1, burst))
+        # 惰性建桶（见 `_bucket`）：**桶的时钟必须与调用方给的 `now` 同一套** ——
+        # 先在构造里用 `time.monotonic()` 建好，测试传假时钟（`now=0`）时会被算成
+        # “负时间差” → 满桶瞬间被扣光（实测踩过：正常节奏 60 条全被延后）。
+        self.bucket = None
+        self.allowed = 0
+        self.held = 0                       # 被延后的次数（**不是**丢弃：下一拍还会发）
+        self.last_hold = None
+        self.since = time.time()
+        self._recent = []
+        self._lock = threading.Lock()
+
+    def _bucket(self, now):
+        """惰性建桶（第一次用时以调用方的 `now` 为基准）—— 同 `_Buckets._get` 的做法。"""
+        if self.bucket is None:
+            rate = (1.0 / self.min_interval) if self.min_interval > 0 else 0.0
+            self.bucket = TokenBucket(rate, self.burst, now=now)
+        return self.bucket
+
+    @classmethod
+    def from_env(cls, prefix="ORPAH_SELF_", enable=SELF_ENABLE,
+                 min_interval=SELF_MIN_INTERVAL, burst=SELF_BURST):
+        """按环境变量构造（每次重读环境 → 测试可改 env 后重建）。"""
+        return cls(enabled=_env_bool(prefix + "ENABLE", enable),
+                   min_interval=_env_float(prefix + "MIN_INTERVAL", min_interval),
+                   burst=_env_int(prefix + "BURST", burst))
+
+    def check(self, sn=None, kind="", now=None):
+        """能不能发这一条？允许则扣一格；不允许则计数 + 留痕。
+
+        `kind` 只是给人看的（REQ-CONNECT / REPORT / ID-REPORT），**不参与**判定 ——
+        一条上行占的就是一份空口时间，不分类型（分类型限反而能靠换类型绕开）。
+        """
+        if not self.enabled:
+            return Decision(True)
+        now = time.monotonic() if now is None else float(now)
+        with self._lock:
+            b = self._bucket(now)
+            ok, wait = b.peek(now)
+            if ok:
+                b.consume(now)
+                self.allowed += 1
+                return Decision(True)
+            self.held += 1
+            retry = None if wait == float("inf") else round(wait, 3)
+            rec = {"t": time.strftime("%H:%M:%S"), "side": "client",
+                   "mtype": kind or "uplink", "sn": sn or "-", "router": "-",
+                   "which": "interval", "retry_after": retry}
+            self.last_hold = {"t": time.time(), "which": "interval",
+                              "sn": sn, "kind": kind, "retry_after": retry}
+            self._recent.append(rec)
+            del self._recent[:-20]           # 只留最近 20 条（环形，别长）
+        return Decision(False, which="interval", retry_after=wait)
+
+    def wait_for(self, now=None):
+        """还要等多久才能再发（秒；0 = 现在就能发）。**纯计算，不睡眠。**"""
+        if not self.enabled:
+            return 0.0
+        now = time.monotonic() if now is None else float(now)
+        with self._lock:
+            ok, wait = self._bucket(now).peek(now)
+            return 0.0 if ok else wait
+
+    def recent(self, n=5):
+        with self._lock:
+            return list(reversed(self._recent[-n:]))
+
+    def reset_counters(self):
+        with self._lock:
+            self.allowed = 0
+            self.held = 0
+            self._recent = []
+            self.last_hold = None
+            self.since = time.time()
+
+    def snapshot(self, now=None):
+        """给 `/api/status`（形状与 `RateLimiter.snapshot` 对齐，页面用同一套渲染代码）。
+
+        `held` 是**延后**，不是丢：页面文案必须跟着这个词（写「丢弃」会让人以为漏报了）。
+        """
+        now = time.monotonic() if now is None else float(now)
+        with self._lock:
+            b = self._bucket(now)
+        return {
+            "on": self.enabled,
+            "params": {"min_interval": self.min_interval,
+                       "rate": round(b.rate, 3), "burst": int(b.burst)},
+            "allowed": self.allowed,
+            "held": self.held,
+            "last_hold": self.last_hold,
             "recent": self.recent(5),
             "since": self.since,
         }

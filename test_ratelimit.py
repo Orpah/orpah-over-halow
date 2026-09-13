@@ -113,6 +113,19 @@ class TestBuckets(unittest.TestCase):
         self.assertEqual(top[0]["key"], "A")
         self.assertEqual(top[0]["tokens"], 0.0)
 
+    def test_tokens_observation(self):
+        """`tokens()` 是**只读观测**：新 key = 满桶、扣掉的看得见、随时间补回（封顶）。"""
+        bs = RL._Buckets(rate=2.0, burst=5.0, max_keys=16, name="sn")
+        self.assertEqual(bs.tokens("K", now=0.0), 5.0)     # 新 key 起手满桶
+        bs.consume("K", now=0.0)
+        self.assertEqual(bs.tokens("K", now=0.0), 4.0)
+        self.assertAlmostEqual(bs.tokens("K", now=1.0), 5.0, places=6)   # 1s×2/s，且封顶
+        self.assertEqual(bs.tokens("K", now=1e6), 5.0)     # 再久也只到满桶
+        bs.consume("K", now=1e6)
+        for _ in range(10):                                # 连读 10 次不消耗令牌
+            self.assertEqual(bs.tokens("K", now=1e6), 4.0)
+        self.assertEqual(bs.created, 1)                    # 观测同一个 key 不会重复建桶
+
 
 class TestLimiterLogic(unittest.TestCase):
     """两条防线：都过才扣；拒绝时明说哪条拒的；关闭开关 = 全放行。"""

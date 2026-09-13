@@ -346,7 +346,7 @@ function renderIdReports(list) {
    否则改了环境变量会出现“页面说的与服务器做的不一致”。*/
 let rlBusy = false;
 let rlP = {};                     // 最近一次 /api/status 里的限频参数（刷量条数按它算）
-function renderRatelimit(rl, rtr) {
+function renderRatelimit(rl, rtr, sl) {
   if (!rl) return;
   const p = rl.params || {};
   rlP = p;
@@ -373,6 +373,15 @@ function renderRatelimit(rl, rtr) {
   $("rlRtrDropped").textContent = T("rl_drop_fmt").replace("{t}", rd.total || 0)
     .replace("{s}", rd.sn || 0).replace("{r}", rd.router || 0);
   $("rlRtrDropped").className = (rd.total || 0) > 0 ? "bad" : "ok";
+  // 设备侧（§5.8 设备那一环）：**自愿**自限频，不是防线。文案必须用「延后」——
+  // 写「丢弃」会让人以为漏报了（延后的那些下一拍还会发）。
+  const sp = (sl && sl.params) || {};
+  $("slState").textContent = sl && sl.on ? T("sl_on") : T("sl_off");
+  $("slState").className = sl && sl.on ? "ok" : "";
+  $("slParams").textContent = T("sl_params_fmt")
+    .replace("{a}", sp.burst).replace("{b}", sp.min_interval);
+  $("slHeld").textContent = T("sl_held_fmt").replace("{n}", (sl && sl.held) || 0);
+  $("slHeld").className = (sl && sl.held) > 0 ? "no" : "ok";
   const tbody = $("rlRecent");
   if (!tbody) return;
   tbody.innerHTML = "";
@@ -381,6 +390,7 @@ function renderRatelimit(rl, rtr) {
   // （表头写的是“最新在前”，就得真的是最新在前）。t 是 HH:MM:SS，同日可直接比字符串。
   const rows = (rl.recent || []).map(r => Object.assign({ side: "server" }, r))
     .concat((rtr && rtr.recent ? rtr.recent : []).map(r => Object.assign({}, r)))
+    .concat(((sl && sl.recent) || []).map(r => Object.assign({}, r)))
     .sort((a, b) => String(b.t || "").localeCompare(String(a.t || "")))
     .slice(0, 8);
   if (!rows.length) {
@@ -391,8 +401,10 @@ function renderRatelimit(rl, rtr) {
   }
   rows.forEach(r => {
     const tr = document.createElement("tr");
-    const which = r.which === "router" ? T("rl_which_router") : T("rl_which_sn");
-    const side = r.side === "router" ? T("rl_side_router") : T("rl_side_server");
+    const which = r.which === "router" ? T("rl_which_router")
+      : (r.which === "interval" ? T("sl_which_interval") : T("rl_which_sn"));
+    const side = r.side === "router" ? T("rl_side_router")
+      : (r.side === "client" ? T("sl_side") : T("rl_side_server"));
     tr.innerHTML =
       `<td>${esc(r.t || "")}</td><td class="no">${esc(side)}</td>` +
       `<td>${esc(r.kind || r.mtype || "-")}</td>` +
@@ -531,7 +543,7 @@ async function refresh() {
     renderFounds(s.founds || []);
     renderId(s.id_demo || {});
     renderIdReports(s.id_reports || []);
-    renderRatelimit(s.ratelimit || {}, s.ratelimit_rtr || {});
+    renderRatelimit(s.ratelimit || {}, s.ratelimit_rtr || {}, s.selflimit || {});
     fillSpoofKinds(s.spoof_kinds || []);
     spoofKinds = s.spoof_kinds || spoofKinds;
     // §8.2 降级演示下拉：选项来自 /api/status（单一源），选中值回显当前模式

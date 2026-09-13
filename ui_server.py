@@ -528,9 +528,11 @@ class OrpahApp:
             return False
 
         # 4) Client host（双向会话：注入上行 + 收下行）
+        #    设备侧**自愿**自限频开着（§5.8 设备那一环）—— 页面的“周期上报”走它，
+        #    而演示注入（攻击/刷量/重放）由调用方 `force=True` 绕过（那是“别的设备”的行为）。
         self.client = ClientHost(sta_port=HOST_B, sn=self.sn or "CN-WH01-9AF3C1D2",
                                  rssi=self.rssi, on_sent=self._on_sent,
-                                 on_recv=self._on_recv)
+                                 on_recv=self._on_recv, self_limit=True)
         if not self.client.connect():
             print("[ui] Client 连不上 STA host 口，退出")
             return False
@@ -678,20 +680,26 @@ class OrpahApp:
                            "ssid": "ORPAHID_ZONE_A", "rssi": -42}],
             battery_mv=self.id_battery_mv, firmware="1.0.3", cap=cap, **kw)
 
-    def _send_id_report(self, ts=None):
-        """生成一条已签 orpah-id-report 并注入上行；ts 可指定（演示超窗）。"""
+    def _send_id_report(self, ts=None, force=False):
+        """生成一条已签 orpah-id-report 并注入上行；ts 可指定（演示超窗）。
+
+        `force=True` 用于**演示注入**（刷量/重放/超窗）——那是“另一台设备/一台失控设备”
+        的行为，不是本机自己的业务上报 → 明确绕开设备侧自限频（它本来就是自愿的）。
+        """
         r = self._legit_id_report(ts=ts)
         self._last_id_report = r
-        self._inject_id(r)
+        self._inject_id(r, force=force)
         return r
 
-    def _inject_id(self, report):
+    def _inject_id(self, report, force=False):
         """注入一条 ID-REPORT 并计数（周期上报 / 重放 / 超窗 / 伪造都经此）。
 
         计数放这里而不是 `client.send_id_report` 的各调用点：空口帧总额
         (tx_sta) = L2 注入 + ID 注入，四处各计一次迟早漏一个 → 页面上对不上。
+        注：被设备侧自限频**延后**的条（返回 0）**不计**入 `id_sent` —— 它没上空口，
+        计了就会让空口帧总额对不上（页面 `client_held` 单独报这个数）。
         """
-        n = self.client.send_id_report(report)
+        n = self.client.send_id_report(report, force=force)
         if n > 0:
             self.id_sent += 1
         return n
@@ -725,7 +733,9 @@ class OrpahApp:
         sn = (report.get("payload") or {}).get("sn") or ""
         self._spoof_track(nonce, kind, expect, sn)
         self.spoof_injected += 1
-        self._inject_id(report)
+        # 攻击注入 = “别的设备在说话”，不是本机业务上报 → 明确绕过设备侧自限频
+        # （它本来就是**自愿**的：真被改的设备不会做，这里只是别把演示自己拦了）
+        self._inject_id(report, force=True)
         zh, en, _, _ = spoof.case_info(kind)
         return True, {"kind": kind, "zh": zh, "en": en, "nonce": nonce, "sn": sn,
                       "expect": expect, "note": note,
@@ -960,9 +970,12 @@ class OrpahApp:
         for i in range(n):
             if rotate:
                 self._inject_id(P.build_id_report(
-                    {"payload": {"sn": f"CN-WH01-RL{i:04d}"}}))
+                    {"payload": {"sn": f"CN-WH01-RL{i:04d}"}}), force=True)
             else:
-                self._send_id_report()                # 真签名（含 ECDSA 开销：这才叫刷量）
+                # 真签名（含 ECDSA 开销：这才叫刷量）
+                # `force=True`：刷量演示模拟的就是“一台失控/被改的设备” —— 那正是不做
+                # 自限频的情形（设备侧自限频是自愿的，这里用 force 把它诚实地摆出来）。
+                self._send_id_report(force=True)
         # 判据：**两侧合计**（Router 侧限的是带宽，它丢的报文根本到不了 Server ——
         # 只看 server 侧计数会永远等不到；2026-09-13 实测踩过）。
         done = wait_until(
@@ -1216,6 +1229,9 @@ class OrpahApp:
                 self.router.rl.snapshot() if self.router else {},
                 dropped_total=self.router.rl_dropped if self.router else 0,
                 recent=list(self.router.rl_drops)[:5] if self.router else []),
+            # 设备侧（§5.8 里“设备自己那一环”，2026-09-13）：**自愿**自限频，**不是防线**。
+            # `held` 是**延后**（下一拍还会发）—— 页面不得把它写成“丢弃”（会让人以为漏报了）。
+            "selflimit": (self.client.limiter.snapshot() if self.client else {}),
             # 防 spoof 演示的攻击清单（脚本/UI 同一份，见 spoof.py；页面按语言取 zh/en）
             # `line` = 它**期望**被哪道防线拦（`spoof.DEFENSES` 单一源；None=应被接受）
             "spoof_kinds": [{"kind": k, "zh": spoof.case_info(k)[0],
@@ -1291,9 +1307,10 @@ class OrpahApp:
         elif action == "unrevoke" and self.client:
             self.id_ks.unrevoke(self.client.sn)
         elif action == "replay" and self._last_id_report:
-            self._inject_id(self._last_id_report)
+            # 重放演示：注入的是“刚才那一条”（别的设备/攻击者行为）→ 绕过自限频
+            self._inject_id(self._last_id_report, force=True)
         elif action == "stale":
-            self._send_id_report(ts=int(time.time()) - 3600)
+            self._send_id_report(ts=int(time.time()) - 3600, force=True)
         elif action == "spoof":
             # 响应**始终带 ok**（2026-09-12 review）：以前失败路径只回 {"err":…}，
             # 调用方得靠“没有 ok”推断失败；现在显式 false。前端 `if (!info.ok)` 两种都能工作。
@@ -1329,6 +1346,8 @@ class OrpahApp:
             # 演示用：清零计数后重新刷量，页面上的数字才对得上（**不**清桶本身 ——
             # 清了就等于“把限频关一下”，会把演示变成假的）
             self.rl.reset_counters()
+            if self.client is not None:      # 设备侧计数一并清（三侧同拍，页面对得上）
+                self.client.limiter.reset_counters()
             self.rl_events = []
             return {"ok": True}
         return {"ok": True}

@@ -140,7 +140,10 @@ def main():
         print("  Router 连不上 AP host 口，退出")
         return 2
     rtr = router.rl          # Router 侧限频器（与 server 侧是两个实例、两套参数）
-    client = ClientHost(sta_port=HOST_B, sn=dev.sn)
+    client = ClientHost(sta_port=HOST_B, sn=dev.sn, self_limit=True)
+    # ↑ 设备侧**自愿**自限频（§5.8 设备那一环）：本脚本要同时演示三层——
+    #   ① 守规矩的设备（走自限频）根本不撞上游的桶；② 被要求过快时自己**延后**；
+    #   ③ 绕过它（`force=True` = “一台失控/被改的设备”）才会撞上 Router/Server 的桶。
     if not client.connect():
         print("  Client 连不上 STA host 口，退出")
         return 2
@@ -171,7 +174,9 @@ def main():
         rl_d0, rtr_d0 = srv.rl_dropped, router.rl_dropped
         n1 = sink.count()
         for _ in range(args.flood):
-            client.send_id_report(dev.report())
+            # force=True：本组模拟的就是“一台失控/被改的设备连发” —— 它**不做**自限频，
+            # 否则这一组根本不会撞上 Router/Server 的桶（那正是下面第 [7] 组的对照）。
+            client.send_id_report(dev.report(), force=True)
         # 判据：**两侧合计**把这批处理/丢弃完（Router 侧丢的不会到 Server，不能只看 server）。
         # 2026-09-13 实测踩过：只等 server 侧计数，Router 侧一开就永远等不到。
         done = wait_until(
@@ -213,8 +218,9 @@ def main():
         srv.rl.reset_counters()
         for i in range(args.rotate):
             # 最简骨架（未签名）：限频层本来就不该信任报文内容，这里只看"这条线怎么反应"
+            # force=True：同第 [2] 组 —— 模拟“一台失控设备/外部注入”
             client.send_id_report(op.build_id_report(
-                {"payload": {"sn": f"CN-WH01-RL{i:04d}"}}))
+                {"payload": {"sn": f"CN-WH01-RL{i:04d}"}}), force=True)
         done = wait_until(lambda: srv.rl_dropped >= args.rotate - rl.router.burst,
                           timeout=20.0, interval=0.02)
         check("per-SN 桶**抓不住**轮换 SN（每个新 SN 都是满桶）—— 这条如实展示",
@@ -230,7 +236,9 @@ def main():
         rc0, rtr_d1 = client.recv, router.rl_dropped
         sn0, mac0 = rtr.dropped_sn, rtr.dropped_router      # 计数是**累计**的 → 本阶段要看增量
         for _ in range(sent_rc):
-            client.send_req_connect()
+            # force=True：这一组模拟“未签名 probe 连发”（失控设备/外部扫描器）——
+            # 正是自限频那一环**不会**发生的情形，只有绕过它才能看到 Router 侧按源 MAC 限。
+            client.send_req_connect(force=True)
         got = wait_until(lambda: router.rl_dropped - rtr_d1 >= 5,
                          timeout=8.0, interval=0.02)
         dropped_rc = router.rl_dropped - rtr_d1
@@ -257,7 +265,8 @@ def main():
         f0 = srv.found_count
         rtr_d2 = router.rl_dropped
         for _ in range(12):
-            client.send_req_connect()      # 命中走失表 → Router 每条都上报 FOUND
+            # force=True：这里模拟的是“probe 连发”（外部/失控设备），不是设备自己的业务上报
+            client.send_req_connect(force=True)   # 命中走失表 → Router 每条都上报 FOUND
         got = wait_until(lambda: srv.found_count >= f0 + 12, timeout=8.0, interval=0.02)
         check("12 条 FOUND 全部到达（一条都没被限频吞掉）", got,
               f"收到 {srv.found_count - f0}/12")
@@ -265,6 +274,66 @@ def main():
               router.rl_dropped == rtr_d2,
               f"Router 丢 {router.rl_dropped - rtr_d2} 条 —— 按上面 [5] 的桶容量，"
               f"若走限频必然要丢")
+
+        # ---- ⑦ 设备侧自限频（自愿）：自己延后 ≠ 丢弃，且根本不撞上游的桶 --------
+        print("\n[7] 设备侧自限频（§5.8 设备那一环，**自愿**）：延后 ≠ 丢弃，不撞上游的桶")
+        lp = client.limiter
+        pp = lp.snapshot()["params"]
+        # 前置：先等**上游两条桶**回补到能容下这一段突发（上面几组刚把桶刷空过）。
+        # 不先等就分不清"是设备侧自限频起了作用"还是"上游还没回补" —— 实测踩过两次：
+        # ① 只等“有额度”不够（桶边缘补出 1 个就放行，剩下 2 条仍被丢）；
+        # ② 完全不等 → 头 3 条全丢，看起来像自限频没用。
+        # 顺带这也是"桶会回补、限频不是封禁"的同一件事。
+        need = int(pp["burst"])
+        budget = wait_until(
+            lambda: (rtr.sn.tokens(dev.sn) >= need and rl.sn.tokens(dev.sn) >= need),
+            timeout=20.0, interval=0.05)
+        check(f"前置：上游两条桶都回补到 ≥{need} 个令牌（否则测的不是设备侧自限频）",
+              budget,
+              f"Router per-SN 剩 {rtr.sn.tokens(dev.sn)} / "
+              f"Server per-SN 剩 {rl.sn.tokens(dev.sn)}（桶容量分别 "
+              f"{rtr.sn.burst:.0f} / {rl.sn.burst:.0f}）")
+        lp.reset_counters()
+        srv.rl.reset_counters()
+        router.rl.reset_counters()
+        print(f"    设备侧参数：最小间隔 {pp['min_interval']}s（≈{pp['rate']} 条/秒）"
+              f"、突发 {pp['burst']} 条；测试发 20 条“不等待”的上报")
+        d1, r1 = srv.rl_dropped, router.rl_dropped
+        n3, a3 = sink.count(), lp.allowed
+        for _ in range(20):
+            client.send_id_report(dev.report())        # 守规矩的设备：不 force
+        held = lp.held
+        escaped = lp.allowed - a3                       # 真的上了空口的条数
+        check("设备把多余的上报**延后**了（不是丢弃：没上空口，但条数记着）",
+              held > 0 and escaped + held == 20,
+              f"发出 {escaped} + 延后 {held} = {escaped + held}/20")
+        done7 = wait_until(lambda: sink.count() - n3 >= escaped,
+                           timeout=10.0, interval=0.02)
+        check("这批发出去的都被上游收下了", done7,
+              f"接受 {sink.count() - n3}/{escaped}")
+        check("★ 守规矩的设备**不撞上游的桶**：Router 与 Server 两侧丢弃都是 0",
+              srv.rl_dropped == d1 and router.rl_dropped == r1,
+              f"Server 丢 {srv.rl_dropped - d1} / Router 丢 {router.rl_dropped - r1}"
+              f"（跟第 [2] 组同一种“不等待连发”，差别只在于走不走自限频）")
+        check("桶会回补：等一个最小间隔后这一条能被发出去（所以叫“延后”）",
+              wait_until(lambda: lp.wait_for() <= 0.0, timeout=5.0, interval=0.02)
+              and client.send_id_report(dev.report()) > 0,
+              f"等 {pp['min_interval']}s 后这一条发出去了（累计放行 {lp.allowed}）")
+        # 对照：同一节奏、但绕过自限频（= 一台被改/失控的设备）→ 上游开始丢
+        srv.rl.reset_counters()
+        router.rl.reset_counters()
+        d2, r2 = srv.rl_dropped, router.rl_dropped
+        n4 = sink.count()
+        for _ in range(20):
+            client.send_id_report(dev.report(), force=True)     # 不做自限频
+        done8 = wait_until(
+            lambda: (sink.count() - n4) + (srv.rl_dropped - d2)
+            + (router.rl_dropped - r2) >= 20, timeout=20.0, interval=0.02)
+        lost = (srv.rl_dropped - d2) + (router.rl_dropped - r2)
+        check("★ 对照：绕过自限频（被改/失控的设备）→ 上游开始丢（这就是“自愿”的代价）",
+              done8 and lost > 0,
+              f"20 条里被上游丢 {lost} 条（Server {srv.rl_dropped - d2} / "
+              f"Router {router.rl_dropped - r2}）—— 自限频不是防线，被改的设备不做它")
     finally:
         stop.set()
         for fn in (client.close, router.stop, srv.stop):

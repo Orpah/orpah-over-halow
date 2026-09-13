@@ -235,6 +235,10 @@
     <div class="id-row"><span data-i18n="rl_dropped">已丢弃</span><b id="rlDropped" class="ok">-</b></div>
     <div class="id-row"><span data-i18n="rl_rtr_params">Router 侧（带宽）</span><b id="rlRtrParams">-</b></div>
     <div class="id-row"><span data-i18n="rl_rtr_dropped">Router 侧已丢弃</span><b id="rlRtrDropped" class="ok">-</b></div>
+    <!-- 设备侧（§5.8 设备那一环）：**自愿**自限频，不是防线；语义是**延后**不是丢弃 -->
+    <div class="id-row"><span data-i18n="sl_state">设备侧（自愿）</span><b id="slState">-</b></div>
+    <div class="id-row"><span data-i18n="sl_params">设备侧参数</span><b id="slParams">-</b></div>
+    <div class="id-row"><span data-i18n="sl_held">设备侧已延后</span><b id="slHeld" class="ok">-</b></div>
   </div>
   <div class="config-row id-ctl">
     <button class="btn" id="btnRlFlood" data-i18n="rl_btn_flood">刷量（同一 SN）</button>
@@ -242,6 +246,7 @@
     <button class="btn" id="btnRlReset" data-i18n="rl_btn_reset">清零计数</button>
   </div>
   <p class="hint" id="rlMsg" data-i18n="rl_idle">按「刷量」真的连发报文（走真链路）—— 同一 SN 连发命中 per-SN 防线；轮换 SN 则 per-SN 抓不住、由 per-Router 兜住。</p>
+  <p class="hint" data-i18n="sl_hint">设备侧（客户端）自限频是「自愿」的，不是一道防线：一台被改过或失控的设备根本不会做它，协议也要求不了它。它的实际好处只有三个：空口是共享介质（Router 侧虽然会丢，但那些帧已经上过空口、带宽已经花掉）、每次上报都要花电（免电池设备最紧的就是这个）、别去撞上游的桶（撞上等于没被听见还添了流量）。所以它的语义是「延后」而不是丢弃（丢自己的报等于漏报，找人场景不可接受）——计数栏里的「已延后」下一拍还会发。页面上的「刷量」按钮模拟的就是一台失控设备，它明确绕过自限频；那正是这条边界的现场证据：绕过之后才轮到 Router/Server 的桶开始丢。</p>
   <div class="pub-head" data-i18n="rl_recent_head">最近被丢弃的（最新在前）</div>
   <table>
     <thead><tr>

@@ -148,6 +148,9 @@ def main():
     if not router.start():
         print("  Router 连不上 AP host 口，退出")
         return 2
+    # 本脚本里的 Client 扮的是“空口上的一台（或好几台）说话人” —— 攻击报文与合法对照
+    # **都是注入**（不是本机自己的周期业务上报），所以不开设备侧自限频；
+    # 开着的活会用 `force=True` 逐条绕过（见 `client._gate` 的说明）。
     client = ClientHost(sta_port=HOST_B, sn=legit_dev.sn)
     if not client.connect():
         print("  Client 连不上 STA host 口，退出")

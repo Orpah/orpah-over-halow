@@ -51,6 +51,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | 设备清册 / 走失案件（立案→发现→找回·撤销→结案，含接手人） | `registry.py` / `cases.py` | 页面 + `test_server.py` |
 | 告警（长未上报 / 案件超时 / 处置超时 / 验签失败率 / 降级上报 / 设备时钟 / **能力声明不一致** / **RSSI 突变** / **校验位连败** / 电量 / 限频丢弃） | `alerts.py` | `test_alerts.py`、`test_levels.py` |
 | **告警通知（出站 Webhook + 页面弹窗）** | `notify.py` + `ui_server._alert_watch` | `test_notify.py` |
+| **限频（§5.8，三层）**：Server 侧 per-SN + per-Router（验签之前，限 CPU）；Router 侧转发按 SN / 探针按源 MAC（限带宽）；**设备侧自愿自限频**（`ORPAH_SELF_*`：延后而非丢弃，不占满空口/不撞上游桶；**不是防线**，被改的设备不做） | `ratelimit.py`（`RateLimiter` + `DeviceLimiter` 复用同一令牌桶）+ `client.ClientHost._gate` | `test_ratelimit.py`、`test_selflimit.py`、`demo_ratelimit.py` |
 | 指标面板（验签失败率·算法分布 / 平均 RSSI / 处置时长） | `metrics.py` | `test_metrics.py` |
 | 定位：多路由器观测 → 三边/WLS + 95% 椭圆 + 卡尔曼平滑 + 回放 + **误差 CDF（仅模拟环境有真值）** + **补站位建议（几何不行时给可执行坐标）** + **报文流时间轴（序号缺口=丢包证据）** | `motion.py` / `stations.py` / `ui/static/pos.js` | `test_motion.py`、`test_posjs.py`（61 条 + 2 条页面守卫，套件自己报数） |
 | 时钟可信：①无 RTC 设备 `ts=0` → 服务器接收时刻（唯一入口）②设备时钟**偏移/漂移估计**（只估计不改数据；长基线才给漂移，原因可见：基线不足/噪声）③**设备自报能力位 `cap.rtc`**（三态；已签声明防篡改；无 RTC ⇒ 一律服务器时刻且不喂估计器；声明有 RTC 却给不出可用时间 → `id_cap_mismatch` 告警） | `orpah_proto`（`effective_ts`/`cap_of`/`rtc_of`） / `clock.py`（`ClockTracker`） | `test_clock.py`（88 条）+ `test_server.py`（28 条）+ `test_alerts.py` + `demo_clock.py` + 首页「上报控制」能力下拉/ts 置 0 |
@@ -308,6 +309,7 @@ orpah-over-halow/                      # 本项目（ORPAH 业务全链路；纯
 ├── metrics.py          # 【业务】指标纯计算（验签失败率/算法分布/平均 RSSI/处置时长）
 ├── clock.py            # 【业务】设备时钟偏移/漂移估计（纯计算；只估计不改数据，短窗/跳变/噪声里给 None）
 ├── energy.py           # 【业务】能量轴三参数模型（采集/储能/上报代价 → 间隔与降级；参数是**演示标定值**）
+├── ratelimit.py        # 【限频】§5.8 各环节限频：server 两条 + router 两条 + **设备侧自愿自限频**（同一令牌桶）
 ├── stations.py         # 【定位】站位 = 已知坐标观测点（绑定 > 时间窗中位数 > 路由器序列）
 ├── motion.py           # 【定位】演示用「移动的人」+ 路径损耗/噪声（A/n **唯一源** → /api/config）
 ├── tsdb.py             # 【存储】IoTDB 接入（设备流/各路由器观测/事件；未就绪优雅降级）
