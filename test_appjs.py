@@ -17,6 +17,16 @@
 另：`refresh()` 的防重入是**故意不做**的（实测 `/api/status` 中位 4.2 ms，1 s 间隔余量 200×）
 —— 那条口径写在 `app.js` 的注释与 `AGENTS.md` 里，本套件不锁（注释不是可执行契约）。
 
+2026-09-13 追加两条（弹窗跳转 / 声音提醒）：
+
+4. **`ALERT_LINK` 必须覆盖 `alerts.py` 里的全部 kind**：弹窗能“点进去看”靠的是这张表，
+   漏一个 kind = 那条告警弹出来**点了没反应**（不报错、不提示，纯静默失效）。
+   kind 清单**从 `alerts.py` 现抽**（`_alert("<kind>"`），不在这里另拄一份 ——
+   否则加了新告警类型，测试仍然绿（这正是本条要防的）。
+5. **声音提醒必须默认关**：`index.html` 的 `#notifySound` 不得带 `checked`（浏览器会把
+   它当默认勾选）；`localStorage` 读的是 `=== "1"`（读不到 = 关）。
+   需求就是“默认关，勾选开启”—— 悄悄改成默认开是范态度默认值变更，比功能坏更难受。
+
 运行：C:\\Python313\\python.exe test_appjs.py
 """
 import os
@@ -31,6 +41,8 @@ for _s in (sys.stdout, sys.stderr):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_JS = os.path.join(HERE, "ui", "static", "app.js")
+ALERTS_PY = os.path.join(HERE, "alerts.py")
+INDEX_HTML = os.path.join(HERE, "ui", "static", "index.html")
 PAGES = ("index.html",)     # 只有首页加载 app.js（attack.html 用的是 attack.js，同约定但另一套）
 
 
@@ -102,6 +114,68 @@ def page_guard():
     return bad
 
 
+def check_alert_links(src):
+    """`ALERT_LINK` 必须覆盖 `alerts.py` 里出现的每一个 kind（kind 从 alerts.py 现抽）。"""
+    if not os.path.exists(ALERTS_PY):
+        print("  FAIL 找不到 alerts.py —— 无法校验跳转表覆盖（守卫对象变了要同步改）")
+        return 1
+    kinds = sorted(set(re.findall(r'_alert\(\s*"([a-z_]+)"',
+                                  open(ALERTS_PY, encoding="utf-8").read())))
+    if not kinds:
+        print("  FAIL 从 alerts.py 抽不到任何 kind —— 取值方式变了（守卫失效，会假绿）")
+        return 1
+    m = re.search(r"const\s+ALERT_LINK\s*=\s*\{(.*?)\n\};", src, re.S)
+    if not m:
+        print("  FAIL 找不到 `ALERT_LINK` 表 —— 弹窗跳转的单一源没了")
+        return 1
+    table = m.group(1)
+    have = set(re.findall(r"^\s*([a-z_]+)\s*:", table, re.M))
+    missing = [k for k in kinds if k not in have]
+    extra = sorted(have - set(kinds))
+    bad = 0
+    if missing:
+        print(f"  FAIL ALERT_LINK 漏了 {len(missing)} 个 kind {missing} —— "
+              "这些告警弹出来点了没反应（静默失效）")
+        bad += 1
+    if extra:
+        print(f"  FAIL ALERT_LINK 里有多余/写错的 kind {extra} —— "
+              "大概率是拼错（拼错的 key 永远匹配不上，等于白写）")
+        bad += 1
+    if not bad:
+        print(f"  OK   ALERT_LINK 覆盖 alerts.py 全部 {len(kinds)} 个 kind，无多余项")
+    # 跳转 URL 一律用 `alertLink()` 取（页面自己拼 URL 就是第二份映射）
+    if src.count("alertLink(") < 1:
+        print("  FAIL 找不到 `alertLink(` —— 表在但没被用来生成 URL")
+        bad += 1
+    return bad
+
+
+def check_sound_default_off(src):
+    """声音提醒必须**默认关**：HTML 不带 checked，读 localStorage 用 `=== \"1\"`。"""
+    bad = 0
+    if not os.path.exists(INDEX_HTML):
+        print("  FAIL 找不到 index.html")
+        return 1
+    html = open(INDEX_HTML, encoding="utf-8").read()
+    m = re.search(r"<input[^>]*id=\"notifySound\"[^>]*>", html)
+    if not m:
+        print("  FAIL index.html 里找不到 `#notifySound` 复选框")
+        return 1
+    if re.search(r"\bchecked\b", m.group(0)):
+        print("  FAIL `#notifySound` 带 `checked` —— 声音就会默认开（需求是默认关、勾选才开）")
+        bad += 1
+    if 'localStorage.getItem(SOUND_KEY) === "1"' not in src:
+        print("  FAIL app.js 里没有 `localStorage.getItem(SOUND_KEY) === \"1\"` —— "
+              "默认关的口径没了（改写成“非空即开”会把 old 值当开）")
+        bad += 1
+    if not re.search(r"function\s+beep\s*\(", src) or "soundOn()" not in src:
+        print("  FAIL 找不到 `beep()` / `soundOn()` —— 声音开关没接到弹窗路径上")
+        bad += 1
+    if not bad:
+        print("  OK   声音提醒默认关（HTML 无 checked + localStorage 严格等于 1 才开）")
+    return bad
+
+
 def main():
     if not os.path.exists(APP_JS):
         print("  FAIL 找不到 ui/static/app.js")
@@ -112,6 +186,10 @@ def main():
     fail = check_esc_covers_all(src)
     print("== alertText：调用点必须包 esc、体内不许再包 ==")
     fail += check_alerttext_call_sites(src)
+    print("== 告警弹窗跳转：ALERT_LINK 必须覆盖 alerts.py 全部 kind ==")
+    fail += check_alert_links(src)
+    print("== 声音提醒：默认关 ==")
+    fail += check_sound_default_off(src)
     print("== 页面守卫（app.js 确实被加载） ==")
     fail += page_guard()
     if fail:

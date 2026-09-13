@@ -992,9 +992,11 @@ const i18nOr = (key, machine) => {
 
 function notifyStateText(rec) {
   if (rec.err === "off") return T("notify_st_off");
-  if (rec.ok === true) return T("notify_st_ok");
+  /* 重试过的投递要看得出来是第几次 —— 否则「成功了」看不出它其实是第三次才成功 */
+  const nth = (rec.tries > 1) ? "　" + T("notify_attempts").replace("{n}", rec.tries) : "";
+  if (rec.ok === true) return T("notify_st_ok") + nth;
   if (rec.ok === false) return T("notify_st_fail") +
-    (rec.status ? " " + rec.status : "");
+    (rec.status ? " " + rec.status : "") + nth;
   return "—";
 }
 
@@ -1012,6 +1014,17 @@ function renderNotify(r) {
   $("notifyFailed").textContent = nf.failed;
   $("notifySkipped").textContent = nf.skipped;
   $("notifyWatch").textContent = nf.watching;
+  /* 重试态（至少一次语义，见 notify.py）：队列里几条 / 还要等多久 / 已重试几次 / 主动丢了几条。
+     「下次重试」跟着服务端算好的 next_in（不在页面自己推时间），没有队列就是 — */
+  const rt = nf.retry || {};
+  if ($("notifyQueued")) {
+    $("notifyQueued").textContent = rt.attempts != null
+      ? `${rt.queued || 0} / 最多再试 ${rt.attempts} 次` : (rt.queued || 0);
+    $("notifyNext").textContent = (rt.next_in == null) ? "—"
+      : rt.next_in + " s" + (rt.next_key ? " · " + rt.next_key : "");
+    $("notifyRetried").textContent = rt.retried || 0;
+    $("notifyDropped").textContent = rt.dropped || 0;
+  }
   $("notifyErr").textContent = nf.last_error || "—";
   $("notifyRecent").innerHTML = (nf.recent || []).map(x => {
     const ev = i18nOr("notify_ev_" + x.event, x.event);
@@ -1058,7 +1071,38 @@ if ($("btnNotifySave")) {
 /* ---------- 告警弹窗（SSE 边沿事件） ----------
    只在新告警 / 级别升高 / 告警消失时收到（服务端 `_emit_alert` 只在边沿发）——
    所以这里**不需要**自己判重，也不会每 3 秒弹一遍。弹窗说的是“通知发出去了没有”，
-   与上方红点（当前状态）是两件事：状态持续存在，通知只在变化的那一刻发一次。 */
+   与上方红点（当前状态）是两件事：状态持续存在，通知只在变化的那一刻发一次。
+
+   **「看到」之后要能「去看」**：弹窗是唯一的瞬时提示，点它应当直接跳到看该问题的地方
+   （否则读者得自己猜去哪一页、哪一条）。URL 是 UI 的事，所以映射表放这里；
+   服务端只给机器可读字段（kind/sn/key）—— 见 ALERT_LINK 的注释。 */
+
+/* 告警 kind → 点弹窗去哪儿看。
+   ★ 这张表**必须覆盖 `alerts.py` 里所有 kind**（`test_appjs.py` 会从 alerts.py 抽 kind 逐个核；
+   漏一个 = 那条告警点了没反应 = 静默失效）。`{sn}` / `{key}` 会被代入并 URL 编码。
+   为什么不是每个 kind 都指向“最精确”的页面：有的告警没有更精确的落点（如限频只有首页那张卡片），
+   就指向它所在的卡片锚点 —— 比跳首页顶部强。 */
+const ALERT_LINK = {
+  no_report: "track.html?sn={sn}",              // 长未上报 → 看这台设备的观测/最后定位（真实上报模式）
+  no_report_energy: "track.html?sn={sn}",       // 没电导致的沉默 → 同上（归因不同，落点相同）
+  rssi_jump: "track.html?sn={sn}",              // RSSI 突变 → 看它的 RSSI 曲线
+  id_cap_mismatch: "index.html#idsec",           // 能力与声明不符 → Orpah ID 签名上报卡片
+  id_clock: "index.html#ctlsec",                 // 时钟偏移 → 上报控制卡片
+  id_energy: "index.html#ensec",                 // 电量低/耗尽 → 能量轴卡片
+  id_degraded: "metrics.html?sn={sn}",           // 签名降级 → 算法分布/验签统计
+  ratelimit: "index.html#rlsec",                 // 被限频丢包 → 限频卡片
+  badcheck_streak: "metrics.html",               // SN 校验连败 → 验签/被拒统计
+  sig_fail_rate: "metrics.html",                 // 签名失败率超阈 → 同上
+  case_overtime: "case.html",                    // 走失超时没人接手 → 案件页
+  case_handled_overtime: "case.html",            // 已接手但超时效 → 案件页
+};
+function alertLink(a) {
+  const tpl = ALERT_LINK[(a && a.kind) || ""];
+  if (!tpl) return null;                         // 没登记的 kind → 弹窗不跳（别瞎指）
+  return tpl.replace("{sn}", encodeURIComponent(a.sn || ""))
+            .replace("{key}", encodeURIComponent(a.key || ""));
+}
+
 function alertToast(ev) {
   const box = $("alertToast");
   if (!box) return;
@@ -1071,13 +1115,76 @@ function alertToast(ev) {
   const sent = d.err === "off" ? T("notify_toast_off")
     : d.ok === true ? T("notify_toast_sent")
     : T("notify_toast_fail") + (d.err || "?");
+  const url = alertLink(a);
+  if (url) div.classList.add("link");
   div.innerHTML = `<span class="x" title="${esc(T("btn_cancel"))}">✕</span>` +
     `<div class="tt">${esc(title)}</div>${body}` +
-    `<div class="tb${d.ok === true || d.err === "off" ? "" : " bad"}">${esc(sent)}</div>`;
-  div.querySelector(".x").onclick = () => div.remove();
+    `<div class="tb${d.ok === true || d.err === "off" ? "" : " bad"}">${esc(sent)}</div>` +
+    (url ? `<div class="go">${esc(T("notify_toast_jump"))}</div>` : "");
+  div.querySelector(".x").onclick = (e) => { e.stopPropagation(); div.remove(); };
+  if (url) {
+    div.onclick = () => { location.href = url; };
+    div.tabIndex = 0;                              // 键盘可达：可聚焦 + Enter/Space 跳转
+    div.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); location.href = url; }
+    };
+  }
   box.appendChild(div);
   while (box.children.length > 4) box.firstChild.remove();
   setTimeout(() => div.remove(), 12000);        // 不永久占屏；红点仍是长期状态
+  beep(ev.event === "alert_resolved" ? "resolved" : a.level);   // 声音提醒（默认关）
+}
+
+/* ---------- 声音提醒（默认关；勾选才响） ----------
+   现场用 WebAudio 合成，不带音频文件。三条如实说明（页面卡片里也写了）：
+   ① 它只是**本机提示音**，不是“通知已送达”的证明 —— 真正的送达靠 Webhook，
+      关掉页面/换台电脑就没有声音；
+   ② 浏览器自动播放策略：没有跟页面交互过时 AudioContext 是 suspended → 这里**静默跳过**，
+      不假装响过（首次点击页面后自动解锁）；
+   ③ 默认关，开关存在 localStorage（只有“要不要响”是本机偏好，与 Webhook 地址无关）。 */
+const SOUND_KEY = "orpah_ui_notify_sound";
+let audioCtx = null;
+function soundOn() { const c = $("notifySound"); return !!(c && c.checked); }
+function audioReady() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;                          // 老浏览器：没有就没声，别抛
+    if (!audioCtx) audioCtx = new AC();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    return audioCtx.state === "running" ? audioCtx : null;
+  } catch (e) { return null; }
+}
+function beep(level) {
+  if (!soundOn()) return false;
+  const ctx = audioReady();
+  if (!ctx) return false;
+  const tone = (f, t0, dur) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = "sine"; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, ctx.currentTime + t0);
+    g.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t0 + dur);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(ctx.currentTime + t0); o.stop(ctx.currentTime + t0 + dur + 0.02);
+  };
+  if (level === "crit") { tone(880, 0, 0.16); tone(880, 0.22, 0.16); }   // crit = 两声
+  else if (level === "resolved") tone(520, 0, 0.18);                     // 消警 = 低声一声
+  else tone(880, 0, 0.16);
+  return true;
+}
+if ($("notifySound")) {
+  const c = $("notifySound");
+  c.checked = localStorage.getItem(SOUND_KEY) === "1";        // 默认关（读不到就是关）
+  c.onchange = () => {
+    localStorage.setItem(SOUND_KEY, c.checked ? "1" : "0");
+    if (c.checked) beep("warn");                              // 勾上先响一声（试听 + 解锁）
+  };
+  /* 首次交互解锁：**只在开着声音时才建 AudioContext**（默认关就不该建对象）。
+     挂着不解锁就一直留着 —— 浏览器策略下 suspended 需要一次真实手势，而用户可能先点别处。 */
+  const unlock = () => {
+    if (soundOn() && audioReady()) document.removeEventListener("click", unlock);
+  };
+  document.addEventListener("click", unlock);
 }
 
 async function refreshAlerts() {

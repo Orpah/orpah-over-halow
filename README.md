@@ -50,7 +50,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | **Router 下行真实性（F-14）**：A = 只收 Server 源地址（解析前就丢）；**B = Server 签名 + Router 只持公钥**（防同源伪造与重放；`dts`+`dn` 保新鲜性） | `downlink.py` + `router._check_down_sig` + `server._reply` | `test_downlink.py`、`test_router.py`、`test_server.py`、`demo_l4.py` 第 ⑨ 组 |
 | 设备清册 / 走失案件（立案→发现→找回·撤销→结案，含接手人） | `registry.py` / `cases.py` | 页面 + `test_server.py` |
 | 告警（长未上报 / 案件超时 / 处置超时 / 验签失败率 / 降级上报 / 设备时钟 / **能力声明不一致** / **RSSI 突变** / **校验位连败** / 电量 / 限频丢弃） | `alerts.py` | `test_alerts.py`、`test_levels.py` |
-| **告警通知（出站 Webhook + 页面弹窗）** | `notify.py` + `ui_server._alert_watch` | `test_notify.py` |
+| **告警通知（出站 Webhook + 页面弹窗，可点击跳转 + 可选声音）** | `notify.py`（边沿触发 + 有界重试/退避，至少一次语义，队列在内存） + `ui_server._alert_watch` + `app.js`（`ALERT_LINK` 单一源） | `test_notify.py`（42 条）、`test_appjs.py` |
 | **限频（§5.8，三层）**：Server 侧 per-SN + per-Router（验签之前，限 CPU）；Router 侧转发按 SN / 探针按源 MAC（限带宽）；**设备侧自愿自限频**（`ORPAH_SELF_*`：延后而非丢弃，不占满空口/不撞上游桶；**不是防线**，被改的设备不做） | `ratelimit.py`（`RateLimiter` + `DeviceLimiter` 复用同一令牌桶）+ `client.ClientHost._gate` | `test_ratelimit.py`、`test_selflimit.py`、`demo_ratelimit.py` |
 | **地图单一源 + 离线回落 + 基点导入/导出**：底图源列表与条款、本地坐标↔经纬度换算、瓦片取不到时切本地网格底图；基点支持导入/导出 JSON（含 GeoJSON Point，**注意 [经度,纬度]**）、范围校验与**可见错误码**（不静默回落）、存本机浏览器、来源三态显示 | `ui/static/map.js` | `test_mapjs.py`（57 项 node + 页面/口径守卫 10 项） |
 | 指标面板（验签失败率·算法分布 / 平均 RSSI / 处置时长） | `metrics.py` | `test_metrics.py` |
@@ -67,7 +67,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 
 | 页面 | 作用 | 主要接口 | 存储 |
 |---|---|---|---|
-| `index.html` | 三节点拓扑 + ORPAH-REPORT 报文流 + L2 消息流 + Orpah ID 卡片 + 发现记录 + 走失表 + 事件历史 + 上报控制/防 spoof 注入；顶部 ⚠ 告警计数 + **告警通知卡（Webhook）+ 当前阈值** | `/api/status`、`/api/events`(SSE)、`/api/ctl`、`/api/alerts`、`/api/ts/events` | 计数只在内存（**重启归零**，是设计）；事件历史在 IoTDB；“已推过的告警”也只在内存（**重启会重推一遍活跃告警**） |
+| `index.html` | 三节点拓扑 + ORPAH-REPORT 报文流 + L2 消息流 + Orpah ID 卡片 + 发现记录 + 走失表 + 事件历史 + 上报控制/防 spoof 注入；顶部 ⚠ 告警计数 + **告警通知卡（Webhook；重试队列/下次重试/放弃投递可见 + 声音提醒开关 + 当前阈值表）** | `/api/status`、`/api/events`(SSE)、`/api/ctl`、`/api/alerts`、`/api/ts/events` | 计数只在内存（**重启归零**，是设计）；事件历史在 IoTDB；“已推过的告警”也只在内存（**重启会重推一遍活跃告警**） |
 | `registry.html` 设备清册 | 人员↔设备台账、状态、照片、`?sn=` 高亮定位 | `/api/registry`、`/api/upload` | SQLite `persons`/`devices` + `uploads/` |
 | `case.html` 走失案件 | 立案（寻人启事要素）/ 接手 / 找回结案 / 撤销 | `/api/cases`、`/api/registry` | SQLite `cases`/`case_events` |
 | `track.html` 定位与轨迹 | 模拟·真实双模式；站位表（打点/绑定）；WLS 定位 + 95% 椭圆；画布⇄地图（**基点可导入/导出**） | `/api/ts/query`、`/api/stations`、`/api/config` | IoTDB（设备流 + 各路由器观测）+ SQLite `stations`（基点在本机 `localStorage`） |
@@ -117,6 +117,8 @@ POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/�
 | 10 | 首页 | `暂停上报` 后等一会儿 | 「告警」卡出现「设备 X 无上报 · 持续 …」+ 顶部 ⚠ 计数（阈值见 `alerts.py` 的 `ORPAH_ALERT_*` 环境变量，**当前值就在「告警通知」卡的阈值表里**） |
 | 10b | 首页 | 在「告警通知」卡填一个 Webhook 地址（例 `http://127.0.0.1:8899/hook`）→ `应用` → `测试发送` | 接收端收到一条 `event=test` 的 POST；`最近投递` 出现该条（**测试发送不计入「已推告警」**） |
 | 10c | 首页 | 等真告警出现（如继续暂停上报到 30s 后） | 右下角弹出一条告警（写着「通知已推送」）+ 接收端收到 `event=alert`；**同一告警持续期间只有这一条**，级别升高（warn→crit）时才会再推一次 |
+| 10d | 首页 | **点**那条弹窗（或 Tab 到它 + Enter）| 直接跳到看该告警的地方（`ALERT_LINK` 单一源）：设备类 → `track.html?sn=…`（自动切「真实上报」模式）、案件类 → `case.html`、限频/能量/上报控制类 → 首页对应卡片锚点。**弹窗能弹出什么 kind，就必须能跳到哪里**（`test_appjs.py` 从 `alerts.py` 现抽 kind 逐个核） |
+| 10e | 首页 | 「告警通知」卡勾上 `声音提醒` | 本机响一声（试听）+ 之后每次弹窗按级别响（crit 两声 / warn 一声 / 消警一声低音）；**默认关**，记在 `localStorage`；浏览器未交互过时静默不响（策略限制，不假装响过）|
 | 11 | 首页 / 攻击流量 | `注入伪造上报` / `跑全部攻击`（Orpah ID 卡），或打开 **`attack.html` 独立面板** | 「期望 X · 实际 Y」对照（`signature_invalid` / `replay_detected` / `unknown_device`…），验签失败率随之上升并触发告警；面板上还能看**每条被哪道防线拦下**、各道防线拦了多少条，以及**只装攻击报文**的流量流（正常周期上报不在里面） |
 
 **自检（黄金样本一键）**：`python run_checks.py` 会把上面的算法/协议断言全跑一遍 ——
@@ -306,7 +308,7 @@ orpah-over-halow/                      # 本项目（ORPAH 业务全链路；纯
 ├── registry.py         # 【业务】人员↔设备台账（SQLite persons/devices，写穿透 + 首启播种）
 ├── cases.py            # 【业务】案件状态机（立案→发现→找回/撤销→结案；handler 与 status 正交）
 ├── alerts.py           # 【业务】告警规则（无存储、按快照重算；阈值走 ORPAH_ALERT_* 环境变量）
-├── notify.py           # 【业务】告警**出站**通知（Webhook；边沿触发 + 失败可见、不重试）
+├── notify.py           # 【业务】告警**出站**通知（Webhook；边沿触发 + 有界重试/退避 + 失败可见；队列在内存）
 ├── downlink.py         # 【安全】下行真实性（F-14 B）：Server 签名 / Router 只持公钥 + (dts,dn) 防重放
 ├── metrics.py          # 【业务】指标纯计算（验签失败率/算法分布/平均 RSSI/处置时长）
 ├── clock.py            # 【业务】设备时钟偏移/漂移估计（纯计算；只估计不改数据，短窗/跳变/噪声里给 None）

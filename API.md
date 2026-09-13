@@ -519,8 +519,12 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
                  "unit": "s", "value": 30}],
  "notify": {"on": true, "url": "http://127.0.0.1:8899/hook", "min_level": "warn",
             "sent": 4, "failed": 0, "skipped": 0, "watching": 1,
+            "retry": {"attempts": 2, "backoff": [1, 5, 30], "queued": 1,
+                      "retried": 1, "dropped": 0, "next_in": 5.0,
+                      "next_key": "no_report:CN-WH01-9AF3C1D2"},
             "last_error": null, "recent": [{"t": "14:37:10", "event": "alert",
-            "kind": "ratelimit", "level": "warn", "ok": true, "status": 200}]}}
+            "kind": "ratelimit", "level": "warn", "tries": 1,
+            "ok": true, "status": 200}]}}
 ```
 
 **无状态**：每次请求都用当前快照（设备清册 + 走失案件 + 最近签名上报 + 设备自报 RSSI 序列）重算，
@@ -542,7 +546,8 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 | 告警消失 | 默认**不推**（`ORPAH_NOTIFY_RESOLVE=1` 打开则补推 `alert_resolved`）|
 | 最低级别 | `ORPAH_NOTIFY_MIN_LEVEL`（默认 `warn`；`crit` = 只看严重的）。低于它的进 `skipped` 且**记进 seen**（升级到 crit 时仍会推）|
 | 投递体 | `{"source":"orpah-over-halow", "event":"alert\|alert_upgraded\|alert_resolved\|test", "ts":…, "key":…, "alert": <告警对象>}` —— 只给**机器可读**字段，`alert.msg` 是 **i18n 键**（接收端自己本地化，与页面同一约定）|
-| 失败 | 计数 + `last_error` + 审计 `notify` 事件（`ok/status/err`）；**不重试**（无重试队列/退避/持久化）——demo 边界，不得写成“通知到了”|
+| 失败 | 计数 + `last_error` + 审计 `notify` 事件（`ok/status/err/tries`）；**有界重试**（默认再试 2 次，退避 `1s/5s/30s`），试完才计「放弃投递」。**语义是至少一次**（超时的那次对方可能已收到 → 会重复送达，接收端按 `key` 去重）；**重试队列在内存里**（重启丢掉未送出的）——不得写成“通知一定到了”或 exactly-once |
+| 计数口径（分开看）| `sent` = **最终送达**（含重试成功的，每条告警最多 +1）/ `failed` = **放弃**（重试用尽）/ `retried` = 多试了几次 / `dropped` = 待重试被丢掉（队列满→丢最旧、换地址、关通知）/ `skipped` = 低于级别没推 |
 | 重启 | `seen` 只在内存 → 重启后**活跃告警会被重推一遍** |
 | 无鉴权 | 出站就一个 HTTP POST，没有签名/凭据；URL 由使用者自填 |
 | 没人开页面 | 巡视在**后台线程**里 → 页面没开也照推（这正是通知存在的意义）|
@@ -551,8 +556,14 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 `ok=false` + `status`/`err` = **投递失败**（连不上 = `status:0`）。
 
 **环境变量**：`ORPAH_NOTIFY_URL`（空 = 关闭，默认）/ `ORPAH_NOTIFY_MIN_LEVEL`（`warn`）/ 
-`ORPAH_NOTIFY_TIMEOUT`（3s）/ `ORPAH_NOTIFY_SEC`（3s）/ `ORPAH_NOTIFY_RESOLVE`（0）。
+`ORPAH_NOTIFY_TIMEOUT`（3s）/ `ORPAH_NOTIFY_SEC`（3s）/ `ORPAH_NOTIFY_RESOLVE`（0）/ 
+`ORPAH_NOTIFY_RETRY`（首次失败后再试几次，`2`；0 = 不重试）/ `ORPAH_NOTIFY_BACKOFF`（`1,5,30` 秒，
+次数多于序列就用最后一个值）/ `ORPAH_NOTIFY_QUEUE_MAX`（`20`，满则丢最旧）/ 
+`ORPAH_NOTIFY_PER_STEP`（`3`，每 tick 最多试几条 —— 防端点挂掉时把后台巡视线程卡住）。
 运行时可在页面上改 URL/级别（`POST /api/ctl`，见 §14），**不重启**。
+
+`notify_set` 的两个副作用（容易忘）：换地址/关通知会**丢掉待重试队列**（那些条目属于旧端点，
+往新地址重发是错的通知）并计 `dropped`；**不改** `seen`（换接收端不会把已推过的告警重推一遍）。
 
 ### 时钟可信：设备无时钟时的 `ts`（2026-09-12）
 
@@ -621,7 +632,8 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 ⚠ 实测发现的连带现象：连发 5 条 `bad_check` 会**同时**触发 `sig_fail_rate`（两条规则从不同角度描述同一串报文，
 都出是对的）—— 不要当成重复告警去“合并”。
 
-未做：**邮件**（需 SMTP 凭据，demo 不做，如实标注）、Webhook **重试/退避/持久化队列** —— 见 `ROADMAP.md` §三。
+未做：**邮件**（需 SMTP 凭据，demo 不做，如实标注）、Webhook **持久化队列**（重试队列在内存里，
+重启丢未送出的；重试/退避已做，见上表）—— 见 `ROADMAP.md` §三。
 
 规则（阈值可用**环境变量**覆盖，改了要重启；默认值有演示压缩也有真实时长，见下）：
 

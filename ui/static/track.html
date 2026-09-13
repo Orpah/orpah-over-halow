@@ -232,6 +232,9 @@ const MAX_HIST = 800;       // 轨迹最多保留点数
 let timer = null;
 let tick = 0;
 let dsMode = "sim";         // sim | real（真实上报 IoTDB 时序）
+/* URL 查询串：别的页面（**告警弹窗**）会带 `?sn=<SN>` 跳过来看某台设备 ——
+   “点了弹窗却落在默认设备上”等于白跳。只认 `sn`；没有它就照旧行为（模拟模式 + 最近有上报的设备）。 */
+const QP_SN = (new URLSearchParams(location.search).get("sn") || "").trim();
 let realSamples = [];       // [{t,rssi,seq,router_id}]，时间升序（设备上报流）
 let realObs = {};           // {sid: [{t,rssi,seq}]} 各路由器对该设备的测量（升序）
 let realTimer = null;
@@ -757,7 +760,18 @@ async function refreshSnList() {
                       (d.last_seen ? "" : " · " + T("tk_no_report"));
       sel.appendChild(o);
     }
+    /* URL 带的 SN 不在清册里 → **也给它一个选项**（清册可能被清过，但 IoTDB 里还有它的数据）。
+       不“静默落在别的设备上”：那会让人以为在看目标设备（比报错难查）。 */
+    if (QP_SN && ![...sel.options].some(o => o.value === QP_SN)) {
+      const o = document.createElement("option");
+      o.value = QP_SN;
+      o.textContent = QP_SN + " · " + T("tk_sn_not_in_registry");
+      sel.appendChild(o);
+    }
     if (keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
+    /* URL 带的 SN：优先于“默认最近上报”—— 但**低于“用户刚选过的”**（keep），
+       否则用户在页面上换了设备，下一次 2s 刷新又会被 URL 拉回去。 */
+    else if (QP_SN) sel.value = QP_SN;
     /* 首次进入（没有上次选择）：默认选**最近有上报的**那台设备 ——
        否则会停在从没上报过的设备上，页面看起来像坏了。 */
     else {
@@ -1304,7 +1318,10 @@ async function loadConfig() {
 /* 初始画面 */
 OrpahI18n.apply();
 buildTileOptions();      // 必须早于任何 ensureMap：它决定本语言的默认瓦片源
-refreshSnList();
+/* 带 `?sn=` 来（告警弹窗跳转）→ **直接切「真实上报」模式**：SN 选择器只在真实模式下显示，
+   留在模拟模式的话 URL 里的 SN 根本看不到（用户会以为跳错了）。
+   `applyMode()` 内部会 `refreshSnList().then(loadReal)`，所以不要再重复调 refreshSnList。 */
+if (QP_SN) { $("dsMode").value = "real"; applyMode(); } else refreshSnList();
 draw(); updateStat(null);
 loadConfig();            // A/n 默认值取自服务端标定（异步；填完会重画一帧）
 loadAnchorDefaults();    // 默认测点取自服务端站位表（单一源；异步；取不到用 ANCHORS_FALLBACK）

@@ -119,21 +119,100 @@ ck("同一个 key 升到 crit → 推（低级别挡不住升级通知）",
 r = n.step([alert("no_report", "A", level="crit")], now=NOW + 6)
 ck("升级后同级反复 → 不重复推", r == [] and len(p.calls) == 1)
 
-# ---- 5. 失败必须可见 + 不重试 ----------------------------------------------
+# ---- 5. 失败必须可见 + **有界重试**（2026-09-13：语义从“不重试”改成“至少一次”）------
+# 语义变了要一起改的地方：失败**不再立刻计 failed**（那变成“尝试失败次数”），
+# failed = **重试用尽才计**；新增 retried（重试次数）/retry.queued（待重试）/dropped（丢弃）。
 p = fake_post(ok=False, status=500, err="HTTP 500")
 n = nt.Notifier(url="http://x/hook", post=p)
 r = n.step([alert("no_report", "A")], now=NOW)
-ck("投递失败：记录 ok=False/status/err，failed 计数 +1，last_error 留下原因",
+ck("投递失败：记录 ok=False/status/err + last_error，并**进重试队列**（failed 还不计）",
    r[0]["ok"] is False and r[0]["status"] == 500 and r[0]["err"] == "HTTP 500"
-   and n.failed == 1 and n.last_error == "HTTP 500" and n.sent == 0)
-n.step([alert("no_report", "A")], now=NOW + 3)
-ck("★ 失败**不自动重试**（本轮不推了就是没推；重试队列是另一件事，demo 不做）",
-   len(p.calls) == 1 and n.failed == 1)
+   and n.last_error == "HTTP 500" and n.sent == 0 and n.failed == 0
+   and len(n.queue) == 1 and n.snapshot()["retry"]["queued"] == 1)
+ck("退避：第 1 次失败后按 backoff[0] 再试（默认 1s，没到点不试）",
+   n.snapshot()["retry"]["next_in"] == 1.0 and len(p.calls) == 1)
+n.step([alert("no_report", "A")], now=NOW + 0.5)          # 还没到期
+ck("没到退避时间不试（不空转、不提前）", len(p.calls) == 1 and len(n.queue) == 1)
+n.step([alert("no_report", "A")], now=NOW + 1.0)          # 到期 → 第 2 次尝试
+ck("到期重试（第 2 次尝试，tries 记进投递记录）",
+   len(p.calls) == 2 and r[0]["tries"] == 1
+   and n.deliveries[0]["tries"] == 2 and n.retried == 1 and n.failed == 0)
+n.step([alert("no_report", "A")], now=NOW + 1.0 + 5.0)    # 第 3 次（backoff[1]=5s）→ 试完
+ck("★ 重试用尽（默认 2 次重试 = 3 次尝试）→ 计一次「已失败（放弃）」、队列清空",
+   len(p.calls) == 3 and n.failed == 1 and len(n.queue) == 0 and n.retried == 2)
+ck("★ 没启用重试计数不虚高：failed 是“告警条数”（=1）、retried 是“多试了几次”（=2）",
+   n.failed == 1 and n.snapshot()["retry"]["retried"] == 2)
+n.step([alert("no_report", "A")], now=NOW + 1.0 + 5.0 + 30.0)
+ck("放弃后不再重试（队列已空，后续 tick 也不补发）", len(p.calls) == 3)
+
+# 重试成功：sent 只 +1（一条告警算一条），且不再排下一次
+calls = []
+def flaky(url, payload, timeout):
+    calls.append(payload)
+    if len(calls) >= 2:
+        return True, 200, ""
+    return False, 503, "HTTP 503"
+n = nt.Notifier(url="http://x/hook", post=flaky)
+n.step([alert("rssi_jump", "A")], now=NOW)
+n.step([alert("rssi_jump", "A")], now=NOW + 1.0)
+ck("★ 重试成功：sent +1（一条告警计一条）、retried +1、队列空、failed 仍 0",
+   len(calls) == 2 and n.sent == 1 and n.failed == 0 and n.retried == 1
+   and len(n.queue) == 0 and n.deliveries[0]["ok"] is True)
+
+# retry=0：等价于“不重试”（旧行为），当作开关的回归锁
+p = fake_post(ok=False, status=500, err="HTTP 500")
+n = nt.Notifier(url="http://x/hook", post=p, retry=0)
+n.step([alert("no_report", "A")], now=NOW)
+ck("retry=0（不重试）→ 一次尝试即计失败（开关有效）",
+   len(p.calls) == 1 and n.failed == 1 and len(n.queue) == 0)
+n.step([alert("no_report", "A")], now=NOW + 100)
+ck("不重试时后续 tick 也不会补发（同级反复仍不推）", len(p.calls) == 1)
+
+# 队列上限：端点久挂时保新弃旧，且丢弃**可见**
+p = fake_post(ok=False, status=500, err="HTTP 500")
+n = nt.Notifier(url="http://x/hook", post=p, retry=5, queue_max=2,
+                backoff=(100.0,))
+for i, k in enumerate(("A", "B", "C")):
+    n.step([alert("no_report", k)], now=NOW + i)         # 三条新告警都失败 → 队列只有 2
+ck("队列满 → 丢最旧的并计数（dropped 可见，不静默）",
+   len(n.queue) == 2 and n.snapshot()["retry"]["dropped"] == 1
+   and n.queue[0]["alert"]["key"] == "no_report:B")
+
+# 每 tick 有额度上限：端点挂掉时不能把后台线程卡住（20 条 × 3s 超时会拖死巡视）
+p = fake_post(ok=False, status=500, err="HTTP 500")
+n = nt.Notifier(url="http://x/hook", post=p, retry=5, backoff=(0.0,), queue_max=50)
+for i in range(6):
+    n.step([alert("no_report", "K%d" % i)], now=NOW + i)
+before = len(p.calls)
+n.step([alert("no_report", "Z")], now=NOW + 100)          # 一堆到期的重试 + 一条新的
+ck("每 tick 最多试 per_step 条（默认 3）—— 防止端点挂掉时把巡视线程卡住",
+   len(p.calls) - before <= 3, f"本 tick 试了 {len(p.calls) - before} 条")
+
+# 换地址 / 关通知：丢掉待重试（那些属于旧端点），并计数
+p = fake_post(ok=False, status=500, err="HTTP 500")
+n = nt.Notifier(url="http://x/hook", post=p)
+n.step([alert("no_report", "A")], now=NOW)
+n.set_url("http://y/hook2")
+ck("换地址 → 丢掉待重试（不往新端点重发旧通知）并计数",
+   len(n.queue) == 0 and n.snapshot()["retry"]["dropped"] == 1)
+n.step([alert("no_report", "B")], now=NOW + 1)
+n.set_url("")
+ck("关通知（地址清空）→ 同样丢掉待重试", len(n.queue) == 0 and n.snapshot()["retry"]["dropped"] == 2)
+
+# 同 key 在队列里时又升级 → **合并**（用最新载荷），不给自己造重复
+p = fake_post(ok=False, status=500, err="HTTP 500")
+n = nt.Notifier(url="http://x/hook", post=p, backoff=(10.0,))
+n.step([alert("no_report", "A", level="warn")], now=NOW)
+n.step([alert("no_report", "A", level="crit")], now=NOW + 0.1)   # 升级（队列里那条还没到期）
+ck("同 key 又升级 → 队列里合并成一条（用最新载荷），不排队两条",
+   len(n.queue) == 1 and n.queue[0]["alert"]["level"] == "crit",
+   f"queue={len(n.queue)}")
+
 p2 = fake_post(ok=False, status=0, err="URLError: refused")
 n2 = nt.Notifier(url="http://x/hook", post=p2)
 n2.step([alert("x", "A")], now=NOW)
 ck("连不上（status=0）也算失败，不是成功",
-   n2.failed == 1 and n2.sent == 0 and n2.last_error == "URLError: refused")
+   n2.sent == 0 and n2.last_error == "URLError: refused" and len(n2.queue) == 1)
 
 # ---- 6. 投递内容与记账 -----------------------------------------------------
 p = fake_post()

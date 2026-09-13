@@ -892,8 +892,10 @@ class OrpahApp:
     def _notify_step(self, alerts):
         """一次「评估 → 差分 → 投递」（只跑在后台巡视线程里）。
 
-        投递结果都**留痕**：审计写 `notify` 事件（含 ok/status/err），页面看 `/api/status.notify`。
-        失败不重试（demo 边界，见 `notify.py` 头注释），但**必须可见** —— 不静默吞。
+        投递结果都**留痕**：审计写 `notify` 事件（含 ok/status/err/tries），页面看 `/api/status.notify`。
+        **失败会有界重试**（`notify.py` 头注释：退避 1s/5s/30s、试完才计「放弃投递」）；
+        这里能看到的失败是**当前这一次尝试**的失败 —— 它后面还会被重试，`tries` 就是第几次。
+        不管哪一次，都**不静默吞**。
         """
         by_key = {a.get("key"): a for a in alerts or []}
         for rec in self.notifier.step(alerts):
@@ -909,6 +911,7 @@ class OrpahApp:
                 detail=(f"event={rec.get('event')} kind={rec.get('kind')} "
                         f"level={rec.get('level')} key={rec.get('key')} "
                         f"ok={rec.get('ok')} status={rec.get('status')} "
+                        f"tries={rec.get('tries')} "
                         f"err={rec.get('err') or '-'}"))
 
     def _alert_watch(self):
