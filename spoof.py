@@ -219,8 +219,9 @@ def build_case(kind, dev, now, attacker=None, used_nonce=None):
 
     if kind == "bad_format":
         # 报文头 typ 不是 orpah-id-report → 第一道防线（格式）拦下。
-        # 注意：**外层信封**仍是合法的 ORPAH-ID-REPORT（`orpah_proto.build_id_report`），
-        # 所以链路照常把它送到 server 的验签入口 —— 被拒的是**里面那条已签报文**的格式。
+        # 注意：本函数只造**里面那条已签报文**，外层信封由**调用方**包装
+        # （`orpah_proto.build_id_report`：demo_spoof.py / ui_server 各处），
+        # 所以外层照旧合法、链路照常把它送到 server 的验签入口 —— 被拒的是内层报文的格式。
         r = _legit(dev, now)
         r["hdr"]["typ"] = "orpah-id-report-x"
         return r, expect, note

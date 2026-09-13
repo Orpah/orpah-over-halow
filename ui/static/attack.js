@@ -139,11 +139,18 @@ function render() {
 }
 
 /* ---------- 注入 ---------- */
+/* fetch 失败（UI 服务器被停/网络断）时与 app.js 的 postCtl 同一写法：吃掉异常、
+ * 返回 undefined —— 调用方 `injectOne` 已经按 `!info` 处理，不会冒出 unhandled rejection
+ * （那种情况下「跑全部」会停在半路，且页面上什么也不说）。 */
 async function postCtl(body) {
   const r = await fetch("/api/ctl", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  }).catch(e => {
+    console.error("postCtl 请求失败:", e);
+    return null;
   });
+  if (!r) return null;
   return r.json();
 }
 
@@ -163,7 +170,9 @@ async function injectOne(kind) {
   const o = KINDS.find(x => x.kind === kind);
   const info = await postCtl({ action: "spoof", kind });
   if (!info || !info.ok) {
-    msg(T("at_fail") + esc((info && info.err) || "?"), "err");
+    // 连不上服务器（postCtl 返回 null）与「服务端拒绝了这个 kind」要分开说：
+    // 前者是环境问题（ui_server 没跑），后者是调用参数问题 —— 显示成同一个 "?" 看不出该改哪边。
+    msg(T("at_fail") + esc((info && info.err) || T("at_net_err")), "err");
     return null;
   }
   msg(T("at_sent").replace("{k}", esc(nameOf(o || info))));
