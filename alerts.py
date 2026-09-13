@@ -274,6 +274,9 @@ def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None,
         if lv not in (2, 3):
             continue
         ts = int(r.get("ts_eff") or 0)
+        # ts=0（没有可用时间）时下面这个条件是**假** → **不跳过**，即“缺时间不算超窗”：
+        # 宁可报出来，也不因为一个字段缺失就漏掉一条真降级（设备无时钟时很常见）。
+        # 反面也锁在 `test_alerts.py`：缺 ts_eff / =0 / =None 三种都不漏报。
         if ts and now - ts > deg_sec:            # 超出窗口 → 不再视为当前问题
             continue
         sn = r.get("sn") or "-"

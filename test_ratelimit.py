@@ -89,6 +89,20 @@ class TestBuckets(unittest.TestCase):
         self.assertIn("K39", bs.buckets)             # 最新的留着
         self.assertNotIn("K0", bs.buckets)           # 最久没用的被淘汰
 
+    def test_eviction_is_lru_not_fifo(self):
+        """淘汰的是**最久未用**，不是最早创建：用过一次的老 key 应当留下来。
+
+        （这条同时锁住实现用的是 `OrderedDict` + `move_to_end`：
+        改回“扫描找 last 最小”也能过，但会变回 O(n) —— 性能那条看 `_Buckets` 的实测注释。）
+        """
+        bs = RL._Buckets(rate=1.0, burst=5.0, max_keys=16, name="sn")
+        for i in range(16):
+            bs.consume(f"K{i}", now=float(i))
+        bs.peek("K0", now=100.0)                     # 把最早创建的那个标为刚用过
+        bs.consume("NEW", now=101.0)                 # 满了 → 淘汰头部
+        self.assertIn("K0", bs.buckets)              # 刚用过 → 留着
+        self.assertNotIn("K1", bs.buckets)           # 真正最久未用的是它
+
     def test_top_lists_thirstiest(self):
         bs = RL._Buckets(rate=0.0, burst=5.0, max_keys=16, name="sn")
         for _ in range(5):
@@ -170,9 +184,15 @@ class TestLimiterLogic(unittest.TestCase):
 
 
 class TestConcurrency(unittest.TestCase):
-    """并发不超发：多线程同时抢，通过的条数不许超过"桶容量 + 期间补充"。"""
+    """并发不超发：多线程同时抢，通过的条数不许超过"桶容量 + 期间补充"。
 
-    def test_no_over_issue_under_threads(self):
+    ★ 这条测的是**判定的原子性**（`RateLimiter.check` 里 peek+consume 整段持锁）。
+    2026-09-13 外部评审指出：两个线程可以同时看到"还有 1 个令牌"然后都放行。
+    修之前这条用例**碰巧也能过**（GIL 下两个 peek 刚好错开）—— 也就是它当时是**碰运气的**，
+    这正是最坏的一种测试：真出问题时不报。现在断言的是**确定性质**：恰好放行 burst 条。
+    """
+
+    def test_atomic_decision_no_over_issue(self):
         rl = RL.RateLimiter(sn_rate=0.0, sn_burst=50, router_rate=0.0, router_burst=50)
         passed = []
         lock = threading.Lock()
@@ -189,8 +209,30 @@ class TestConcurrency(unittest.TestCase):
             t.start()
         for t in ts:
             t.join()
-        self.assertEqual(len(passed), 50)            # 恰好桶容量，不多一个
+        self.assertEqual(len(passed), 50)            # **恰好**桶容量，不多一个
         self.assertEqual(rl.dropped(), 8 * 50 - 50)
+        self.assertEqual(rl.allowed, 50)
+
+    def test_concurrent_two_lines_stay_consistent(self):
+        """两条防线并发下也必须自洽：放行数 ≤ 两个桶各自容量，且计数对得上。"""
+        rl = RL.RateLimiter(sn_rate=0.0, sn_burst=30, router_rate=0.0, router_burst=20)
+        ok = []
+        lock = threading.Lock()
+
+        def worker():
+            for _ in range(20):
+                if rl.check("A", ADDR, now=0.0).ok:
+                    with lock:
+                        ok.append(1)
+
+        ts = [threading.Thread(target=worker) for _ in range(6)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(len(ok), 20)                # 受更紧的那条（router=20）约束
+        self.assertEqual(rl.allowed, 20)
+        self.assertEqual(rl.dropped(), 6 * 20 - 20)
 
 
 class TestEnv(unittest.TestCase):

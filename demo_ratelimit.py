@@ -17,7 +17,12 @@
 
 运行：C:\\Python313\\python.exe demo_ratelimit.py
 端口：99xx / 19947（与 demo_l1..l4、demo_spoof、ui_server 错开）
-"""
+依赖的 `OrpahServer` 接口（本脚本是“外部调用方”，改了这些名字记得同步这里）：
+  · `rl`（注入的 `RateLimiter`，共用同一实例）、`rl_dropped`（累计丢弃数）、
+    `rl_drops`（最近丢弃的 deque，看 `which` 用）
+  · `mark_tracked(sn)` / `found_count`（第 5 阶段要制造 FOUND）
+  · `id_report_total`（被接受的 ID 上报数）、`start()` / `stop()`
+  不直接用 `_handle`（那是 `test_ratelimit.py` 的离线用法）；本脚本一律**走真链路**。"""
 import argparse
 import os
 import sys

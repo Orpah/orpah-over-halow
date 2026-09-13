@@ -63,6 +63,8 @@ function onReport(d) {
     setTimeout(() => n.classList.remove(cls), 900);
   }
   // 链路流动动画（方向箭头高亮：上行 client→router→server）
+  // 页面上是**两段**链路（`.link-flow`：空口段 + UDP 段）→ 一次上报同时点亮两段，
+  // 这是**有意**的（同一条上报确实穿过两段）；只点亮一段反而会让人以为另一段没通。
   const linkFlow = document.querySelectorAll(".link-flow");
   linkFlow.forEach(f => {
     f.classList.add("active");
