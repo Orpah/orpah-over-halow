@@ -278,6 +278,20 @@
     它是 **fail-closed**：真机若源地址与配置不同会表现为“下行全被丢”，日志/计数看得到。
     测试：`test_router.py`（离线 9 项，含“没把正常下行也挡了”）+ `demo_l4.py` 第 ④ 组（真 UDP：
     从 `127.0.0.2` 打假表 → 被丢且缓存不动；对照组 Server 来的照常生效）。
+  - **地址族：本链路 Phase 1 只做 IPv4（`AF_INET`），IPv6 未做，且「未做」不是缺口**（2026-09-13）：
+    实现里每处 socket 都显式建 `AF_INET` —— 模拟器三处 TCP 监听（console/link/host，
+    `vendor/halow/sim.py`）、Router↔Server 的 UDP（`router.py` / `server.py`）、UI 的 HTTP
+    （`ui_server.py`）、以及 demo/测试里写死的 `127.0.0.1`。**这条有实际影响，别当无关细节**：
+    · 「下行来源校验（A 方案）**不必考虑 IPv6 变体**」正是靠它 —— Router 的 UDP socket 是
+      `AF_INET`，IPv6 源**到不了**这个 socket（所以不存在“IPv6 地址写法没归一化导致 A 失效”）；
+    · **绑定地址也是演示选择**：模拟器/Server/UI 都绑 `127.0.0.1`（只本机可达），而
+      **Router 的 UDP socket 是未绑定即发（`0.0.0.0:<临时端口>`）** —— 实测 `Get-NetUDPEndpoint`
+      可见，这正是“下行来源校验必须做”在演示里的直接体现。真机要把 Server 绑到实际网卡地址
+      并让 `server_host` 指向它，否则 A 的 fail-closed 表现为“下行全被丢”。
+    · 将来上 IPv6 要一起改：① 模拟器三处监听 + `host_bus` 的连接；② `server.py` 的 bind 与
+      `router.py` 的 socket 族；③ `router._from_server` 的比对（`gethostbyname` 只解析 A 记录 →
+      要换 `getaddrinfo`，且必须比**归一化后**的地址）；④ 限频 per-Router 桶的 key（现为
+      IPv4 字面量 / 源 MAC 字符串）；⑤ demo/测试里写死的 `127.0.0.1`。规格落笔：SPEC §6。
   - **查审计事件别读错字段**：`GET /api/ts/events` 返回的键是 **`rows`**（不是 `events`）；
     另注意它按 `etype`/`sn` 在**本地**过滤（值过滤不进 WHERE，见 §0 IoTDB 条），
     所以“某类事件为空”先确认字段名，再确认是不是真没写进去。
