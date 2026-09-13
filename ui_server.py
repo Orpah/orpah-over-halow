@@ -416,15 +416,29 @@ class OrpahApp:
         若挤在 root.orpah.devices.<sn> 同一时间戳下会 last-write-wins 互相覆盖）。
         ts_s 由调用方给出（= `effective_ts` 的结果）：**必须与设备流用同一个时刻**，
         否则定位/回放按时间对齐时两边对不上。
+
+        ★ **人级聚合的演示数据（2026-09-13）**：本 demo 只有**一台**设备真的在周期上报，
+        而「人级聚合」要的是同一个人的**多台**客户端（项链 + 鞋）。所以这里顺带按
+        **同一个 motion 位置模型**给该人名下的其它设备也各写一份观测，噪声用
+        `"<sid>|<sn>"` 当盐 → 各设备**独立**（真实独立性来自各自的晶振/天线/遮挡）。
+        ⇒ 这些是**模拟数据**（页面上明说），真机是各设备自己上报、各自带自己的噪声；
+          本函数不改变链路（空口/验签那条路上的报文仍然只有真实设备那一份）。
         """
         if not self.walk:
             return
         t_s = float(ts_s)                           # 注意：tsdb 写入接口的 ts 是 epoch **秒**
         t_ms = int(t_s * 1000)                     # 位置按毫秒算（motion 用 ms）
+        dev = self.registry.get(sn)
+        others = []
+        if dev is not None and getattr(dev, "person_id", None):
+            others = [d.sn for d in self.registry.devices_of(dev.person_id)
+                      if d.sn != sn]
         for s in self.stations.list():
-            rssi = self.walk.rssi_to(t_ms, s.x, s.y, sid=s.sid)
-            self.tsdb.write_router_obs(s.sid, sn, ts=t_s, rssi=rssi,
-                                       seq=msg.get("seq"))
+            for one in [sn] + others:
+                salt = s.sid if one == sn else f"{s.sid}|{one}"
+                rssi = self.walk.rssi_to(t_ms, s.x, s.y, sid=salt)
+                self.tsdb.write_router_obs(s.sid, one, ts=t_s, rssi=rssi,
+                                           seq=msg.get("seq") if one == sn else 0)
 
     def router_obs_range(self, sn, t0_ms, t1_ms, limit=20000):
         """{sid: [{t,rssi,seq}]}：各路由器在某时间窗内对该设备的测量（升序）。

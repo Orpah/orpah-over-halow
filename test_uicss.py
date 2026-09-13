@@ -28,7 +28,10 @@
 import glob
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -143,6 +146,42 @@ def check_hierarchy():
           rp.count('class="tl"') >= 2 and "max-height" in tl, tl[:60])
     idx = open(os.path.join(STATIC, "index.html"), encoding="utf-8").read()
     check("首页长表用了 .scroll-y", idx.count('class="scroll-y"') >= 2, idx.count('class="scroll-y"'))
+
+
+def check_inline_js():
+    """每页**内联脚本**的语法必须能过 `node --check`（2026-09-13 真踩过）。
+
+    为什么必须有一条：内联 `<script>` 里一个语法错（本次是复制代码时多出一行
+    `function renderPerson(f) {`）会让**整块脚本一个字都不执行** —— 页面照样渲染、
+    不报错到明处，只是所有动态内容都是空的、点按钮没反应（最容易被当成“后端挂了”）。
+    静态文本检查看不出来，所以这里把内联脚本抠出来交给 node 解析。
+    本机没有 node → 明确跳过（打印 SKIP，不当通过）。
+    """
+    print("== 页面内联脚本：node --check ==")
+    node = shutil.which("node")
+    if not node:
+        print("  SKIP 本机没有 node —— 内联脚本语法未验证（**不算通过**）")
+        return False
+    bad = []
+    for p in sorted(glob.glob(os.path.join(STATIC, "*.html"))):
+        html = open(p, encoding="utf-8").read()
+        for i, body in enumerate(re.findall(r"<script>(.*?)</script>", html, re.S)):
+            if not body.strip():
+                continue
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                             encoding="utf-8") as fh:
+                fh.write(body)
+                tmp = fh.name
+            try:
+                r = subprocess.run([node, "--check", tmp], capture_output=True,
+                                   encoding="utf-8", errors="replace")
+            finally:
+                os.unlink(tmp)
+            if r.returncode != 0:
+                msg = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+                bad.append((os.path.basename(p), i, msg[-1] if msg else "?"))
+    check("每页内联脚本语法正确（错一处 = 整页 JS 全不执行）", not bad, bad[:3])
+    return True
 
 
 def check_narrow_grids():
@@ -263,6 +302,7 @@ def main():
     check_nav()
     check_hierarchy()
     check_narrow_grids()
+    check_inline_js()
     if FAILS:
         print(f"UI 样式守卫：有问题（{len(FAILS)} 处）")
         return 1

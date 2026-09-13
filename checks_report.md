@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 21:33:39
-- git HEAD：`234ebd3`
+- 时间：2026-09-13 21:59:14
+- git HEAD：`769b892`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（31/31 套件通过）
 
@@ -10,7 +10,7 @@
 | 套件 | 脚本 | 结果 | 耗时 | 说明 |
 |---|---|---|---|---|
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
-| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.1s | 通过 |
+| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.2s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
 | 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.7s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 0.2s | 通过 |
@@ -32,13 +32,13 @@
 | Router 下行路径（来源校验） | `test_router.py` | ✅ PASS | 0.1s | 通过 |
 | 下行真实性（F-14 B：签名/重放/时间窗） | `test_downlink.py` | ✅ PASS | 0.1s | 通过 |
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
-| UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 2.0s | 通过 |
+| UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 2.8s | 通过 |
 | 数据新鲜度（freshness.py + fresh.js） | `test_fresh.py` | ✅ PASS | 0.2s | 通过 |
-| L1 端到端 | `demo_l1.py` | ✅ PASS | 1.4s | 通过 |
+| L1 端到端 | `demo_l1.py` | ✅ PASS | 1.3s | 通过 |
 | L2 消息流 | `demo_l2.py` | ✅ PASS | 2.3s | 通过 |
 | L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.2s | 通过 |
 | L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.2s | 通过 |
-| 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.8s | 通过 |
+| 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.7s | 通过 |
 | 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 7.7s | 通过 |
 
 ## 关键输出
@@ -54,7 +54,7 @@
       OK   truth_at�������� �� �ձ���ҳ����ʾ�������á������� 0��
     ȫ��ͨ��
 
-### 密钥生命周期 — PASS（0.1s）
+### 密钥生命周期 — PASS（0.2s）
 
     == 1. ǩ�����ݵȣ� ==
     == 2. ��ǩ���� 1 ���� ==
@@ -141,7 +141,7 @@
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
-    Ran 40 tests in 0.476s
+    Ran 40 tests in 0.491s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.0s）
@@ -203,8 +203,8 @@
       OK   WLS：标准入参（{s,dist}）在精确距离下复原 (5,5)（证明读的是 o.s.x/o.s.y）
       OK   椭圆：特征值→半轴（√(5.991·4) / √(5.991·1)，长短轴比 2）
       OK   椭圆：退化协方差（近乎共线）→ degenerate=true（半径仍可给，形状不可信）
-      OK   replay.html 导出带可信度（CSV 列 + GPX 扩展/小结 + GeoJSON trusts）
       OK   replay.html 跑多帧持续偏差扫描（biasScan + 剔除最狠者后重扫）
+      OK   track.html 人级聚合走 pos.js 的 fusePerson()/fuseText()（单一实现）
 
 ### 地图共享件（map.js：基点/野外包 + maps.py） — PASS（0.2s）
 
@@ -267,21 +267,22 @@
 
 ### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.2s）
 
-    PASS  字典 zh/en key 集合一致（1065 / 1065）
+    PASS  字典 zh/en key 集合一致（1093 / 1093）
     PASS  每个 key 恰好 2 次（zh + en）
     PASS  字典非空且含中文与英文条目（翻译真的两套）
-    PASS  扫描 18 个页面/脚本，引用 962 个 key（含动态前缀家族 16 个）
+    PASS  扫描 18 个页面/脚本，引用 990 个 key（含动态前缀家族 16 个）
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
-### UI 样式/窄屏守卫 — PASS（2.0s）
+### UI 样式/窄屏守卫 — PASS（2.8s）
 
     == style.css：页面不再被写死宽度、窄屏档位齐全 ==
     == 页面：内联宽度、viewport、共享件 ==
     == 头部导航：单一源（nav.js）+ 没有孤岛页面 ==
     == 信息层级：长口径折叠 + 标签成对 + 长列表限高 ==
     == 窄屏：页面局部多列网格要收成单列 ==
-      OK   每个页面局部多列网格，在 style.css 的 900px 档里都有单列覆盖（且带 `body ` 前缀）
+    == 页面内联脚本：node --check ==
+      OK   每页内联脚本语法正确（错一处 = 整页 JS 全不执行）
     UI 样式守卫：全部通过
 
 ### 数据新鲜度（freshness.py + fresh.js） — PASS（0.2s）
@@ -294,7 +295,7 @@
       OK   index 的新鲜度卡在拓扑之前
     数据新鲜度：全部通过
 
-### L1 端到端 — PASS（1.4s）
+### L1 端到端 — PASS（1.3s）
 
     === ORPAH L1 验收 ===
     结果: [PASS]
@@ -326,11 +327,11 @@
       [PASS] 应答原样回显 rid
       [PASS] 主动推送不带 rid
 
-### 防 spoof 空口端到端 — PASS（1.8s）
+### 防 spoof 空口端到端 — PASS（1.7s）
 
       无认证空口防 spoof 端到端演示
       被冒充设备 SN : CN-WH01-9AF3C1D2
-      攻击者 SN    : CN-WH01-DKXDRN0N2W-32（未登记 → 服务器不认识）
+      攻击者 SN    : CN-WH01-1PV1FJXRVC-57（未登记 → 服务器不认识）
       链路          : Client→STA→空口→AP→Router→UDP:19847→Server
       用例数        : 14（含 1 条合法对照）
     [server] 监听 127.0.0.1:19847 (UDP)，等待 ORPAH 报文…

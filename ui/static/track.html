@@ -183,6 +183,43 @@
   <p class="hint" data-i18n="tk_st_wls_hint">定位用加权最小二乘：RSSI 测距误差随距离增长（此处取 σ = 0.25×距离、下限 1 m），远端站位权重自动降低，不会被噪声拽偏。95% 置信椭圆与「搜索半径」由协方差（加权法方程之逆 × 后验方差）算出；搜索半径是沿最长轴的 95% 覆盖半径，供现场按该范围找人。</p>
 </section>
 
+<!-- ============ 3b · 人级聚合（一个人的多台客户端 → 一个人的位置） ============
+     为什么单独一张卡：**案件是以人为单位**的（一个人可能戴着项链 + 穿着鞋，两台客户端），
+     而上面那张表是按**设备**算的。现场要回答的是「**这个人**在哪」。 -->
+<section class="card" id="cardPerson" style="display:none">
+  <h3 data-i18n="pn_title">3 · 人级聚合（名下多设备 → 一个人的位置）</h3>
+  <div class="row">
+    <label><span data-i18n="pn_person">人员</span>
+      <select id="pnPerson" class="w-md"></select>
+    </label>
+    <button class="btn" id="pnRun" data-i18n="pn_run">聚合定位</button>
+    <span class="hint" id="pnMsg"></span>
+  </div>
+  <div class="stat mono">
+    <div><span class="k" data-i18n="pn_lab_pos">人级位置：</span><span class="v-ok" id="pnPos">-</span></div>
+    <div><span class="k" data-i18n="pn_lab_trust">聚合可信度：</span><span id="pnTrust">-</span></div>
+    <div><span class="k" data-i18n="pn_lab_rad">合并半径（观测噪声）：</span><span id="pnRad">-</span></div>
+    <div><span class="k" data-i18n="pn_lab_spread">各设备间距（只作陈述）：</span><span id="pnSpread">-</span></div>
+    <div><span class="k" data-i18n="pn_lab_used">参与 / 排除：</span><span id="pnUsed">-</span></div>
+  </div>
+  <table>
+    <thead><tr>
+      <th data-i18n="th_sn">序列号</th>
+      <th data-i18n="pn_col_est">该设备定位</th>
+      <th data-i18n="pn_col_trust">可信度</th>
+      <th data-i18n="pn_col_sigma">不确定度</th>
+      <th data-i18n="pn_col_state">参与聚合</th>
+    </tr></thead>
+    <tbody id="pnBody"></tbody>
+  </table>
+  <!-- 口径（长）收进折叠：现场先看数字，要抠“为什么不能判设备是否分开”再展开 -->
+  <details class="fold">
+    <summary data-i18n="pn_fold">口径：这个「人级位置」是怎么算出来的、哪里不能信</summary>
+    <p class="hint" data-i18n="pn_hint">算法：把该人名下能解出位置的设备各自定位，再按 1/σ² 加权平均成一个人（σ = 各设备自己的 95% 椭圆半径）。可信度取参与设备里「最弱」的那个 —— 多台互相对得上，不等于每台都过了多路由器交叉校验。合并半径按 1/√(Σ1/σ²) 缩（多台是同一个人的多次独立测量，观测噪声会降），但它「只代表观测噪声」：站位几何、多径、标定漂移这类共模误差对同一人的几台设备是一样的，平均消不掉。</p>
+    <p class="hint" data-i18n="pn_caveat">前提（必须记住）：这几台设备是「假定与同一个人在一起」的（项链/鞋/手表）。现实里可能分开（手机被拿走、鞋掉一只、备用设备留在家）。而数据验证不了这个假设 —— 本演示实测：单台定位的 95% 椭圆半径中位就有 19.5 m，两台设备真相距 100 m / 200 m / 500 m 时，与「两台在一起」在统计上分不开（指标中位 0.62 / 0.31 / 0.13，比同点的 0.19 还小）。所以本页不做“设备是否分开”的判定，「各设备间距」只作陈述、不能当证据；要确认是否在一起，必须靠人工或其它独立来源。</p>
+  </details>
+</section>
+
 <section class="card">
   <h3 id="head3" data-i18n="tk_sec3">3 · 实时定位与轨迹</h3>
   <div id="map" style="display:none"></div>
@@ -760,6 +797,10 @@ async function refreshSnList() {
     const r = await fetch("/api/registry").then(x => x.json());
     const who = {};
     (r.persons || []).forEach(p => { who[p.pid] = p.name; });
+    /* 清册数据留着给「人级聚合」用（哪台设备属于谁）—— 上面那个下拉只用到展示字符串 */
+    regDevices = r.devices || [];
+    regPersons = r.persons || [];
+    pnEnsure();
     const keep = sel.value;
     sel.innerHTML = "";
     for (const d of (r.devices || [])) {
@@ -871,6 +912,9 @@ function updateRealStat() {
      · 手动绑定：把最新一条 report 的 RSSI 直接指派给某站位（不需要窗口）
    定位复用模拟模式同一个 trilaterate()，避免模拟/真实两套实现。          */
 let stations = [];
+/* 清册快照（人级聚合要用「哪台设备属于谁」；`refreshSnList()` 每次刷新时覆盖） */
+let regDevices = [];
+let regPersons = [];
 let stMsgTimer = null;
 
 const cssQ = (s) => (window.CSS && CSS.escape)
@@ -1249,11 +1293,16 @@ function applyMode() {
     if (timer) { clearInterval(timer); timer = null; $("btnRun").textContent = T("tk_run"); }
     freshPollArm(2);                    // 本页轮询节拍 = 自动刷新 2s（状态判定靠它）
     freshPollReset();
+    /* 人级聚合卡只在真实模式出现（模拟模式没有“名下的设备”这回事） */
+    $("cardPerson").style.display = "";
+    pnEnsure();
+    loadPerson();
     refreshSnList().then(loadReal);
     loadStations();
     if ($("dsAuto").checked) realTimer = setInterval(loadReal, 2000);
   } else {
     refreshRouters();          // 回模拟模式 → 地图标记换回测点表
+    $("cardPerson").style.display = "none";
     /* 模拟模式：数据是本页合成的，没有“取数时刻/数据截止”这回事 ——
        如实说清（否则那两行会一直空白，让人以为取了但没数据）。 */
     freshDataset($("dsFresh"), { sim: true, poll: false }, T);
@@ -1274,6 +1323,111 @@ $("dsAuto").onchange = () => {
 };
 $("plA").onchange = () => { if (dsMode === "real") { updateRealStat(); renderStations(); draw(); } };
 $("plN").onchange = () => { if (dsMode === "real") { updateRealStat(); renderStations(); draw(); } };
+
+/* ---- 人级聚合（一个人的多台客户端 → 一个人的位置）----------------------
+   判据与文案都在 pos.js（`fusePerson` / `fuseText`）：**不做“设备是否分开”的判定**
+   （实测这层数据分辨不了，见 pos.js 头注释），只做“合并成一个人”+ 如实标出前提与盲区。 */
+function pnDevicesOf(pid) {
+  return regDevices.filter(d => d.person_id === pid);
+}
+
+/* 一台设备**各自**的定位结果（与上面那台设备的算法完全同一套：obsAt→trilaterate→wlsLocate），
+   只是数据来源换成“该设备自己的序列”。信任度走各自的 consensus()。 */
+function fixOfDevice(sn, samples, obs) {
+  const t = Date.now();                      // 实时：用“当下”（时效阈值内才算观测，不看未来）
+  const arr = obsAt(stations, (sid) => samplesFor(obs, sid, samples), t, plA(), plN());
+  const lin = arr.length >= 2
+    ? trilaterate(arr.map(x => ({ x: x.s.x, y: x.s.y })), arr.map(x => x.dist), null) : null;
+  const w = arr.length >= 2 ? wlsLocate(arr, lin) : null;
+  const est = (w && w.ok) ? { x: w.x, y: w.y, ok: true }
+            : (lin ? { x: lin.x, y: lin.y, ok: true } : { ok: false });
+  const cons = consensus(arr, consOpts(t));
+  return { sn, est, n: arr.length, trust: cons.trust, cons,
+           sigma: (w && w.ok && w.ellipse) ? w.ellipse.radius : null,
+           rms: (w && w.ok) ? w.rms : null };
+}
+
+async function loadPerson() {
+  const pid = $("pnPerson").value;
+  if (!pid) { $("pnMsg").textContent = T("pn_no_person"); return; }
+  const devs = pnDevicesOf(pid);
+  const limit = Math.min(5000, Math.max(10, parseInt($("dsLimit").value) || 200));
+  $("pnMsg").textContent = T("pn_loading");
+  const fixes = [];
+  for (const d of devs) {
+    try {
+      const r = await fetch(`/api/ts/query?sn=${encodeURIComponent(d.sn)}&limit=${limit}`).then(x => x.json());
+      const samples = (r.ok && r.rows) ? r.rows.slice().reverse() : [];
+      fixes.push(fixOfDevice(d.sn, samples, r.obs || {}));
+    } catch (e) {
+      fixes.push({ sn: d.sn, est: { ok: false }, trust: "none", sigma: null, n: 0, err: String(e) });
+    }
+  }
+  const fused = fusePerson(fixes);
+  renderPerson(fused);
+  /* 这张卡**不跟随 2s 自动刷新**（它要按人数多次查库，比单设备视图重）→
+     那就把“取数时刻”写出来，否则读者分不清这是刚拉的还是十几分钟前的。 */
+  $("pnMsg").textContent = T("pn_loaded")
+    .replace("{t}", new Date().toLocaleTimeString())
+    .replace("{n}", String(fixes.length));
+}
+
+function renderPerson(f) {
+  $("pnPos").textContent = f.est ? `( ${f.est.x.toFixed(1)}, ${f.est.y.toFixed(1)} )` : "-";
+  $("pnTrust").textContent = fuseText(f, T);
+  $("pnRad").textContent = (f.radius === null || f.radius === undefined)
+    ? "-" : "± " + f.radius.toFixed(1) + " m";
+  $("pnSpread").textContent = (f.spread_m === null) ? T("pn_spread_na") : f.spread_m.toFixed(1) + " m";
+  $("pnUsed").textContent = (f.used.length ? f.used.join(",") : "—") +
+    (f.dropped.length ? " / " + f.dropped.join(",") : "");
+  const tbody = $("pnBody");
+  tbody.innerHTML = "";
+  for (const d of f.devices) {
+    const st = (d.est && d.est.ok && d.trust !== "conflict" && d.trust !== "none")
+      ? T("pn_st_used") : ((d.trust === "conflict") ? T("pn_st_conflict") : T("pn_st_nofix"));
+    /* 可信度措辞走 pos.js 的 trustText（单一源）：**用该设备自己的 consensus 结果**
+       （否则“一致”那句会拿空数组去数，显示成“0 台一致”）；
+       参数里不带嵌套括号（守卫要能逐处解析该函数的调用，见 test_posjs.page_guard）。 */
+    const cs = d.cons || { trust: d.trust, obs: [] };
+    const tr = document.createElement("tr");
+    tr.innerHTML = '<td class="mono">' + d.sn + '</td>' +
+      '<td class="mono">' + (d.est && d.est.ok
+        ? `( ${d.est.x.toFixed(1)}, ${d.est.y.toFixed(1)} )` : "—") + "</td>" +
+      '<td>' + trustText(cs, T) + "</td>" +
+      '<td class="mono">' + ((d.sigma === null || d.sigma === undefined)
+        ? "—" : "± " + d.sigma.toFixed(1) + " m") + "</td>" +
+      '<td>' + st + "</td>";
+    tbody.appendChild(tr);
+  }
+}
+
+$("pnRun").onclick = loadPerson;
+$("pnPerson").onchange = loadPerson;
+
+/* 人员下拉：只列**名下有设备**的人，并在设备集变化时重建（不覆盖用户已选的） */
+function pnEnsure() {
+  const sel = $("pnPerson");
+  if (!sel) return;
+  const keep = sel.value;
+  const people = regPersons.filter(p => pnDevicesOf(p.pid).length);
+  const sig = people.map(p => p.pid + ":" + pnDevicesOf(p.pid).length).join("|");
+  if (sel.dataset.sig !== sig) {
+    sel.dataset.sig = sig;
+    sel.innerHTML = "";
+    for (const p of people) {
+      const o = document.createElement("option");
+      o.value = p.pid;
+      o.textContent = `${p.name} · ${pnDevicesOf(p.pid).length} ` + T("pn_unit");
+      sel.appendChild(o);
+    }
+    if (keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
+  }
+  /* 首次进入（没选过）：默认选**当前设备所属的人** —— 上面选了设备，这里就该是那个人 */
+  if (!sel.value) {
+    const cur = regDevices.find(d => d.sn === $("dsSn").value);
+    if (cur && cur.person_id) sel.value = cur.person_id;
+  }
+}
 
 /* ---- 站位表操作 ---- */
 $("stAdd").onclick = async () => {

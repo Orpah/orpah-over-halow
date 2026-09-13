@@ -39,7 +39,8 @@ const EXPORT = ["rssiFromDist", "distFromRssi", "trilaterate", "wlsLocate", "ell
                 "pathJitter", "obsSegments", "segIndexAt", "nextValidAt",
                 "truthAt", "errorsOf", "quantileOf", "cdfOf",
                 "gdopOf", "suggestStation", "samplesFor", "frameGaps", "consensus",
-                "trustText", "consOpts", "biasScan"];
+                "trustText", "consOpts", "biasScan", "fusePerson", "fuseText", "FUSE_ORDER",
+                "wlsLocate", "ellipseOf", "rssiFromDist", "distFromRssi"];
 const src = fs.readFileSync(process.argv[2], "utf8")
           + "\nmodule.exports = {" + EXPORT.join(",") + "};\n";
 const m = { exports: {} };
@@ -479,6 +480,93 @@ ck("biasScan：脏数据（null/NaN/0/负/缺 sid）跳过且不炸",
    && P.biasScan([]).length === 0 && P.biasScan(undefined).length === 0);
 
 console.log("");
+/* ================= 人级聚合（一个人的多台客户端 → 一个人） =================
+   判据的**边界**（实测，见 pos.js 头注释）：这一层数据**分辨不了“设备是否分开”** ——
+   单台 95% 椭圆半径中位 19.5 m，两台真相距 100/200/500 m 与“在一起”统计上分不开。
+   所以下面既锁“合并算得对”，也锁“不去做做不到的判定”（防以后有人看代码“顺手”加一个
+   看似合理的 sep 阈值）。 */
+const TF = k => k;
+const fix = (sn, x, y, trust, sigma) => ({ sn, est: { ok: true, x, y }, trust, sigma });
+
+ck("fusePerson：没有任何设备 → none/no_fix，且不给位置",
+   (() => { const f = P.fusePerson([]); return f.trust === "none" && f.why === "no_fix" && f.est === null; })());
+ck("fusePerson：都解不出位置 → none/no_fix，dropped 里列全（不静默丢设备）",
+   (() => { const f = P.fusePerson([{ sn: "A", est: { ok: false }, trust: "none" }]);
+            return f.trust === "none" && f.dropped.join() === "A"; })());
+ck("fusePerson：全都冲突 → none/all_conflict（不给“勉强算一个”）",
+   (() => { const f = P.fusePerson([fix("A", 1, 1, "conflict", 5), fix("B", 9, 9, "conflict", 5)]);
+            return f.trust === "none" && f.why === "all_conflict" && f.est === null; })());
+ck("fusePerson：只有 1 台可用 → single，位置就是那一台（单一来源）",
+   (() => { const f = P.fusePerson([fix("A", 3, 4, "verified", 6)]);
+            return f.trust === "single" && f.est.x === 3 && f.est.y === 4 && f.radius === 6; })());
+ck("fusePerson：两台等 σ → 取中点；合并半径 = σ/√2（观测噪声真降了）",
+   (() => { const f = P.fusePerson([fix("A", 0, 0, "verified", 4), fix("B", 10, 0, "single", 4)]);
+            return near(f.est.x, 5) && near(f.est.y, 0) && near(f.radius, 4 / Math.sqrt(2), 1e-9)
+                   && f.spread_m === 10; })(),
+   JSON.stringify(P.fusePerson([fix("A", 0, 0, "verified", 4), fix("B", 10, 0, "single", 4)]).radius));
+ck("fusePerson：人级可信度取**最弱**那台（多台一致 ≠ 每台都过了交叉校验）",
+   P.fusePerson([fix("A", 0, 0, "verified", 4), fix("B", 1, 0, "single", 4)]).trust === "single");
+ck("fusePerson：σ 不同 → 按 1/σ² 加权（好台权重更大）",
+   (() => { const f = P.fusePerson([fix("A", 0, 0, "verified", 2), fix("B", 10, 0, "verified", 6)]);
+            return f.est.x < 3; })());   // 1/4 vs 1/36 → 好台拉过去
+ck("fusePerson：某台冲突 → **不参与平均**（但列在 dropped 里）",
+   (() => { const f = P.fusePerson([fix("A", 0, 0, "verified", 4), fix("B", 2, 0, "verified", 4),
+                                    fix("C", 99, 99, "conflict", 4)]);
+            return f.est.x < 5 && f.used.join() === "A,B" && f.dropped.join() === "C"
+                   && f.spread_m <= 2 + 1e-9; })());
+ck("fusePerson：σ 缺失的台用中位权重（不因“没给 σ”被当成最可信/最不可信）",
+   (() => { const f = P.fusePerson([{ sn: "A", est: { ok: true, x: 0, y: 0 }, trust: "verified" },
+                                    fix("B", 10, 0, "verified", 4)]);
+            return Number.isFinite(f.est.x) && near(f.est.x, 5, 1e-9); })());
+ck("fusePerson：脏输入（null/缺 sn/est 为空）不炸",
+   P.fusePerson(null).trust === "none" && P.fusePerson([null, {}, { sn: "A" }]).trust === "none");
+
+ck("fuseText：五个分支都有话（不返回空、不返回空串）",
+   [P.fuseText(P.fusePerson([]), TF), P.fuseText({ trust: "none", why: "all_conflict" }, TF),
+    P.fuseText({ trust: "single", used: ["A"], why: "one_device" }, TF),
+    P.fuseText(P.fusePerson([fix("A", 0, 0, "verified", 4), fix("B", 1, 0, "verified", 4)]), TF),
+    P.fuseText(null, TF)].every(s => typeof s === "string" && s.length > 0),
+   JSON.stringify([P.fuseText(P.fusePerson([]), TF), P.fuseText(null, TF)]));
+ck("fuseText：none 的两种成因**分开说**（都不冲突 vs 全冲突）",
+   P.fuseText({ trust: "none", why: "all_conflict" }, TF)
+     !== P.fuseText({ trust: "none", why: "no_fix" }, TF));
+ck("fuseText：合并文案带参与台数（可核对）",
+   P.fuseText(P.fusePerson([fix("A", 0, 0, "verified", 4), fix("B", 1, 0, "verified", 4)]), TF)
+     .indexOf("fuse_agree") === 0);   // 桦 T 原样返回 key，占位符替换在页面那侧看
+
+/* ---- 实测事实锁：把 pos.js 头注释里的那些数**真的量一遍**，将来模型改了会当场红 ----
+   （不是“实现正确性”，而是“文档里的话还算数吗”） */
+let fseed = 20260913;
+const frnd = () => { fseed = (fseed * 1103515245 + 12345) & 0x7fffffff; return fseed / 0x7fffffff; };
+const fgauss = () => (frnd() + frnd() + frnd() + frnd() + frnd() + frnd() - 3);
+const FST = [{ x: 30, y: 0 }, { x: -15, y: 26 }, { x: -15, y: -26 }, { x: -20, y: 0 }];
+function fFix(tx, ty) {
+  const obs = FST.map((s, i) => {
+    const d0 = Math.hypot(tx - s.x, ty - s.y);
+    const rssi = P.rssiFromDist(d0, -40, 2.5) + 2.0 * fgauss();
+    return { s: { x: s.x, y: s.y, sid: "S" + i }, dist: P.distFromRssi(rssi, -40, 2.5) };
+  });
+  const w = P.wlsLocate(obs, P.trilaterate(FST, obs.map(o => o.dist), null));
+  return (w && w.ok && w.ellipse) ? { x: w.x, y: w.y, r: w.ellipse.radius } : null;
+}
+const zOf = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) / Math.sqrt(a.r * a.r + b.r * b.r);
+const med = arr => arr.slice().sort((x, y) => x - y)[Math.floor((arr.length - 1) / 2)];
+const sameZ = [], farZ = [];
+for (let i = 0; i < 600; i++) {
+  const tx = (frnd() - 0.5) * 80, ty = (frnd() - 0.5) * 80;
+  const a = fFix(tx, ty), b = fFix(tx, ty);
+  if (a && b) sameZ.push(zOf(a, b));
+  const c = fFix(tx, ty), d = fFix(tx + 100, ty);
+  if (c && d) farZ.push(zOf(c, d));
+}
+ck("实测：同点（诚实）两台设备的 z 上界 < 3（所以任何“分开”阈值都不可能 ≤ 3）",
+   Math.max(...sameZ) < 3, "上界 " + Math.max(...sameZ).toFixed(2));
+ck("实测：真相距 100 m 与“在一起”**分不开**（中位 z < 1）—— 这是页面“不做分开判定”的依据",
+   med(farZ) < 1, "中位 " + med(farZ).toFixed(2) + " vs 同点中位 " + med(sameZ).toFixed(2));
+console.log("       （实测数：同点 z 中位 " + med(sameZ).toFixed(2) + "、上界 "
+            + Math.max(...sameZ).toFixed(2) + "；相距 100 m z 中位 " + med(farZ).toFixed(2) + "）");
+
+console.log("");
 if (fails.length) {
   console.log("定位内核：失败 " + fails.length + " 项：" + fails.join("；"));
   process.exit(1);
@@ -592,6 +680,16 @@ def page_guard():
         print("  FAIL replay.html：持续偏差扫描没有“剔掉最狠那台后重扫”（分不清真凶与被拖累的台）")
         return 1
     print("  OK   replay.html 跑多帧持续偏差扫描（biasScan + 剔除最狠者后重扫）")
+    # 人级聚合（一个人的多台客户端 → 一个人）：判据/文案都必须在 pos.js 里，页面只调。
+    # 两个陷阱卡住：① 页面自己写一份“设备是否分开”的阈值（本层数据分辨不了，见 pos.js 头注释）；
+    # ② 合并不走 fusePerson() 而在页面里手写加权平均（迟早漂移）。
+    if "fusePerson(" not in tk or "fuseText(" not in tk:
+        print("  FAIL track.html：人级聚合没走 pos.js 的 fusePerson()/fuseText()")
+        return 1
+    if "FUSE_" in tk and "FUSE_ORDER" not in tk:
+        print("  FAIL track.html：自己引了一个 FUSE_* 常量（阈值/规则只许在 pos.js 里）")
+        return 1
+    print("  OK   track.html 人级聚合走 pos.js 的 fusePerson()/fuseText()（单一实现）")
     return 0
 
 

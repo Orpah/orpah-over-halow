@@ -739,6 +739,103 @@ function trustText(c, T) {
   return s;
 }
 
+/* ---------------- 人级聚合（一个人的多台客户端 → 一个人在哪） ----------------
+   背景：走失案件是**以人为单位**的（`cases.py`：标记一个人 → 名下所有设备进丢失态，
+   任一台被发现即视为发现该人）；而一个人可能带着/穿着多台客户端（项链、鞋、眼镜…）。
+   每台各自上报、各自被多台路由器测到 → 各自能解出一个位置；现场要的是**一个人**在哪。
+
+   ★ **前提假设（必须写在页面上，不许省）**：这些设备**假定与同一个人在一起**。
+   现实里它们完全可能分开（手机被拿走、鞋掉一只、备用设备留在家里）——
+   而**这一层的观测数据没法验证这个假设**。实测（本演示的 4 台站位 + ±2 dBm 噪声，20000 次模拟）：
+     · 单台定位的 95% 椭圆半径**中位就有 19.5 m**（p95 38.7 m、上界 78 m）；
+     · 于是「两台设备真相距 100 m / 200 m / 500 m」与「两台设备在一起」的
+       δ/√(σ1²+σ2²) 统计量**区分不开**（中位 0.62 / 0.31 / 0.13，**比同点的 0.19 还小** ——
+       离得越远，距离误差越大、椭圆越大，反而更像“同一片糊”）。
+   ⇒ 所以本函数**不做“设备是否分开”的判定**（要做就是编一个抓不住东西的判据），
+     只做两件有实据的事：
+       ① **合并成一个人**（1/σ² 加权平均）——多台设备是**同一个人**的多次独立测量，
+          观测噪声会按 1/√n 收敛（这是本层唯一的真收益）；
+       ② **共模误差提醒**：站位/环境误差（多径、标定漂移）对同一人的几台设备是**共同的**，
+          平均**消不掉**它 → 合并半径只代表“观测噪声”，不代表真实位置误差。
+     `spread_m`（两两最大间距）只作**陈述**带出去 —— 页面上必须同时说明“它不能证明它们在一起”。
+
+   入参 `fixes` = 每台设备**各自**的结果：`[{sn, est:{x,y,ok}, trust, sigma}]`
+     · `trust` 来自各自的 `consensus()`（none|single|verified|conflict）；
+     · `sigma` = 该台的定位不确定度（米），页面传 `wls.ellipse.radius`（95% 半长轴）；
+       缺省回退 `rms`；两者都没有 → 该台只作参考、不参与加权（不给它编一个权重）。
+   出参 `{trust, est, radius, used, dropped, spread_m, why, devices}`。
+   纯函数（不读时钟、不用随机）→ 实时页与回放页对同一输入给逐位相同的结果。
+
+   规则（逐级如实降级，任何时候都不硬凑一个点）：
+     1. 「参与」= `est && est.ok` 且 `trust !== "conflict"` —— 冲突台**自己的定位**就不可信
+        （它的几台路由器互相矛盾），不参与平均，但在 `dropped` 里列出来；
+     2. 0 台可参与 → `none`（why 区分 `no_fix` 一台都没解出 / `all_conflict` 全都冲突）；
+     3. 1 台可参与 → **single**（单一来源、未交叉校验），位置就是那一台；
+     4. ≥2 台 → **1/σ² 加权平均**；人级 trust 取参与台里**最弱**的那个 ——
+        多台一致只说明它们**互相对得上**，不等于每台都过了交叉校验，不许吹成 verified。 */
+const FUSE_ORDER = { none: 0, conflict: 1, single: 2, verified: 3 };
+
+function fusePerson(fixes) {
+  const list = (fixes || []).filter(f => f && f.sn);
+  const ok = list.filter(f => f.est && f.est.ok && f.trust !== "conflict" && f.trust !== "none");
+  const sigmaOf = (f) => {
+    if (f.sigma !== undefined && f.sigma !== null && isFinite(f.sigma) && f.sigma > 0) return f.sigma;
+    if (f.rms !== undefined && f.rms !== null && isFinite(f.rms) && f.rms > 0) return f.rms;
+    return null;
+  };
+  /* 两两最大间距：**只作陈述**（不是判据，见头注释） */
+  let spread = null;
+  for (let i = 0; i < ok.length; i++) {
+    for (let j = i + 1; j < ok.length; j++) {
+      const d = Math.hypot(ok[i].est.x - ok[j].est.x, ok[i].est.y - ok[j].est.y);
+      if (spread === null || d > spread) spread = d;
+    }
+  }
+  const pack = (trust, why, est, radius, used) => ({
+    trust, why, est: est || null, radius: (radius === undefined ? null : radius),
+    used: (used || []).map(f => f.sn),
+    dropped: list.filter(f => !(used || []).includes(f)).map(f => f.sn),
+    spread_m: spread, devices: list,
+  });
+  if (!ok.length) {
+    return pack("none", list.some(f => f.est && f.est.ok) ? "all_conflict" : "no_fix", null, null, []);
+  }
+  if (ok.length === 1) {
+    return pack("single", "one_device", ok[0].est, sigmaOf(ok[0]), ok);
+  }
+  /* 1/σ² 加权；σ 拿不到的台给**中位权重**（不因“没给 σ”就被当成最可信或最不可信） */
+  const ws = ok.map(f => { const s = sigmaOf(f); return s === null ? null : 1 / (s * s); });
+  const known = ws.filter(x => x !== null).sort((a, b) => a - b);
+  const mid = known.length ? known[Math.floor(known.length / 2)] : 1;
+  const wt = ws.map(x => (x === null ? mid : x));
+  const wSum = wt.reduce((s, x) => s + x, 0);
+  const est = {
+    ok: true,
+    x: ok.reduce((s, f, i) => s + f.est.x * wt[i], 0) / wSum,
+    y: ok.reduce((s, f, i) => s + f.est.y * wt[i], 0) / wSum,
+  };
+  /* 合并半径 = 1/√(Σ1/σ²)（只代表**观测噪声**：共模误差消不掉，见头注释） */
+  const radius = known.length ? Math.sqrt(1 / wSum) : null;
+  let weakest = "verified";
+  ok.forEach(f => { if ((FUSE_ORDER[f.trust] || 0) < (FUSE_ORDER[weakest] || 0)) weakest = f.trust; });
+  return pack(weakest === "none" ? "single" : weakest, "agree", est, radius, ok);
+}
+
+/* 人级聚合结果的**文案**（单一源：页面不另写一份，否则措辞必漂移）。
+   两条不许省：
+     · **前提**：这些设备是**假定**在同一人身上的（数据验证不了，见头注释的实测数）；
+     · **性质**：合并只压观测噪声，压不掉共模误差（站位/多径/标定）→ 半径别当真实误差。
+   不判定“设备是否分开”（数据做不到），所以也不写“一致/不一致”这种暗示判断的话。 */
+function fuseText(f, T) {
+  if (!f) return T("fuse_none");
+  if (f.trust === "none") {
+    return f.why === "all_conflict" ? T("fuse_none_conflict") : T("fuse_none_nofix");
+  }
+  if (f.trust === "single") return T("fuse_single").replace("{n}", f.used.length);
+  return T("fuse_agree").replace("{n}", f.used.length)
+         .replace("{d}", f.spread_m === null ? "?" : f.spread_m.toFixed(1));
+}
+
 /* ---------------- 多帧（时序）持续偏差扫描 ----------------
    为什么需要它：`consensus()` 的单帧留一法对**“偏得更小”那一侧**在数学上不可分辨 ——
    “它报的距离偏小 k 倍”的误差上限就是它自己报的距离，z 有硬上界（实测最大 ≈3.8，与诚实尾部重合）

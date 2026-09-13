@@ -321,6 +321,11 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
   路由器测量 `root.orpah.routers.<sid>.<sn>`（测点 rssi/seq）；业务事件 `root.orpah.events`（etype/sn/detail/actor）。
 - 路由器测量**必须单独一条路径**：同一设备的同一时间戳在 IoTDB 是 last-write-wins，
   多台路由器的测量挤进 `devices.<sn>` 会互相覆盖（每台一条序列也便于各取各的窗口）。
+- **人级聚合（2026-09-13）**：`routers.<sid>.<sn>` 里，**同一个人的其它设备**也会有序列 ——
+  本 demo 只有一台设备真的在上报，那些是 `_write_router_obs` 用**同一个 motion 位置模型**生成的
+  **模拟观测**（噪声按 `"<sid>|<sn>"` 独立，模拟“各自晶振/天线/遮挡”带来的独立噪声）。
+  用途是让「一个人的多台客户端 → 一个人的位置」看得见（`pos.js` 的 `fusePerson`）。
+  真机上每台设备自己上报、各带各的噪声；**别把这批序列当成实测数据**。
 - IoTDB 未启动时写入静默降级、每 10s 重连一次，不影响 SQLite/UI。
 - 写入接口的 `ts` 参数是 **epoch 秒**（`write_report` / `write_router_obs` 一致）；传毫秒会被当成
   天文数字的时间戳而写失败（异常被吞 → 只表现为 `/api/status.tsdb=false`）。
