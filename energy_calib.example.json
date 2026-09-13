@@ -1,6 +1,6 @@
 {
   "schema": "orpah-energy-calib/1",
-  "_comment": "示例文件（不是实测）。用法：复制成仓库根的 energy_calib.json，或设 ORPAH_ENERGY_CALIB 指到你的标定文件，然后把下面的数字换成真机实测值。详细口径见 energy_calib.py 的模块文档。",
+  "_comment": "示例文件（不是实测）。用法：复制成仓库根的 energy_calib.json，或设 ORPAH_ENERGY_CALIB 指到你的标定文件，然后把下面的数字换成真机实测值。详细口径见 energy_calib.py 的模块文档。注意 listen_interval_s（多久听一次）是策略项、不是标定项，写进来只会被列为“已忽略”。",
   "source": {
     "device": "TX-AH + CH32V203（示例样机）",
     "who": "（示例文件）",
@@ -20,6 +20,10 @@
       "active_ma": 12,
       "report_ms": 22
     }
+  },
+  "listen": {
+    "listen_ma": 12,
+    "listen_ms": 200
   },
   "store_mj": 2000,
   "charge0_mj": 1500,

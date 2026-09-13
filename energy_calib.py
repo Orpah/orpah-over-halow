@@ -28,18 +28,24 @@ JSON。路径由 **`ORPAH_ENERGY_CALIB`** 指定；没设就找仓库根目录�
   "sleep":  {"sleep_ua": 8},                              // 8 µA @3.7V → 0.0296 mW
   "report": {"ES256": {"active_ma": 12, "report_ms": 45},  // → 2.00 mJ
              "HS256": {"active_ma": 12, "report_ms": 22}}, // → 0.98 mJ
+  "listen": {"listen_ma": 12, "listen_ms": 200},          // 听窗口 200ms @12mA → 8.88 mJ/次
   "store_mj": 2000, "charge0_mj": 1500,
   "cell": {"empty_mv": 3000, "full_mv": 4200}
 }
 ```
 
+**听窗口（`listen`）与上报用同一套换算**（都是“活跃电流 × 电压 × 时长”）。
+注意 **`listen_interval_s`（多久听一次）不是标定项** —— 它是产品选择（听间隔变大 =
+下行变慢、发现更慢），写进文件只会被列进「已忽略」。
+
 等价写法（已有换算结果时）：`"sleep": {"sleep_mw": 0.03}`、
-`"report": {"ES256": {"cost_mj": 2.0}}`；`v_mv` 也可写在各自的块里（块内优先）。
+`"report": {"ES256": {"cost_mj": 2.0}}`、`"listen": {"listen_mj": 6.0}`；`v_mv`
+也可写在各自的块里（块内优先）。
 
 **换算公式（只写在这里一份）**：
 
 - 功耗：`mW = µA × mV ÷ 1e6`（µA × mV = nW）
-- 单次上报耗电：`mJ = mA × mV × ms ÷ 1e6`（mA × mV = µW，× ms = nJ）
+- 单次耗电（上报 / 听窗口都一样）：`mJ = mA × mV × ms ÷ 1e6`（mA × mV = µW，× ms = nJ）
 
 每一行的**生效值**都带算式（`calc`，如 `8 µA × 3700 mV ÷ 1e6 = 0.0296 mW`），标定的人可以
 拿计算器核对；**两种写法都给且差 >1%** 时另出一条提示（帮人抓自己的换算错），不是悄悄取一个。
@@ -52,7 +58,8 @@ JSON。路径由 **`ORPAH_ENERGY_CALIB`** 指定；没设就找仓库根目录�
    但**部分字段没写**（schema 合法、只给了 2 项）**不算错**，那叫 `mixed`，逐字段标出处。
 3. **每一项都要能说出出处**（`measured` / `demo`），整体 `source ∈ {none, mixed, measured, error}`，
    页面必须显示；**策略阈值不是标定项**（`min_interval_s` / `max_useful_interval_s` /
-   `emergency_interval_s` 是产品选择，写进文件只会被列进「已忽略」）。
+   `emergency_interval_s` / **`listen_interval_s`（多久听一次下行）** 是产品选择，
+   写进文件只会被列进「已忽略」）。
 
 另外：JSON 没有注释语法 → **`_` 开头的键当注释**（忽略、不出提示），例如 `"_comment"`；
 其余不认识的键会**列进「已忽略」**（不静默丢，也不接受）。
@@ -84,30 +91,33 @@ DEFAULT_NAME = "energy_calib.json"
 SCHEMA = "orpah-energy-calib/1"
 
 # 可标定项 = **物理量**（顺序 = 页面表格顺序）。策略阈值不在其中，见 POLICY_KEYS。
-FIELD_IDS = ("sleep_mw", "cost_es256", "cost_hs256", "store_mj", "charge0_mj",
-             "cell_empty_mv", "cell_full_mv")
+FIELD_IDS = ("sleep_mw", "cost_es256", "cost_hs256", "listen_mj", "store_mj",
+             "charge0_mj", "cell_empty_mv", "cell_full_mv")
 FIELD_I18N = {f: "en_cal_f_" + f for f in FIELD_IDS}
 FIELD_UNIT = {"sleep_mw": "mW", "cost_es256": "mJ", "cost_hs256": "mJ",
-              "store_mj": "mJ", "charge0_mj": "mJ",
+              "listen_mj": "mJ", "store_mj": "mJ", "charge0_mj": "mJ",
               "cell_empty_mv": "mV", "cell_full_mv": "mV"}
-FIELD_DIGITS = {"sleep_mw": 4, "cost_es256": 3, "cost_hs256": 3, "store_mj": 1,
-                "charge0_mj": 1, "cell_empty_mv": 0, "cell_full_mv": 0}
+FIELD_DIGITS = {"sleep_mw": 4, "cost_es256": 3, "cost_hs256": 3, "listen_mj": 3,
+                "store_mj": 1, "charge0_mj": 1, "cell_empty_mv": 0, "cell_full_mv": 0}
 
 # 合理区间（超出 → 报错，**不静默接受**：写错一个小数点的 mW 值会把所有结论带偏）
 LIMITS = {
     "sleep_mw": (0.0, 100.0),
     "cost_es256": (0.0, 1000.0),
     "cost_hs256": (0.0, 1000.0),
+    "listen_mj": (0.0, 1000.0),
     "store_mj": (1.0, 1.0e7),
     "charge0_mj": (0.0, 1.0e7),
     "cell_empty_mv": (1.0, 6000.0),
     "cell_full_mv": (1.0, 6000.0),
 }
 
-# **不是**标定项：产品选择（间隔阈值）。写进文件只会被列进「已忽略」。
-POLICY_KEYS = ("min_interval_s", "max_useful_interval_s", "emergency_interval_s")
-KNOWN_TOP = {"schema", "source", "v_mv", "sleep", "report", "store_mj", "charge0_mj",
-             "cell"}
+# **不是**标定项：产品选择（听间隔 / 间隔阈值）。“多久听一次下行”是设计取舍
+# （听间隔↑ = 下行变慢、发现更慢），写进文件只会被列进「已忽略」。
+POLICY_KEYS = ("min_interval_s", "max_useful_interval_s", "emergency_interval_s",
+               "listen_interval_s")
+KNOWN_TOP = {"schema", "source", "v_mv", "sleep", "report", "listen", "store_mj",
+             "charge0_mj", "cell"}
 
 NOTE_KEYS = {
     "no_source": "en_cal_note_no_source",
@@ -201,6 +211,7 @@ class Calib(object):
             "sleep_mw": float(en.SLEEP_MW),
             "cost_es256": float(en.COST_MJ[en.LEVEL_ES]),
             "cost_hs256": float(en.COST_MJ[en.LEVEL_HS]),
+            "listen_mj": float(en.LISTEN_MJ),
             "store_mj": float(en.STORE_MJ),
             "charge0_mj": float(en.CHARGE0_MJ),
             "cell_empty_mv": float(en.CELL_EMPTY_MV),
@@ -216,6 +227,10 @@ class Calib(object):
     def cost(self):
         return {en.LEVEL_ES: self.values["cost_es256"],
                 en.LEVEL_HS: self.values["cost_hs256"]}
+
+    @property
+    def listen_mj(self):
+        return self.values["listen_mj"]
 
     @property
     def store_mj(self):
@@ -457,6 +472,28 @@ def load(path=None):
             for lv in sorted(rep):
                 if lv not in (en.LEVEL_ES, en.LEVEL_HS):
                     c._note("level_unknown", key=lv)
+
+    # --- 每次听窗口耗电（与上报同一套换算：mA × mV × ms ÷ 1e6 = mJ）---
+    ls = doc.get("listen")
+    if ls is not None:
+        if not isinstance(ls, dict):
+            c._bad("listen_mj", "field_type", key="listen", detail=type(ls).__name__)
+        else:
+            direct = num_of(ls, "listen_mj", "listen_mj")
+            raw = None
+            if "listen_ma" in ls or "listen_ms" in ls:
+                if "listen_ma" not in ls or "listen_ms" not in ls:
+                    c._bad("listen_mj", "raw_incomplete", key="listen")
+                else:
+                    ma = num_of(ls, "listen_ma", "listen_mj")
+                    ms = num_of(ls, "listen_ms", "listen_mj")
+                    v = v_mv_of(ls, "listen_mj")
+                    if ma is not None and ms is not None and v is not None:
+                        raw = cost_mj_of(ma, v, ms)
+            both_forms("listen_mj", direct, raw,
+                       _cost_calc(ls["listen_ma"], ls.get("v_mv", root_v),
+                                  ls["listen_ms"], raw)
+                       if raw is not None else None)
 
     # --- 储能容量 / 初始电量 / 电压端点 ---
     set_field("store_mj", num_of(doc, "store_mj", "store_mj"))

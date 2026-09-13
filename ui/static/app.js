@@ -773,6 +773,14 @@ function renderEnergy(e, ax) {
     if (st.silent) sTxt = T("en_silent_now");
     else if (st.hard) sTxt = T("en_hard_now") + " (" + fmtSilence(st.silence_eta_s) + ")";
     else if (st.silence_in_s != null) sTxt = fmtSilence(st.silence_eta_s);
+    // 监听（固定开销）：算出来的平均值 + 听间隔；未建模时写明“未建模”（不当成 0 混过去）
+    const lTxt = st.listen_modeled === false
+      ? T("en_listen_off")
+      : enNum(st.listen_mw, 3) + " mW" +
+        (st.listen_interval_s != null
+          ? ` <span class="hint">(${enNum(st.listen_interval_s, 0)}s/${T("en_listen_once")})</span>` : "");
+    // “缺钱在哪一层”（仅在吃储能时才有值）——只说事实，不猜原因
+    const wh = EN_WHY(st.why) + (st.short_of ? " · " + T("en_short_" + st.short_of) : "");
     box.innerHTML =
       cell("en_st_state", esc(T("en_state_on"))) +
       cell("en_st_mv", lv, lvCls) +
@@ -780,13 +788,15 @@ function renderEnergy(e, ax) {
            (st.degraded ? ` <span class="hint">${esc(T("en_degraded"))}</span>` : "")) +
       cell("en_st_interval", esc(fmtInterval(st.interval_s))) +
       cell("en_st_silence", esc(sTxt)) +
-      cell("en_st_net", enNum(st.net_mw, 3) + " mW") +
-      cell("en_st_why", esc(EN_WHY(st.why)));
+      cell("en_st_listen", lTxt) +
+      cell("en_st_net", enNum(st.usable_mw, 3) + " mW") +
+      cell("en_st_why", esc(wh));
   }
   // 输入框回显（不动正在编辑的那个）
   const ae = document.activeElement && document.activeElement.id;
   const p = (e && e.params) || {};
   if (ae !== "enHarvest" && p.harvest_mw != null) $("enHarvest").value = p.harvest_mw;
+  if (ae !== "enListen" && p.listen_interval_s != null) $("enListen").value = p.listen_interval_s;
   if (ae !== "enCharge" && p.charge_mj != null) $("enCharge").value = p.charge_mj;
   if (ae !== "enStore" && p.store_mj != null) $("enStore").value = p.store_mj;
   if (ae !== "enSpeedup" && p.speedup != null) $("enSpeedup").value = p.speedup;
@@ -808,13 +818,14 @@ function renderEnergy(e, ax) {
     const usable = !!r.usable;
     tr.innerHTML =
       `<td>${enNum(r.harvest_mw, 3)}${cur ? " ◀" : ""}</td>` +
-      `<td>${enNum(r.net_mw, 3)}</td>` +
+      `<td>${enNum(r.usable_mw, 3)}</td>` +
       `<td class="${usable ? "yes" : "no"}">${esc(r.level || "—")}` +
       `${r.degraded ? ` <span class="hint">${esc(T("en_degraded"))}</span>` : ""}</td>` +
       `<td>${esc(fmtInterval(r.interval_s))}` +
       `${r.every_s != null ? ` <span class="hint">(${enNum(r.every_s, 1)}s)</span>` : ""}</td>` +
       `<td>${esc(fmtSilence(r.silence_in_s))}</td>` +
-      `<td>${esc(EN_WHY(r.why))}</td>`;
+      `<td>${esc(EN_WHY(r.why) +
+                (r.short_of ? " · " + T("en_short_" + r.short_of) : ""))}</td>`;
     tb.appendChild(tr);
   });
   if (msg) {
@@ -859,6 +870,7 @@ if ($("btnEnApply")) {
     action: "set",
     on: !!$("enOn").checked,
     harvest_mw: parseFloat($("enHarvest").value) || 0,
+    listen_interval_s: parseFloat($("enListen").value) || 0,
     charge_mj: parseFloat($("enCharge").value) || 0,
     store_mj: parseFloat($("enStore").value) || 0,
     push: !!$("enPush").checked,

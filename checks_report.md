@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 22:58:27
-- git HEAD：`9c252cc`
+- 时间：2026-09-13 23:19:58
+- git HEAD：`6157f72`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（32/32 套件通过）
 
@@ -12,7 +12,7 @@
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
 | 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.1s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
-| 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.7s | 通过 |
+| 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.6s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 0.2s | 通过 |
 | 告警通知（边沿触发 / Webhook / 失败可见） | `test_notify.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
@@ -23,11 +23,11 @@
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
 | 能量轴（免电池客户端） | `test_energy.py` | ✅ PASS | 0.0s | 通过 |
 | 能量标定入口（实测参数 + 出处） | `test_energy_calib.py` | ✅ PASS | 0.1s | 通过 |
-| 抓包解析 / 双源对照 | `test_capture.py` | ✅ PASS | 0.2s | 通过 |
+| 抓包解析 / 双源对照 | `test_capture.py` | ✅ PASS | 0.1s | 通过 |
 | 设备时钟漂移（长基线） | `demo_clock.py` | ✅ PASS | 0.1s | 通过 |
 | 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
 | 地图共享件（map.js：基点/野外包 + maps.py） | `test_mapjs.py` | ✅ PASS | 0.2s | 通过 |
-| 首页转义口径（app.js：esc/alertText 单一出口） | `test_appjs.py` | ✅ PASS | 0.1s | 通过 |
+| 首页转义口径（app.js：esc/alertText 单一出口） | `test_appjs.py` | ✅ PASS | 0.0s | 通过 |
 | 限频（§5.8 令牌桶 / 两条防线） | `test_ratelimit.py` | ✅ PASS | 0.1s | 通过 |
 | 设备侧自限频（§5.8 设备那一环，自愿） | `test_selflimit.py` | ✅ PASS | 0.1s | 通过 |
 | Router 下行路径（来源校验） | `test_router.py` | ✅ PASS | 0.1s | 通过 |
@@ -36,11 +36,11 @@
 | UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 2.9s | 通过 |
 | 数据新鲜度（freshness.py + fresh.js） | `test_fresh.py` | ✅ PASS | 0.2s | 通过 |
 | L1 端到端 | `demo_l1.py` | ✅ PASS | 1.4s | 通过 |
-| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.3s | 通过 |
-| L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.3s | 通过 |
-| L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.2s | 通过 |
-| 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.8s | 通过 |
-| 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 7.7s | 通过 |
+| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.2s | 通过 |
+| L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.2s | 通过 |
+| L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.3s | 通过 |
+| 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.7s | 通过 |
+| 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 7.6s | 通过 |
 
 ## 关键输出
 
@@ -76,7 +76,7 @@
       OK   revoked ����ǰ vs ��������� (kind, �þ�) ��ȫһ��  ����� 2 �ڵ�Ĭ��˳��Աȣ�����˳��ͬ���ʰ����ϱȣ�
     ȫ��ͨ��
 
-### 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） — PASS（0.7s）
+### 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） — PASS（0.6s）
 
     == 1. 用例清单（单一源 spoof.py）==
     PASS  用例字段仍是 5 项（脚本/演示都按这个解包）
@@ -142,7 +142,7 @@
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
-    Ran 40 tests in 0.476s
+    Ran 40 tests in 0.486s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -168,12 +168,12 @@
 ### 能量轴（免电池客户端） — PASS（0.0s）
 
     == 1. 电压映射（电量 → battery_mv）==
-    == 2. 采集充足：ES256 + 够用的间隔 ==
+    == 2. 采集充足：ES256 + 够用的间隔（其中监听是固定开销）==
     == 3. 采集偏低：降级**只为把间隔拉回可用区** ==
     == 4. 采集太低：慢到跟不住人（但仍不降 L3） ==
-    == 5. 采不敷出：没有可维持间隔（不装出能持续的样子）+ 给出「还能撑多久」 ==
+    == 5. 采不敷出：没有可维持间隔 + **缺钱在哪一层**（short_of） ==
     == 6. 完全没采集：**如实沉默**，不编间隔 ==
-      OK   钳在 [0, store]（不出现负电量、不超容量）
+      OK   不建模监听时 listen_interval_s=None（**不撒谎说 0s**）
     能量轴测试全部通过
 
 ### 能量标定入口（实测参数 + 出处） — PASS（0.1s）
@@ -187,7 +187,7 @@
       OK   拼错错误 kind → 当场报错（不让它静静显示成键名）
     标定入口：全部通过
 
-### 抓包解析 / 双源对照 — PASS（0.2s）
+### 抓包解析 / 双源对照 — PASS（0.1s）
 
     == 1. pcap ������д������ ==
     == 2. ��ʽ������볳������Ĭ������ ==
@@ -227,7 +227,7 @@
       OK   replay.html：开页拉包列表（loadPacks）
       OK   replay.html：调 packInit(cb) 接线（map.js 顶层碰不了 DOM；换包要重建图层）
 
-### 首页转义口径（app.js：esc/alertText 单一出口） — PASS（0.1s）
+### 首页转义口径（app.js：esc/alertText 单一出口） — PASS（0.0s）
 
     == 转义唯一实现（esc 覆盖字符） ==
     == alertText：调用点必须包 esc、体内不许再包 ==
@@ -280,10 +280,10 @@
 
 ### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.2s）
 
-    PASS  字典 zh/en key 集合一致（1135 / 1135）
+    PASS  字典 zh/en key 集合一致（1142 / 1142）
     PASS  每个 key 恰好 2 次（zh + en）
     PASS  字典非空且含中文与英文条目（翻译真的两套）
-    PASS  扫描 18 个页面/脚本，引用 1008 个 key（含动态前缀家族 17 个）
+    PASS  扫描 18 个页面/脚本，引用 1014 个 key（含动态前缀家族 18 个）
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
@@ -313,7 +313,7 @@
     === ORPAH L1 验收 ===
     结果: [PASS]
 
-### L2 消息流 — PASS（2.3s）
+### L2 消息流 — PASS（2.2s）
 
     --- 分支一：走失库未命中 sn=CN-WH01-9AF3C1D2 ---
     --- mark 走失 sn=CN-WH01-9AF3C1D2（Server 下发 LOST-TABLE）---
@@ -322,7 +322,7 @@
     分支一(未命中 NOT-TRACKED): PASS
     分支二(命中 TRACKED): PASS
 
-### L3 多 Router 漫游/去重 — PASS（4.3s）
+### L3 多 Router 漫游/去重 — PASS（4.2s）
 
     --- 阶段A：sn=CN-WH01-9AF3C1D2 在 R1 网络（2 条，未 mark）---
     --- 阶段B：sn=CN-WH01-9AF3C1D2 漫游到 R2 网络（seq 续 3）---
@@ -331,7 +331,7 @@
     --- 阶段E：去重测试（重发已接受的 seq=4）---
     --- 阶段F：SN 校验（非法 sn → FORMAT-ERR）---
 
-### L3b 主动拉表 — PASS（1.2s）
+### L3b 主动拉表 — PASS（1.3s）
 
     --- 模拟 Router 重启（清空本地缓存 + 未同步）---
     --- Server untrack sn=CN-WH01-9AF3C1D2（变更推送，Router 无需再拉）---
@@ -340,18 +340,18 @@
       [PASS] 应答原样回显 rid
       [PASS] 主动推送不带 rid
 
-### 防 spoof 空口端到端 — PASS（1.8s）
+### 防 spoof 空口端到端 — PASS（1.7s）
 
       无认证空口防 spoof 端到端演示
       被冒充设备 SN : CN-WH01-9AF3C1D2
-      攻击者 SN    : CN-WH01-E2FVXX1V29-76（未登记 → 服务器不认识）
+      攻击者 SN    : CN-WH01-4X00CKRZBQ-25（未登记 → 服务器不认识）
       链路          : Client→STA→空口→AP→Router→UDP:19847→Server
       用例数        : 14（含 1 条合法对照）
     [server] 监听 127.0.0.1:19847 (UDP)，等待 ORPAH 报文…
       🎉 防 spoof 端到端验收全部通过
     ==========================================================================
 
-### 限频（§5.8）端到端 — PASS（7.7s）
+### 限频（§5.8）端到端 — PASS（7.6s）
 
       限频（§5.8）端到端演示
       链路        : Client→STA→空口→AP→Router→UDP:19947→Server

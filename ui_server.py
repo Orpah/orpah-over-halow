@@ -120,6 +120,16 @@ def _int_arg(s, default=None):
     except (TypeError, ValueError):
         return default
 
+
+def _env_float(name, default):
+    """环境变量 → float（拿不到合法数就返回 `default`）。只有**策略值**才走 env，
+    物理量走标定文件（否则“这个数从哪来”会分不清）。"""
+    try:
+        return float(os.environ.get(name, "").strip())
+    except (TypeError, ValueError):
+        return default
+
+
 # ---- 端口分配（默认，可 --port 改 HTTP；组件端口固定避免冲突） ----
 HTTP_PORT = 8901
 CONSOLE_A, LINK_A, HOST_A = 9401, 9411, 9421    # AP（Router 模块）
@@ -193,6 +203,9 @@ class OrpahApp:
         self.cal = ecal.load()
         self.en_on = False                 # 是否让能量接管间隔/级别（默认关：间隔仍手工填）
         self.en_harvest = 0.5              # 平均采集功率（mW，演示参数）
+        self.en_listen = _env_float("ORPAH_LISTEN_INTERVAL_S", en.LISTEN_INTERVAL_S)
+        #                                   多久听一次下行（s）——**策略项**（不是标定项）：
+        #                                   听间隔↑ = 下行变慢/发现更慢；0 = 不建模监听（对照用）
         self.en_charge = self.cal.charge0_mj   # 当前电量（mJ；标定给的初值）
         self.en_store = self.cal.store_mj      # 储能容量（mJ；标定给的容量）
         self.en_push = False               # 采不敷出时是否“硬撑”（吃储能也要被听见）
@@ -637,8 +650,10 @@ class OrpahApp:
             self.en_state = {}
             return
         # 参数来自标定（唯一源）：没标定就是 energy.py 的演示值，出处标在 `calib` 里
+        # 监听开销也交给模型（`listen_mj` 来自标定、`listen_interval_s` 是页面/env 的策略项）
         p = en.plan(self.en_harvest, self.en_charge, self.en_store,
-                    sleep_mw=self.cal.sleep_mw, cost=self.cal.cost)
+                    sleep_mw=self.cal.sleep_mw, cost=self.cal.cost,
+                    listen_mj=self.cal.listen_mj, listen_interval_s=self.en_listen)
         no_interval = p["interval_s"] is None
         if not no_interval:
             interval = float(p["interval_s"])
@@ -648,6 +663,13 @@ class OrpahApp:
         if interval is not None:
             # 演示加速：真实 300s 的间隔按 `en_speedup` 倍压缩，否则现场看不到变化
             self.every = max(0.5, interval / self.en_speedup)
+        # 硬撑时 `plan()` 给的 `silence_in_s` 是“不发报”的缺口（乐观）—— 硬撑明明在发报，
+        # 得按**实际硬撑间隔**重算一次（含监听），否则页面上的倒计时比实情长。
+        silence_in_s = p["silence_in_s"]
+        if hard:
+            silence_in_s = en.survive_s(self.en_charge, self.en_harvest, interval, p["level"],
+                                        store_mj=self.en_store, sleep_mw=self.cal.sleep_mw,
+                                        cost=self.cal.cost, listen_mw=p["listen_mw"])
         self.id_battery_mv = en.mv_of(self.en_charge, self.en_store,
                                       self.cal.cell_empty_mv, self.cal.cell_full_mv)
         self.id_level_energy = 1 if p["degraded"] else None   # 1 = HS256（§8.2 的 L1 算法）
@@ -657,17 +679,22 @@ class OrpahApp:
             "degraded": p["degraded"], "degraded_reason": p["degraded_reason"],
             "interval_s": p["interval_s"], "every_s": round(self.every, 2),
             "net_mw": p["net_mw"], "budget_ok": p["budget_ok"],
-            "silence_in_s": p["silence_in_s"], "usable": p["usable"], "why": p["why"],
+            # 监听（固定开销，2026-09-13）：模型算出来的平均值 + 听间隔回显 + 缺钱在哪一层
+            "listen_mw": p["listen_mw"], "listen_interval_s": p["listen_interval_s"],
+            "listen_modeled": p["listen_modeled"], "overhead_mw": p["overhead_mw"],
+            "usable_mw": p["usable_mw"], "report_mw": p["report_mw"],
+            "short_of": p["short_of"],
+            "silence_in_s": silence_in_s, "usable": p["usable"], "why": p["why"],
             "silent": bool(no_interval and not hard), "hard": hard,
-            "silence_eta_s": (round(p["silence_in_s"] / self.en_speedup, 1)
-                              if p["silence_in_s"] is not None else None),
+            "silence_eta_s": (round(silence_in_s / self.en_speedup, 1)
+                              if silence_in_s is not None else None),
         }
         if not drain:
             return
         self.en_charge = en.drain(self.en_charge, self.en_harvest, interval, p["level"],
                                   float(self.every) * self.en_speedup,
                                   store_mj=self.en_store, sleep_mw=self.cal.sleep_mw,
-                                  cost=self.cal.cost)
+                                  cost=self.cal.cost, listen_mw=p["listen_mw"])
 
     def _aim_link_rssi(self):
         """设备自身的 REPORT 里的 rssi = **当前与之关联的那台路由器**测到的强度。
@@ -1145,7 +1172,7 @@ class OrpahApp:
         """能量模型当前参数（GET /api/energy 与 /api/status 共用一份形状）。"""
         return {"harvest_mw": self.en_harvest, "charge_mj": round(self.en_charge, 2),
                 "store_mj": self.en_store, "push": self.en_push,
-                "speedup": self.en_speedup}
+                "speedup": self.en_speedup, "listen_interval_s": self.en_listen}
 
     def energy_axis(self):
         """能量轴：扫采集功率 → 每点策略 + 头条数字（「要多少 mW 才持续跟得住人」）。
@@ -1155,7 +1182,8 @@ class OrpahApp:
         """
         h_max = max(self.en_harvest * 2.0, 0.5)
         ax = en.axis(n=13, h_max=h_max, charge_mj=self.en_charge, store_mj=self.en_store,
-                     sleep_mw=self.cal.sleep_mw, cost=self.cal.cost)
+                     sleep_mw=self.cal.sleep_mw, cost=self.cal.cost,
+                     listen_mj=self.cal.listen_mj, listen_interval_s=self.en_listen)
         for r in ax["rows"]:                       # 附带“页面周期”（演示加速后）
             r["every_s"] = (None if r["interval_s"] is None
                             else round(max(0.5, r["interval_s"] / self.en_speedup), 2))
@@ -1170,6 +1198,8 @@ class OrpahApp:
             "on": self.en_on,
             "params": self._energy_params(),
             "defaults": {"cost_mj": en.COST_MJ, "sleep_mw": en.SLEEP_MW,
+                         "listen_mj": en.LISTEN_MJ,
+                         "listen_interval_s": en.LISTEN_INTERVAL_S,
                          "min_interval_s": en.MIN_INTERVAL_S,
                          "max_useful_interval_s": en.MAX_USEFUL_INTERVAL_S,
                          "charge0_mj": en.CHARGE0_MJ, "store_mj": en.STORE_MJ,
@@ -2350,6 +2380,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     APP.en_store = max(1.0, float(req["store_mj"]))
                 if "push" in req:
                     APP.en_push = bool(req["push"])
+                if "listen_interval_s" in req:
+                    # 策略项：0 = 不建模监听（对照实验）；负值当 0（与页面 min=0 一致）
+                    APP.en_listen = max(0.0, float(req["listen_interval_s"]))
                 if "speedup" in req and float(req["speedup"]) > 0:
                     APP.en_speedup = float(req["speedup"])
             elif a is not None:

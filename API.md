@@ -1033,23 +1033,34 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
 ## 13. `/api/energy`（能量轴：免电池客户端，2026-09-13）
 
 免电池终端（采集 → 储能 → 定期上报）**能报多快、该不该降级、什么时候只能沉默**，
-都由「能量」决定。模型在 `energy.py`（三参数：采集 `harvest_mw` / 储能 `charge_mj` /
-每次上报代价 `cost_mj`）。
+都由「能量」决定。模型在 `energy.py`（采集 `harvest_mw` / 储能 `charge_mj` / 每次上报代价 `cost_mj` /
+**每次听窗口耗电 `listen_mj`** × 多久听一次 `listen_interval_s`）。
+
+> **监听（下行）是固定开销（2026-09-13 加）**：下行不会自己送到，客户端得周期醒来听。
+> `listen_mw = listen_mj / listen_interval_s` 与上报间隔**无关**；真正决定间隔的是
+> **`usable_mw = 采集 − (待机 + 监听)`** —— 页面把它显示为「可上报」，**不要**再拿 `net_mw`
+> （采集 − 待机，含意未变）去解释间隔。采集连监听都供不上时：`interval_s=None`（如实沉默）+
+> `short_of="listen"`（**听不成了**）；**听间隔不会被自动拉长**（那是产品选择），
+> 要调就用 `params.listen_interval_s`（页面输入 / `ORPAH_LISTEN_INTERVAL_S`），`0` = 不建模监听。
 
 > **参数的出处（2026-09-13）**：`energy.py` 里那组数是**演示标定值，不是实测**；上机之后
 > 用**标定文件**（`ORPAH_ENERGY_CALIB` 指路径，缺省仓库根 `energy_calib.json`）换成实测值，
 > 换算/校验/出处全在 `energy_calib.py`（示例 `energy_calib.example.json`）。**没标定 ≠ 出错**
 > （那就是演示值，页面徽标会写“未标定”）；**文件有问题 → 整份不采用**（值回到演示值 +
-> 错误列在 `calib.errors`，**绝不半份生效**）。🔴 **不是标定项**：`min_interval_s` /
-> `max_useful_interval_s` / `emergency_interval_s` —— 那些是**产品选择**，写进文件会被列进
-> “已忽略”。
+> 错误列在 `calib.errors`，**绝不半份生效**）。标定项 8 个物理量（待机 / 两级上报代价 /
+> **每次听窗口耗电** / 储能 / 初值 / 电压两端）；🔴 **策略项不是标定项**：
+> `min_interval_s` / `max_useful_interval_s` / `emergency_interval_s` /
+> **`listen_interval_s`（多久听一次下行）** —— 写进文件会被列进“已忽略”。
 
 ### GET `/api/energy` → 全量视图
 
 ```json
 {"ok":true, "on":true,
- "params":{"harvest_mw":0.5,"charge_mj":1500.0,"store_mj":2000.0,"push":false,"speedup":10.0},
- "defaults":{"cost_mj":{"ES256":15.0,"HS256":5.0},"sleep_mw":0.05,"min_interval_s":2.0,
+ "params":{"harvest_mw":0.5,"charge_mj":1500.0,"store_mj":2000.0,"push":false,"speedup":10.0,
+           "listen_interval_s":60.0},
+ "defaults":{"cost_mj":{"ES256":15.0,"HS256":5.0},"sleep_mw":0.05,"listen_mj":6.0,
+             "listen_interval_s":60.0,
+             "min_interval_s":2.0,
              "max_useful_interval_s":300.0,"charge0_mj":1500.0,"store_mj":2000.0,
              "emergency_interval_s":60.0,"cell_empty_mv":3000,"cell_full_mv":4200},
  "state":{ ...见下表... },
@@ -1076,7 +1087,7 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
 |---|---|---|
 | `on` | — | 开启能量模型；**同时充满电**（演示从“能撑”开始看）。此后间隔/级别由模型接管 |
 | `off` | — | 关闭；清空状态（间隔回到「上报控制」卡片的手填值） |
-| `set` | `on?` `harvest_mw?` `charge_mj?` `store_mj?` `push?` `speedup?` | 改参数；`on:true` 等价于 `on`（首次开启充满），**显式传的参数优先**。`charge_mj` 会被钳到 `store_mj`；`harvest_mw ≥ 0`；`store_mj ≥ 1`；`speedup > 0` |
+| `set` | `on?` `harvest_mw?` `charge_mj?` `store_mj?` `push?` `speedup?` `listen_interval_s?` | 改参数；`on:true` 等价于 `on`（首次开启充满），**显式传的参数优先**。`charge_mj` 会被钳到 `store_mj`；`harvest_mw ≥ 0`；`store_mj ≥ 1`；`speedup > 0`；`listen_interval_s ≥ 0`（**0 = 不建模监听**，对照实验用） |
 | `reset` | `charge_mj?` | 充满（缺省 = `store_mj`） |
 | `reload` | — | **重新读标定文件**（改完文件不用重启 demo）。⚠ 会**同时把储能/初始电量按文件重置**（与按钮上说的一致，不是“悄悄改参数”）；服务端在日志里打印一行新的标定结论 |
 | 其它 | — | `{ok:false, err:"bad_action"}` |
@@ -1085,7 +1096,10 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
   所以返回的 `state` 立刻反映新参数 —— 否则页面改一次参数要等下一个上报周期才看到变化，
   而且白白丢掉一拍储能。
 - **`state` 字段**：`on/harvest_mw/charge_mj/store_mj/mv/level/degraded/degraded_reason/
-  interval_s/every_s/net_mw/budget_ok/silence_in_s/usable/why/silent/hard/silence_eta_s`。
+  interval_s/every_s/net_mw/budget_ok/silence_in_s/usable/why/silent/hard/silence_eta_s`
+  + **监听那组**：`listen_mw`（平均开销）/ `listen_interval_s`（回显；未建模时 `null`）/
+  `listen_modeled` / `overhead_mw`（待机+监听）/ `usable_mw`（**可上报**，驱动间隔的那个数）/
+  `report_mw`（选定间隔下的平均上报功率）/ `short_of`（`null`|`"sleep"`|`"listen"`，**仅**采不敷出时）。
   其中 `every_s` 是**页面周期**（= 真实间隔 ÷ `speedup`，演示加速用）、`silence_eta_s` 同理。
 - **`why` 取值**（机器值，页面按 `en_why_*` 翻译）：`ok`（够用 ES256）/ `degraded_saves`
   （只够 HS256 省电）/ `too_slow`（只够很慢地报）/ `deficit`（采不敷出，净亏）/
@@ -1102,8 +1116,10 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
 interval_s / interval_es256_s / interval_hs256_s / net_mw / budget_ok / silence_in_s / usable /
 why`（+ 页面用的 `every_s`）。横轴上限取 `max(2×当前采集, 0.5mW)` 共 13 点，
 `min_harvest_mw` = **第一个“够用”的点** → 页面头条「要多少 mW 才跟得住人」。
-**这个数跟着标定走**：演示参数下 ≈ `0.083 mW`；换成一份实测样机（待机 8 µA、ES256 2 mJ）后
-降到 ≈ `0.007 mW` —— 演示值把上报代价估高了近 8 倍，所以**别把演示参数下的门槛当结论**。
+**这个数跟着标定与听间隔走**：演示参数 + 听 60s 下 ≈ **`0.167 mW`**（= 固定开销 0.15 + HS256
+恰好跑在 300s 所需）；**关掉监听**（`listen_interval_s=0`）降到 ≈ `0.083 mW` —— 也就是
+**监听把门槛顶高了一倍**；换成一份实测样机（待机 8 µA、ES256 2 mJ、听窗口 8.88 mJ/次）
+则又是另一个数 —— 所以**别把任何一组演示参数下的门槛当结论**。
 
 ### `/api/status` 上的两个字段（1s 轮询用，**不含**扫描表）
 

@@ -310,10 +310,11 @@
      横轴 = 采集功率，纵轴 = 可持续的上报间隔 → 「能量轴」。 -->
 <section class="card" id="ensec">
   <h3><span data-i18n="en_title">能量轴（免电池客户端）</span>
-    <span class="hint" data-i18n="en_hint">采集功率 → 能撑多久报一次；撑不住就降级（HS256），再撑不住就沉默</span></h3>
+    <span class="hint" data-i18n="en_hint">采集功率要先养住待机与监听，剩下的才够上报；撑不住就降级（HS256），再撑不住就如实沉默</span></h3>
   <div class="config-row">
     <label><input id="enOn" type="checkbox"> <span data-i18n="en_on">启用能量模型</span></label>
     <label><span data-i18n="en_harvest">采集</span> <input id="enHarvest" type="number" value="0.5" step="0.01" min="0" style="width:80px"> mW</label>
+    <label><span data-i18n="en_listen">听</span> <input id="enListen" type="number" value="60" step="10" min="0" style="width:70px"> s</label>
     <label><span data-i18n="en_charge">储能</span> <input id="enCharge" type="number" value="1500" step="100" min="0" style="width:90px"> mJ</label>
     <label><span data-i18n="en_store">满储</span> <input id="enStore" type="number" value="2000" step="100" min="0" style="width:90px"> mJ</label>
     <label><input id="enPush" type="checkbox"> <span data-i18n="en_push">按能量放慢上报（关=按固定间隔“硬撑”）</span></label>
@@ -359,7 +360,7 @@
       <tbody id="enAxisList"></tbody>
     </table>
   </div>
-  <p class="hint" data-i18n="en_foot">参数默认是演示值；若已加载实测标定文件，上方徽标会标出哪些项是实测。括号里的秒数是演示加速后的页面周期。</p>
+  <p class="hint" data-i18n="en_foot">参数默认是演示值；若已加载实测标定文件，上方徽标会标出哪些项是实测。“听”间隔（多久醒一次听下行）是策略项、不是标定项：调长 = 下行变慢。监听按平均功率折算（每次听窗口耗电 ÷ 听间隔），沉默倒计时假设它继续按该听间隔监听。</p>
 </section>
 
 <!-- ============ 告警通知（Webhook）配置 ============

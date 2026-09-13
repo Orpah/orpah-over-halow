@@ -54,6 +54,7 @@ GOOD = {
     "sleep": {"sleep_ua": 8},
     "report": {"ES256": {"active_ma": 12, "report_ms": 45},
                "HS256": {"active_ma": 12, "report_ms": 22}},
+    "listen": {"listen_ma": 12, "listen_ms": 200},
     "store_mj": 2000, "charge0_mj": 1500,
     "cell": {"empty_mv": 3000, "full_mv": 4200},
 }
@@ -90,6 +91,15 @@ ck("待机换算 8µA@3.7V → 0.0296 mW",
 ck("上报换算 12mA/3700mV/45ms → 1.998 mJ",
    abs(c.cost["ES256"] - 1.998) < 1e-9, c.cost["ES256"])
 ck("HS256 → 0.9768 mJ", abs(c.cost["HS256"] - 0.9768) < 1e-9, c.cost["HS256"])
+ck("听窗口换算（与上报同一公式）12mA/3700mV/200ms → 8.88 mJ",
+   abs(c.listen_mj - 8.88) < 1e-9, c.listen_mj)
+ck("听窗口也能写直接值 / 少了 listen_ms 要报错（不静默当 0）",
+   load_obj({"schema": ecal.SCHEMA, "listen": {"listen_mj": 6.0}}, "ld.json").listen_mj == 6.0
+   and keys_of(load_obj({"schema": ecal.SCHEMA, "v_mv": 3700,
+                         "listen": {"listen_ma": 12}}, "li.json").errors)
+   == ["en_cal_err_raw_incomplete"],
+   keys_of(load_obj({"schema": ecal.SCHEMA, "v_mv": 3700,
+                     "listen": {"listen_ma": 12}}, "li2.json").errors))
 ck("算式字符串给出来了（可拿计算器核对）",
    "µA" in c.calc["sleep_mw"] and "0.0296" in c.calc["sleep_mw"], c.calc.get("sleep_mw"))
 ck("算式也进 view.rows", any(r["calc"] for r in c.view()["rows"]))
@@ -100,9 +110,9 @@ ck("溯源块读出来了（who/when/how/device）",
    c.origin.get("who") == "tester" and c.origin.get("how", "").startswith("采样电阻"))
 ck("文件指纹 12 位（对齐“是哪一份标定”，不声称来源可信）",
    c.digest and len(c.digest) == 12, c.digest)
-ck("n_measured=7/7", (c.n_measured, c.n_total) == (7, 7))
+ck("n_measured=8/8", (c.n_measured, c.n_total) == (8, 8))
 ck("无错误无提示", not c.errors and not c.notes, keys_of(c.errors) + keys_of(c.notes))
-ck("summary 带上路径与实测项数", "7/7" in c.summary(), c.summary())
+ck("summary 带上路径与实测项数", "8/8" in c.summary(), c.summary())
 
 print("== 3. 两种形式都给：直接值优先；差 >1% 给提示（帮人抓换算错）==")
 same = json.loads(json.dumps(GOOD))
@@ -188,10 +198,12 @@ ck("source 块类型不对 → en_cal_err_source_type（不静默忽略）",
 print("== 7. 不认识的键 / 策略项：列出来，不静默丢 ==")
 c5 = load_obj({"schema": ecal.SCHEMA, "sleep": {"sleep_mw": 0.03},
                "_comment": "注释不算键", "min_interval_s": 5,
+               "listen_interval_s": 30,
                "max_useful_interval_s": 600, "magic": 1}, "notes.json")
-ck("策略阈值 → policy_ignored（每条一个）",
+ck("策略阈值 → policy_ignored（每条一个；**听间隔也是策略不是标定项**）",
    [n["args"]["key"] for n in c5.notes
-    if n["key"] == "en_cal_note_policy_ignored"] == ["max_useful_interval_s", "min_interval_s"],
+    if n["key"] == "en_cal_note_policy_ignored"]
+   == ["listen_interval_s", "max_useful_interval_s", "min_interval_s"],
    c5.notes)
 ck("未知键 → unknown_key", "en_cal_note_unknown_key" in keys_of(c5.notes)
    and [n["args"]["key"] for n in c5.notes
@@ -206,10 +218,20 @@ ck("report 里不认识的级别 → level_unknown（不静默忽略）",
 
 print("== 8. 标定值真的进了模型（不是只画在页面上）==")
 c6 = load_obj(GOOD, "model.json")
-p_cal = en.plan(0.08, c6.charge0_mj, c6.store_mj, sleep_mw=c6.sleep_mw, cost=c6.cost)
+p_cal = en.plan(0.08, c6.charge0_mj, c6.store_mj, sleep_mw=c6.sleep_mw, cost=c6.cost,
+                listen_mj=c6.listen_mj, listen_interval_s=60)
 p_demo = en.plan(0.08, en.CHARGE0_MJ, en.STORE_MJ)
-ck("按标定值算出的策略与演示参数**不同**（说明确实生效）",
-   p_cal["interval_s"] != p_demo["interval_s"], (p_cal["interval_s"], p_demo["interval_s"]))
+ck("按标定值算出的策略与演示参数**不同**（说明确实生效；0.08 mW 两边都是沉默，所以看 0.5 mW）",
+   en.plan(0.5, c6.charge0_mj, c6.store_mj, sleep_mw=c6.sleep_mw, cost=c6.cost,
+           listen_mj=c6.listen_mj, listen_interval_s=60)["interval_s"]
+   != en.plan(0.5, en.CHARGE0_MJ, en.STORE_MJ)["interval_s"],
+   (en.plan(0.5, c6.charge0_mj, c6.store_mj, sleep_mw=c6.sleep_mw, cost=c6.cost,
+            listen_mj=c6.listen_mj, listen_interval_s=60)["interval_s"],
+    en.plan(0.5, en.CHARGE0_MJ, en.STORE_MJ)["interval_s"]))
+ck("★ 标定的**听窗口耗电**也进了模型（固定开销里含监听）",
+   abs(p_cal["listen_mw"] - c6.listen_mj / 60.0) < 1e-9
+   and abs(p_cal["overhead_mw"] - (c6.sleep_mw + c6.listen_mj / 60.0)) < 1e-9,
+   (p_cal["listen_mw"], p_cal["overhead_mw"]))
 ck("同一份标定 weight 一致：显式传参 == Calib 暴露的属性",
    abs(p_cal["net_mw"] - round(0.08 - c6.sleep_mw, 4)) < 1e-9, p_cal["net_mw"])
 ck("电压映射也吃标定端点（空/满）",
@@ -251,7 +273,7 @@ ks = ecal.i18n_keys()
 ck("下发给页面的键表全是 en_cal_*（i18n 守卫按它逐个核字典）",
    len(ks) >= 35 and all(k.startswith("en_cal_") for k in ks), len(ks))
 ck("键表覆盖：字段名 / 出处 / 徽标四态 / 错误 / 提示 / 表格标题",
-   all(k in ks for k in ("en_cal_f_sleep_mw", "en_cal_prov_measured",
+   all(k in ks for k in ("en_cal_f_sleep_mw", "en_cal_f_listen_mj", "en_cal_prov_measured",
                          "en_cal_src_none", "en_cal_src_error", "en_cal_err_parse",
                          "en_cal_note_no_source", "en_cal_th_value", "en_cal_fold")))
 try:

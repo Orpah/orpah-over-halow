@@ -335,10 +335,20 @@
     ③ 沉默必须**归因分叉**：最后一条已签电量低 → `no_report_energy`（warn，等它取能）；
     电量充足 → `no_report`（30s warn → 300s crit，该出警）。**两者不得合并**（处置相反）；
     ④ `/api/status.energy` 与 GET `/api/energy` 的 `on/params/state` **形状必须一致**（页面同一份渲染代码），
-    但 `status` 里**不放扫描表**（13 行不该每秒重算/重传）—— **鼎过一回**：曾经 `status.energy`
+    但 `status` 里**不放扫描表**（13 行不该每秒重算/重传）—— **踩过一回**：曾经 `status.energy`
     就是扁平 `state`，页面按 `{on,params,state}` 读 → 状态格全「—」、输入框不回显、扫描表标不出当前点。
     POST `/api/energy` 里调 `_energy_step(drain=False)`（只重算策略不推电量）以便立即回显。
-    测试：`test_energy.py`（51 条，含“各级别间隔单调不增 + 恰好一处有意跳变”的回归锁）+ `test_alerts.py`/`test_server.py`。
+    ⑤ **监听（下行）是固定开销**（2026-09-13 加）：`listen_mw = listen_mj / listen_interval_s`，
+    `overhead = 待机 + 监听`，而真正决定间隔的是 **`usable = 采集 − overhead`** ——
+    `net_mw`（采集 − 待机）**含意不变**，但页面不再拿它解释间隔（显示改成「可上报」= `usable_mw`）。
+    ★ **采集连监听都供不上时如实报“听不成了”**（`short_of=listen`）并沉默，**绝不自动拉长听间隔**
+    （听间隔↑ = 下行变慢、发现更慢，那是产品选择，不是模型该拍板的）—— 同理 `drain` / `survive_s`
+    都**必须**传 `listen_mw`（漏了会让电量推进比模型说的乐观，而它会写成已签的 `battery_mv`）。
+    ★ `listen_interval_s=0` = 不建模监听（对照用），此时回的是 **None**（不是 0，不假装“0s 听一次”）。
+    ⑥ **浮点容差**：判定写成 `interval <= max_useful_s + 1e-9` —— “恰好等于上限”必须算够用，
+    否则门槛会随浮点噪声跳一档（除法在边界上会给出 300.00000000000006），用户看到的是假象。
+    测试：`test_energy.py`（73 条，含“关掉监听 → 逐位复现加监听之前的数”的回归锁 +
+    “0.08 mW 从「降级撑着」变成「沉默」”的事实锁）。
   - **能量参数实测标定（2026-09-13，用户选「C 标定入口 + 只算/页面呈现，不动链路」）**：
     唯一来源 = `energy_calib.py`（读文件 → 换算 → 标出处）；判定仍在 `energy.py`（**不重算**）。
     路径 `ORPAH_ENERGY_CALIB` → 缺省仓库根 `energy_calib.json`（示例 `energy_calib.example.json`，
@@ -347,8 +357,9 @@
     （值回演示值 + 错误可见，**绝不半份生效**：一半实测一半演示而页面看着“已标定”最坏）；
     ② **逐项标出处**（`measured`/`demo`）+ 溯源（device/who/when/how + 文件指纹）—— 页面徽标**常显**，
     因为“这个数是实测的还是演示的”是可信度前提；**没标定 ≠ 已实测**。
-    ③ **策略阈值不是标定项**（`min_interval_s`/`max_useful_interval_s`/`emergency_interval_s`
-    是产品选择 → 写进文件只列“已忽略”）；不认识的键也**列出来**（不静默丢）；`_` 开头当注释。
+    ③ **策略项不是标定项**（`min_interval_s`/`max_useful_interval_s`/`emergency_interval_s`
+    以及 **`listen_interval_s`（多久听一次下行）**是产品选择 → 写进文件只列“已忽略”）；
+    不认识的键也**列出来**（不静默丢）；`_` 开头当注释。
     ④ **换算只写一份**（`sleep_mw_of`/`cost_mj_of`：`µA×mV÷1e6 = mW`、`mA×mV×ms÷1e6 = mJ`），
     算式字符串随值下发给页面供核对；两种写法都给且差 >1% → 一条提示（不是悄悄取一个）。
     ★ **页面不许写第二份字段表**：字段清单/单位/小数位/i18n 键/算式全在 `energy_calib.FIELD_IDS`+
@@ -358,7 +369,7 @@
     （不报错、不影响别的任何测试变红）。`test_appjs.py` 锁这条 + `renderCalib` 挂在 `renderEnergy` 上。
     ★ 服务端下发的键（`en_cal_*`，39 个）归 `test_i18n.py` 管（第三类来源 = `energy_calib.i18n_keys()`）；
     `_bad()` 校验 kind ∈ `ERROR_KINDS`（拼错 `kind` 只会显示成键名，什么都不报）。
-    测试：`test_energy_calib.py`（60 条，含“坏文件整份不采用”“换算算式”“出处”）+ `test_appjs.py` + `test_i18n.py`。
+    测试：`test_energy_calib.py`（70 条，含“坏文件整份不采用”“换算算式”“出处”）+ `test_appjs.py` + `test_i18n.py`。
     **仍未做**：真机标定数值（上机测，见 SPEC F-11）；**时变取能 + 储能缓冲**与**监听/占空比开销**
     （本次没选，属模型形状变更）。
   - **Router 下行来源校验（A 方案，2026-09-13 用户选）**：`router._from_server()` —— 下行

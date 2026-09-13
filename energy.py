@@ -20,20 +20,39 @@ ORPAH 的终端设定是**免电池可穿戴**（项链/鞋/钮扣，靠运动/�
 | `harvest_mw` | 平均**采集**功率（mW）——可调，是能量轴的横轴 |
 | `store_mj`   | **储能**容量（mJ；电容/电池），当前电量 `charge_mj` |
 | `cost_mj`    | **单次上报**耗电（mJ；唤醒+发帧+签名），按级别不同（ES256 比 HS256 贵） |
+| `listen_mj` / `listen_interval_s` | **每次听窗口**耗电（mJ）与**多久听一次**（s）——见下「监听」 |
 
 派生量：净功率 `net = harvest - sleep`（`sleep_mw` = 待机功耗，否则设备永不掉电）；
-可维持间隔 `cost / net`；**还能撑多久**（`silence_in_s`）= 在吃储能时 `charge / 缺口`。
+固定开销 `overhead = sleep + listen_mw`；**真正能拿去上报的功率** `usable = harvest - overhead`；
+可维持间隔 `cost / usable`；**还能撑多久**（`silence_in_s`）= 在吃储能时 `charge / 缺口`。
+
+## 监听（下行是免电池终端的**固定开销**，2026-09-13 加）
+
+下行（走失表更新 / 回执 / ERROR）**不会自己送到**：客户端必须**周期性醒来听**。
+这一块在 2026-09-13 之前的模型里**是 0** —— 而真机上它常常**比待机还贵**
+（听窗口 = 唤醒 + RF 收 + 解码；以“200ms @12mA @3.7V”为量级 = **8.9 mJ/次**，
+每 60s 听一次就是 **0.15 mW**，而待机才 0.05 mW）。三条口径：
+
+1. **按平均功率折算**：`listen_mw = listen_mj / listen_interval_s`，进**固定开销**那一侧
+   （与上报间隔无关）。模型**不**建窗口内的时序（醒多久、什么时候收）。
+2. **听间隔是产品选择，不是标定项**：`listen_interval_s` 调长 = 下行变慢、发现更慢 ——
+   那是取舍，**模型不替调用方拍板**。采集供不住时，模型**如实报“没有可维持间隔”**
+   （`interval_s=None`）并用 `short_of` 指哪一层缺钱，**绝不自作主张把听间隔拉长**。
+3. **沉默倒计时按“继续按听间隔监听”算**（它是唯一还能收到下行的方式）。
+   固件若选择“干脆不听了去保命”，能撑更久 —— 那是另一种产品选择，本模型**不建**。
+   另：听失败后的重试/重关联、信标跟踪的差别（DTIM/唤醒源）也没建。
 
 ## ⚠ 参数是**演示标定值，不是实测**
 
-`COST_MJ` / `SLEEP_MW` / `CELL_*_MV` / `STORE_MJ` 全是**凑出来能演示的量级**，
-**没有**真机实测依据（真机标定要上机测唤醒/发帧/签名的能耗，属阶段二）。所以：
+`COST_MJ` / `SLEEP_MW` / `LISTEN_MJ` / `LISTEN_INTERVAL_S` / `CELL_*_MV` / `STORE_MJ`
+全是**凑出来能演示的量级**，**没有**真机实测依据（真机标定要上机测唤醒/发帧/签名/听窗口
+的能耗，属阶段二）。所以：
 - 任何文档/页面上引用这些数都要标「演示参数」；
 - 结论只用于演示**趋势**（采集越低 → 间隔越长 → 级别越低 → 最终沉默），不能当时长承诺。
 
 ## 级别与间隔策略（用户 2026-09-13 选「A. 允许降级，但必须显式标注」）
 
-先说清楚 **`P = max(net, 0)` = 可用于上报的功率**（净功率：采集 − 待机）。规则表：
+先说清楚 **`P = max(usable, 0)` = 真正能拿去上报的功率**（采集 − 待机 − 监听）。规则表：
 
 | `P` | 条件 | 级别 | 间隔 | `why` |
 |---|---|---|---|---|
@@ -63,6 +82,10 @@ ORPAH 的终端设定是**免电池可穿戴**（项链/鞋/钮扣，靠运动/�
    `test_energy.py` 把这个跳跃锁成已知行为，避免下次被当成 bug。
 5. 覆盖规则：电量连**一次**上报都不够（`charge < cost`）→ `why="empty"`（现在发不动；
    长期收支可能仍然平衡，两者不矛盾）。
+6. **`why="deficit"` 另给归因**（`short_of`）：`"sleep"` = 采集连待机都不够；
+   `"listen"` = 供得住待机、供不住监听（**听不成了**，页面/告警据此说清差在哪）。
+   没有单个 why 能描述“哪一层缺钱”—— 所以不在 `why` 里堆码，而是另给一个字段（同理于
+   服务端从（级别+电量）**推导** `degraded_reason` 而不是新增报文字段）。
 
 ## 只算不改
 
@@ -74,6 +97,9 @@ ORPAH 的终端设定是**免电池可穿戴**（项链/鞋/钮扣，靠运动/�
 # ---- 演示参数（**未按真机实测标定**；见模块头「⚠ 参数」） ----
 SLEEP_MW = 0.05                      # 待机功耗（mW）：MCU 深睡眠 + 采集器静态损耗
 COST_MJ = {"ES256": 15.0, "HS256": 5.0}   # 单次上报耗电（mJ）：ES256 比 HS256 贵约 3 倍
+LISTEN_MJ = 6.0                      # **每次听窗口**耗电（mJ，演示量级：唤醒 + RF 收 + 解码）
+LISTEN_INTERVAL_S = 60.0             # **多久听一次**（s）—— 产品选择（不是标定项）：
+#                                      听间隔↑ = 下行变慢/发现更慢；模型不替你拍这个板（见模块文档）
 MIN_INTERVAL_S = 2.0                 # 间隔下限（再快服务器/空口也撑不住，且无意义）
 MAX_USEFUL_INTERVAL_S = 300.0        # 间隔上限：超过就"跟不住人"（追踪语义上限）
 EMERGENCY_INTERVAL_S = 60.0          # `interval_s=None`（采不敷出）时演示用的"硬撑"间隔：
@@ -85,6 +111,10 @@ CELL_FULL_MV = 4200                  # 电压↔电量映射：满（单节锂�
 
 LEVEL_ES = "ES256"
 LEVEL_HS = "HS256"
+
+# 浮点容差：“恰好等于上限”必须算够用 —— 除法常在边界上给出 300.00000000000006 这种值，
+# 没容差的话门槛会随浮点噪声跳档（用户看到的是假象：多一点点采集反而不够用）。
+_EPS = 1e-9
 
 
 def mv_of(charge_mj, store_mj=STORE_MJ, empty_mv=CELL_EMPTY_MV, full_mv=CELL_FULL_MV):
@@ -101,8 +131,11 @@ def mv_of(charge_mj, store_mj=STORE_MJ, empty_mv=CELL_EMPTY_MV, full_mv=CELL_FUL
 
 
 def plan(harvest_mw, charge_mj, store_mj=STORE_MJ, sleep_mw=SLEEP_MW, cost=None,
-         min_interval_s=MIN_INTERVAL_S, max_useful_s=MAX_USEFUL_INTERVAL_S):
+         min_interval_s=MIN_INTERVAL_S, max_useful_s=MAX_USEFUL_INTERVAL_S,
+         listen_mj=LISTEN_MJ, listen_interval_s=LISTEN_INTERVAL_S):
     """能量 → 可执行策略：用哪个级别、多久报一次、还能撑多久、会不会沉默。
+
+    `listen_interval_s=0` = **不建模监听**（拿来做对照实验：加监听之前的行为可以逐位复现）。
 
     返回（字段都有明确含义，**无值给 `None` 不给 0**）：
 
@@ -111,30 +144,42 @@ def plan(harvest_mw, charge_mj, store_mj=STORE_MJ, sleep_mw=SLEEP_MW, cost=None,
     | `level` | 选定的算法级别（`ES256` / `HS256`） |
     | `degraded` / `degraded_reason` | 是否因能量降级 / 成因（`"energy"` 或 `None`） |
     | `interval_s` | 选定策略的可维持上报间隔（秒） |
-    | `interval_es256_s` / `interval_hs256_s` | 两个候选级别的间隔（解释"为什么降级"用；`None`=净功率不足算不出） |
-    | `net_mw` | 净功率（采集 − 待机） |
+    | `interval_es256_s` / `interval_hs256_s` | 两个候选级别的间隔（解释"为什么降级"用；`None`=可上报功率不足算不出） |
+    | `net_mw` | 净功率（采集 − 待机）—— **含意未变**（兼容）；要解释间隔请看 `usable_mw` |
+    | `listen_mw` / `listen_interval_s` / `listen_modeled` | 监听的**平均开销** / 听间隔（回显）/ 是否建模了监听 |
+    | `overhead_mw` | 固定开销 = 待机 + 监听（与上报间隔无关） |
+    | `usable_mw` | **真正能拿去上报的功率** = 采集 − 固定开销（负值钳到 0） |
+    | `report_mw` | 按选定间隔跑时，上报的**平均功率**（`None` = 没有可维持间隔） |
     | `budget_ok` | 当前策略是否收支平衡（`False` = 在吃储能，会走向沉默） |
     | `silence_in_s` | 还能撑多久（秒）；`None` = 收支平衡，不会因没电沉默 |
+    | `short_of` | 缺钱在哪一层（仅 `budget_ok=False`）：`"sleep"` / `"listen"` / `None` |
     | `usable` | 是否持续“跟得住人”（间隔 ≤ `max_useful_s` 且收支平衡且电量够发下一条） |
     | `why` | 机器码：`ok` / `degraded_saves` / `too_slow` / `deficit` / `no_energy` / `empty` |
 
-    `interval_s=None` = **没有可维持的间隔**（采集连待机都不够）：调用方应让它**如实沉默**，
+    `interval_s=None` = **没有可维持的间隔**（采集连固定开销都供不住）：调用方应让它**如实沉默**，
     或者（如果选择"宁可吃储能也要被听见"）用 `EMERGENCY_INTERVAL_S` + `survive_s()` 硬撑，
-    并把硬撑的截止时间告诉服务端。
+    并把硬撑的截止时间告诉服务端。**听间隔不会被自动拉长**（见模块文档「监听」第 2 条）。
     """
     cost = cost or COST_MJ
     harvest_mw = float(harvest_mw)
     charge_mj = float(charge_mj)
-    net = harvest_mw - float(sleep_mw)
-    usable_mw = max(net, 0.0)          # 可用于上报的功率（净功率为负 → 一点都匀不出来）
+    sleep_mw = float(sleep_mw)
+    listen_mj, listen_interval_s = float(listen_mj), float(listen_interval_s)
+    if listen_mj < 0 or listen_interval_s < 0:      # 写错就报，不静默当成 0
+        raise ValueError("listen_mj / listen_interval_s 不能为负")
+    listen_modeled = listen_interval_s > 0
+    listen_mw = (listen_mj / listen_interval_s) if listen_modeled else 0.0
+    overhead = sleep_mw + listen_mw
+    net = harvest_mw - sleep_mw                   # 含意不变（采集 − 待机）
+    usable_mw = max(harvest_mw - overhead, 0.0)   # 真正能拿去上报的功率
     c_es, c_hs = float(cost[LEVEL_ES]), float(cost[LEVEL_HS])
 
     if usable_mw > 0:
         iv_es = max(c_es / usable_mw, min_interval_s)
         iv_hs = max(c_hs / usable_mw, min_interval_s)
-        if iv_es <= max_useful_s:
+        if iv_es <= max_useful_s + _EPS:
             level, interval, why, degraded = LEVEL_ES, iv_es, "ok", False
-        elif iv_hs <= max_useful_s:
+        elif iv_hs <= max_useful_s + _EPS:
             level, interval, why, degraded = LEVEL_HS, iv_hs, "degraded_saves", True
         else:
             level, interval, why, degraded = LEVEL_HS, iv_hs, "too_slow", True
@@ -144,9 +189,16 @@ def plan(harvest_mw, charge_mj, store_mj=STORE_MJ, sleep_mw=SLEEP_MW, cost=None,
         iv_es = iv_hs = None
         why = "deficit" if harvest_mw > 0 else "no_energy"
 
+    # 缺钱在哪一层（仅采不敷出时有值）：连待机都不够 vs 供得住待机、供不住监听
+    short_of = None
+    if harvest_mw < sleep_mw:
+        short_of = "sleep"
+    elif listen_modeled and harvest_mw < overhead:
+        short_of = "listen"
+
     # 收支：按选定间隔跑，缺口多大；有缺口就吃储能 → 还能撑多久
     spend_mw = 0.0 if interval is None else (c_hs if level == LEVEL_HS else c_es) / interval
-    deficit = float(sleep_mw) + spend_mw - harvest_mw
+    deficit = overhead + spend_mw - harvest_mw
     if deficit > 1e-9:
         budget_ok = False
         silence_in_s = (charge_mj / deficit) if charge_mj > 0 else 0.0
@@ -157,7 +209,7 @@ def plan(harvest_mw, charge_mj, store_mj=STORE_MJ, sleep_mw=SLEEP_MW, cost=None,
     can_afford_next = charge_mj >= (c_hs if level == LEVEL_HS else c_es)
     if not can_afford_next:
         why = "empty"
-    usable = bool(interval is not None and interval <= max_useful_s
+    usable = bool(interval is not None and interval <= max_useful_s + _EPS
                   and budget_ok and can_afford_next)
     return {
         "level": level,
@@ -167,38 +219,52 @@ def plan(harvest_mw, charge_mj, store_mj=STORE_MJ, sleep_mw=SLEEP_MW, cost=None,
         "interval_es256_s": None if iv_es is None else round(max(iv_es, min_interval_s), 2),
         "interval_hs256_s": None if iv_hs is None else round(max(iv_hs, min_interval_s), 2),
         "net_mw": round(net, 4),
+        "listen_mw": round(listen_mw, 4),
+        "listen_interval_s": (listen_interval_s if listen_modeled else None),
+        "listen_modeled": bool(listen_modeled),
+        "overhead_mw": round(overhead, 4),
+        "usable_mw": round(usable_mw, 4),
+        "report_mw": round(spend_mw, 4),
         "budget_ok": bool(budget_ok),
         "silence_in_s": None if silence_in_s is None else round(silence_in_s, 1),
+        "short_of": short_of,
         "usable": usable,
         "why": why,
     }
 
 
 def survive_s(charge_mj, harvest_mw, interval_s, level, store_mj=STORE_MJ,
-              sleep_mw=SLEEP_MW, cost=None):
+              sleep_mw=SLEEP_MW, cost=None, listen_mw=0.0):
     """**硬撑**：明知采不敷出，仍然按 `interval_s` 报 —— 还能撑多久（秒）？
 
     这是“宁可吃储能也要被听见”策略的代价计算（演示里 `plan()` 返回 `interval_s=None` 时用它）。
     返回 `None` = 收支平衡（不会因没电停）；返回 `0.0` = 已经没电。
-    收支 = 待机 + 上报 − 采集（缺口 > 0 就在吃储能）。
+    收支 = 待机 + **监听** + 上报 − 采集（缺口 > 0 就在吃储能）。
+
+    `listen_mw` 由调用方从 `plan()["listen_mw"]` 拿（或自己算 `listen_mj/listen_interval_s`）——
+    **硬撑也得继续听**，否则“还能撑多久”会比实际乐观。
     """
     cost = cost or COST_MJ
     spend_mw = float(cost.get(level, 0.0)) / float(interval_s) if interval_s else 0.0
-    deficit = float(sleep_mw) + spend_mw - float(harvest_mw)
+    deficit = float(sleep_mw) + float(listen_mw) + spend_mw - float(harvest_mw)
     if deficit <= 1e-9:
         return None
     return float(charge_mj) / deficit if charge_mj > 0 else 0.0
 
 
 def drain(charge_mj, harvest_mw, interval_s, level, dt_s, store_mj=STORE_MJ,
-          sleep_mw=SLEEP_MW, cost=None):
+          sleep_mw=SLEEP_MW, cost=None, listen_mw=0.0):
     """推进一拍：返回新的电量（mJ，钳在 [0, store_mj]）。
 
-    收支 = 采集×dt − 待机×dt − 上报耗电×（dt/间隔）——**逐拍结算**，所以间隔比 dt 长时
-    平均下来才是"每次上报摊一次"。间隔 ≤ 0 视为只付待机（不发报）。
+    收支 = 采集×dt − 待机×dt − **监听×dt** − 上报耗电×（dt/间隔）——**逐拍结算**，
+    所以间隔比 dt 长时平均下来才是“每次上报摊一次”。间隔 ≤ 0 视为只付固定开销（不发报）。
+
+    ★ `listen_mw` 必须传（与 `plan()` 同源）：漏了会让**电量推进**比“监听开销”那一步
+    算得乐观 —— 而这条电量又会被写成已签的 `battery_mv`，就成了“模型说一套、报文说另一套”。
     """
     cost = cost or COST_MJ
-    charge = float(charge_mj) + float(harvest_mw) * dt_s - float(sleep_mw) * dt_s
+    charge = (float(charge_mj) + float(harvest_mw) * dt_s
+              - float(sleep_mw) * dt_s - float(listen_mw) * dt_s)
     if interval_s and interval_s > 0:
         charge -= float(cost.get(level, 0.0)) * (dt_s / float(interval_s))
     return max(0.0, min(float(store_mj), charge))
