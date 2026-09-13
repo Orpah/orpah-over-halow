@@ -230,6 +230,7 @@ tr.new { animation: rowin .4s; }
 .id-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .id-row span { color: var(--mut); min-width: 72px; }
 .id-row b.ok { color: var(--grn); }
+.id-row b.warn { color: var(--org); }        /* 覆盖：要降级才够（橙）vs 设计不足（红）*/
 .id-row b.bad { color: var(--red); }
 .id-row.full { grid-column: 1 / -1; }
 .id-row code {

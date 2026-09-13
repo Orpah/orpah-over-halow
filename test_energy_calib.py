@@ -216,7 +216,40 @@ ck("report 里不认识的级别 → level_unknown（不静默忽略）",
    "en_cal_note_level_unknown" in keys_of(load_obj(
        {"schema": ecal.SCHEMA, "report": {"ES384": {"cost_mj": 20}}}, "lv.json").notes))
 
-print("== 8. 标定值真的进了模型（不是只画在页面上）==")
+print("== 8. 实测取能曲线（可选）：形状/时序/功率全查，坏了整份不采用 ==")
+CURVE = {"period_s": 86400, "points": [[0, 0.0], [21600, 0.0], [21600, 1.2],
+                                      [64800, 1.2], [64800, 0.0], [86400, 0.0]]}
+cv = load_obj({"schema": ecal.SCHEMA, "sleep": {"sleep_mw": 0.03},
+               "harvest_curve": CURVE}, "cv.json")
+ck("曲线载入（6 点；阶跃写法合法）", cv.ok and len(cv.curve) == 6, str(cv.curve))
+ck("view 里单独给曲线摘要（n / period_s）",
+   cv.view()["curve"] == {"present": True, "n": 6, "period_s": 86400.0},
+   str(cv.view()["curve"]))
+ck("summary 里也提到曲线（免得只报 1/8 项看着像没标定）",
+   "取能曲线 6 点" in cv.summary(), cv.summary())
+ck("★ 曲线**不计入**那 8 项计数（它是时间序列，不是单值）",
+   cv.n_total == 8 and cv.n_measured == 1, (cv.n_measured, cv.n_total))
+ck("裸数组形式也收（`\"harvest_curve\": [[t, mW], …]`）",
+   load_obj({"schema": ecal.SCHEMA, "harvest_curve": [[0, 0.0], [10, 1.0]]},
+            "cv2.json").curve == [[0.0, 0.0], [10.0, 1.0]])
+ck("不给曲线 → None + view.present=False（**不是错误**）",
+   load_obj({"schema": ecal.SCHEMA, "sleep": {"sleep_mw": 0.03}},
+            "cv3.json").view()["curve"] == {"present": False})
+for bad, kind, why in (
+        ({"points": "nope"}, "curve_shape", "points 不是数组"),
+        ({"points": [[0, 0.0]]}, "curve_shape", "点数 < 2"),
+        ({"points": [[0, 0.0], [5, 1.0, 2]]}, "curve_point", "点不是二元组"),
+        ({"points": [[0, 0.0], ["x", 1.0]]}, "curve_point", "点里有非数字"),
+        ({"points": [[0, 0.0], [5, -1.0]]}, "curve_negative", "功率为负"),
+        ({"points": [[0, 0.0], [10, 0.5], [5, 0.0]]}, "curve_order", "时间倒退")):
+    cc = load_obj({"schema": ecal.SCHEMA, "sleep": {"sleep_mw": 0.03},
+                   "harvest_curve": bad}, "cvbad.json")
+    ck("坏曲线（%s）→ %s + **整份不采用**（值回演示、曲线也不留）" % (why, kind),
+       keys_of(cc.errors) == ["en_cal_err_" + kind]
+       and not cc.ok and cc.curve is None
+       and cc.values["sleep_mw"] == en.SLEEP_MW, keys_of(cc.errors))
+
+print("== 9. 标定值真的进了模型（不是只画在页面上）==")
 c6 = load_obj(GOOD, "model.json")
 p_cal = en.plan(0.08, c6.charge0_mj, c6.store_mj, sleep_mw=c6.sleep_mw, cost=c6.cost,
                 listen_mj=c6.listen_mj, listen_interval_s=60)

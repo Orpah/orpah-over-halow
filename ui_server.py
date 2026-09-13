@@ -206,6 +206,10 @@ class OrpahApp:
         self.en_listen = _env_float("ORPAH_LISTEN_INTERVAL_S", en.LISTEN_INTERVAL_S)
         #                                   多久听一次下行（s）——**策略项**（不是标定项）：
         #                                   听间隔↑ = 下行变慢/发现更慢；0 = 不建模监听（对照用）
+        # 覆盖（不断线）：缺口时长（s）——“取能掉到 0 要撑多久”。0 = 不建模缺口。
+        # 口径（2026-09-13 用户定）：取能波动 ≠ 可以夜间停机；夜间/取能低谷**必须覆盖**，
+        # 不够就降级换覆盖（HS256 + 间隔拉到上限），**绝不沉默**。
+        self.en_gap_s = max(0.0, _env_float("ORPAH_ENERGY_GAP_S", en.GAP_S_DEMO))
         self.en_charge = self.cal.charge0_mj   # 当前电量（mJ；标定给的初值）
         self.en_store = self.cal.store_mj      # 储能容量（mJ；标定给的容量）
         self.en_push = False               # 采不敷出时是否“硬撑”（吃储能也要被听见）
@@ -670,6 +674,10 @@ class OrpahApp:
             silence_in_s = en.survive_s(self.en_charge, self.en_harvest, interval, p["level"],
                                         store_mj=self.en_store, sleep_mw=self.cal.sleep_mw,
                                         cost=self.cal.cost, listen_mw=p["listen_mw"])
+        # 覆盖（不断线，2026-09-13）：缺口场景（page/env 给的 gap_s）或**实测取能曲线**
+        # （标定文件里的 harvest_curve）——两者都给时曲线优先（它更准，且本来就是测出来的）。
+        cover = en.coverage(p, self.en_charge, gap_s=self.en_gap_s, curve=self.cal.curve,
+                            cost=self.cal.cost)
         self.id_battery_mv = en.mv_of(self.en_charge, self.en_store,
                                       self.cal.cell_empty_mv, self.cal.cell_full_mv)
         self.id_level_energy = 1 if p["degraded"] else None   # 1 = HS256（§8.2 的 L1 算法）
@@ -685,6 +693,8 @@ class OrpahApp:
             "usable_mw": p["usable_mw"], "report_mw": p["report_mw"],
             "short_of": p["short_of"],
             "silence_in_s": silence_in_s, "usable": p["usable"], "why": p["why"],
+            # 覆盖（缺口/曲线）：能不能**不断线**、要多少储能、降级换覆盖能多撑多久
+            "cover": cover,
             "silent": bool(no_interval and not hard), "hard": hard,
             "silence_eta_s": (round(silence_in_s / self.en_speedup, 1)
                               if silence_in_s is not None else None),
@@ -1172,7 +1182,8 @@ class OrpahApp:
         """能量模型当前参数（GET /api/energy 与 /api/status 共用一份形状）。"""
         return {"harvest_mw": self.en_harvest, "charge_mj": round(self.en_charge, 2),
                 "store_mj": self.en_store, "push": self.en_push,
-                "speedup": self.en_speedup, "listen_interval_s": self.en_listen}
+                "speedup": self.en_speedup, "listen_interval_s": self.en_listen,
+                "gap_s": self.en_gap_s}
 
     def energy_axis(self):
         """能量轴：扫采集功率 → 每点策略 + 头条数字（「要多少 mW 才持续跟得住人」）。
@@ -1200,6 +1211,7 @@ class OrpahApp:
             "defaults": {"cost_mj": en.COST_MJ, "sleep_mw": en.SLEEP_MW,
                          "listen_mj": en.LISTEN_MJ,
                          "listen_interval_s": en.LISTEN_INTERVAL_S,
+                         "gap_s": en.GAP_S_DEMO,          # 缺口时长默认 = **演示场景值**
                          "min_interval_s": en.MIN_INTERVAL_S,
                          "max_useful_interval_s": en.MAX_USEFUL_INTERVAL_S,
                          "charge0_mj": en.CHARGE0_MJ, "store_mj": en.STORE_MJ,
@@ -2374,15 +2386,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         APP.id_level_energy = None
                 if "harvest_mw" in req:
                     APP.en_harvest = max(0.0, float(req["harvest_mw"]))
-                if "charge_mj" in req:
-                    APP.en_charge = max(0.0, min(float(req["charge_mj"]), APP.en_store))
+                # ★ 先套 `store_mj` 再套 `charge_mj`：页面一次提交两个时，充电量要按**新容量**钳，
+                #   否则「满储改大 + 同时充电」会被**旧容量**无声钳回去（页面上看着像没生效）。
                 if "store_mj" in req:
                     APP.en_store = max(1.0, float(req["store_mj"]))
+                if "charge_mj" in req:
+                    APP.en_charge = max(0.0, min(float(req["charge_mj"]), APP.en_store))
                 if "push" in req:
                     APP.en_push = bool(req["push"])
                 if "listen_interval_s" in req:
                     # 策略项：0 = 不建模监听（对照实验）；负值当 0（与页面 min=0 一致）
                     APP.en_listen = max(0.0, float(req["listen_interval_s"]))
+                if "gap_s" in req:
+                    # 场景项：缺口时长（0 = 不建模缺口）。负值当 0，不让它把报告循环抛死
+                    APP.en_gap_s = max(0.0, float(req["gap_s"]))
                 if "speedup" in req and float(req["speedup"]) > 0:
                     APP.en_speedup = float(req["speedup"])
             elif a is not None:

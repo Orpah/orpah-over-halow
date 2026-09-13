@@ -247,6 +247,114 @@ ck("扫描表的每一行都带监听字段（页面/接口不必自己算）",
 ck("不建模监听时 listen_interval_s=None（**不撒谎说 0s**）",
    en.plan(1.0, en.CHARGE0_MJ, **NO_L)["listen_interval_s"] is None)
 
+print("== 12. 覆盖（不断线）：缺口里能撑多久 + 降级换覆盖 ==")
+# 口径（2026-09-13 用户定）：取能波动 ≠ 可以夜间停机。夜间/取能低谷**必须覆盖**；
+# 不够时先降级（HS256）再把间隔拉到上限，**绝不沉默**；还差多少就如实说。
+P = en.plan(0.5, en.CHARGE0_MJ)                     # 常态：ES256 / 42.86s / 开销 0.15 / 上报 0.35
+ck("不建模缺口（不给 gap_s）→ verdict=none 且**所有数都是 None**（不编）",
+   en.coverage(P, en.CHARGE0_MJ)["verdict"] == "none"
+   and en.coverage(P, en.CHARGE0_MJ)["cover_s"] is None
+   and en.coverage(P, en.CHARGE0_MJ)["degraded"] is None)
+ck("gap_s=0 同样视为不建模（0 ≠ 一个零长度的缺口）",
+   en.coverage(P, en.CHARGE0_MJ, gap_s=0)["verdict"] == "none")
+try:
+    en.coverage(P, en.CHARGE0_MJ, gap_s=-1)
+    ck("写错（负的缺口时长）→ 当场报错", False)
+except ValueError:
+    ck("写错（负的缺口时长）→ 当场报错", True)
+
+c1 = en.coverage(P, 1500.0, gap_s=600.0)            # 缺口 10 分钟
+ck("缺口短 → verdict=ok（常态策略就覆盖得住）",
+   c1["verdict"] == "ok" and c1["covers"], str(c1["verdict"]))
+ck("缺口期净开销 = 固定开销 + 上报功率（0.15 + 0.35 = 0.5 mW）",
+   abs(c1["gap_deficit_mw"] - 0.5) < 1e-9, str(c1["gap_deficit_mw"]))
+ck("能撑 = 储能 / 缺口开销（1500/0.5 = 3000s）", abs(c1["cover_s"] - 3000.0) < 0.1,
+   str(c1["cover_s"]))
+ck("要覆盖该缺口所需的最小储能 = 开销 × 缺口时长（0.5mW × 600s = 300 mJ）",
+   abs(c1["need_store_mj"] - 300.0) < 0.1, str(c1["need_store_mj"]))
+ck("自给自足线 need_harvest_mw = 固定开销 + 上报功率",
+   abs(c1["need_harvest_mw"] - 0.5) < 1e-9, str(c1["need_harvest_mw"]))
+
+c2 = en.coverage(P, 1500.0, gap_s=3600.0)           # 缺口 1 小时：常态 3000s 不够，降级后 9000s 够
+ck("★ 常态不够、**降级换覆盖**够 → verdict=degrade",
+   c2["verdict"] == "degrade" and not c2["covers"] and c2["degraded"]["covers"],
+   str(c2["verdict"]))
+ck("★ 降级口径：HS256（**永不 L3**）+ 间隔拉到可用上限（不再往上）",
+   c2["degraded"]["level"] == "HS256"
+   and c2["degraded"]["interval_s"] == en.MAX_USEFUL_INTERVAL_S,
+   str((c2["degraded"]["level"], c2["degraded"]["interval_s"])))
+ck("★ 降级多撑的时间 extra_s = 9000 − 3000 = 6000s",
+   abs(c2["degraded"]["extra_s"] - 6000.0) < 0.1, str(c2["degraded"]["extra_s"]))
+
+c3 = en.coverage(P, 1500.0, gap_s=12 * 3600.0)      # 缺口 12 小时：降级也不够 → 设计不足
+ck("★ 降级也不够 → verdict=short（**设计不足**，不是“正常作息”）",
+   c3["verdict"] == "short", str(c3["verdict"]))
+ck("如实给出还差多少（降级后仍差 34200s）",
+   abs(c3["degraded"]["gap_short_s"] - 34200.0) < 0.1, str(c3["degraded"]["gap_short_s"]))
+ck("★ 可执行结论：覆盖 12h 缺口，常态要 21.6 J、降级后只要 7.2 J（降级把储能需求降下来）",
+   abs(c3["need_store_mj"] - 21600.0) < 1.0
+   and abs(c3["degraded"]["need_store_mj"] - 7200.0) < 1.0,
+   str((c3["need_store_mj"], c3["degraded"]["need_store_mj"])))
+ck("缺口期还有采集 → 净开销变小、能撑更久（0.5→0.4mW 时 3750s）",
+   abs(en.coverage(P, 1500.0, gap_s=12 * 3600.0, gap_harvest_mw=0.1)["cover_s"]
+       - 3750.0) < 0.1)
+ck("缺口期收支平衡（采集 ≥ 开销）→ cover_s=None + covers=True（**平衡不是 0 秒**）",
+   en.coverage(P, 1500.0, gap_s=3600.0, gap_harvest_mw=0.5)["cover_s"] is None
+   and en.coverage(P, 1500.0, gap_s=3600.0, gap_harvest_mw=0.5)["covers"])
+P_sil = en.plan(0.10, en.CHARGE0_MJ)                # 常态就沉默（report=0）
+ck("常态就沉默时：缺口里只付固定开销（report_mw=0 → 净开销 0.15）",
+   P_sil["report_mw"] == 0.0
+   and abs(en.coverage(P_sil, 1500.0, gap_s=12 * 3600.0)["gap_deficit_mw"] - 0.15) < 1e-9)
+ck("★ 常态本来就不报时，“降级换覆盖”**无益**（extra_s<0：加回报反而更早断线）——"
+   "这种情形该走“加大储能/取能”，页面得区分",
+   en.coverage(P_sil, 1500.0, gap_s=12 * 3600.0)["degraded"]["extra_s"] < 0,
+   str(en.coverage(P_sil, 1500.0, gap_s=12 * 3600.0)["degraded"]["extra_s"]))
+
+print("== 13. 覆盖：按**实测取能曲线**积分（可选路径）==")
+NIGHT_DAY = [[0, 0.0], [6 * 3600, 0.0], [6 * 3600, 1.2],      # 00:00-06:00 无取能
+             [18 * 3600, 1.2], [18 * 3600, 0.0],              # 06:00-18:00 有光
+             [24 * 3600, 0.0]]                                # 18:00-24:00 无取能
+cc = en.coverage(P, 1500.0, curve=NIGHT_DAY)
+ck("最长缺口 = 6 小时（夜）", abs(cc["curve"]["longest_gap_s"] - 21600.0) < 0.1,
+   str(cc["curve"]["longest_gap_s"]))
+ck("★ 要撑过这一夜所需储能 = 0.5mW × 6h = 10800 mJ（**不是**“最长缺口×开销”以外的东西："
+   "中间能回电的地方会自动减掉）",
+   abs(cc["need_store_mj"] - 10800.0) < 0.5, str(cc["need_store_mj"]))
+ck("这条曲线**可永续**（白天净充电 > 夜里净亏）",
+   cc["curve"]["sustainable"] and abs(cc["curve"]["cycle_net_mj"] - 8640.0) < 1.0,
+   str(cc["curve"]["cycle_net_mj"]))
+ck("储能只有 1500 mJ → 夜里就断（50 分钟，0.5mW 下 1500/0.5=3000s）",
+   cc["verdict"] == "short" and abs(cc["curve"]["dead_at_s"] - 3000.0) < 1.0
+   and cc["curve"]["min_charge_mj"] == 0.0, str(cc["curve"]))
+ck("★ 降级换覆盖把“撑过这一夜”的储能需求从 10.8 J 降到 3.6 J",
+   abs(cc["degraded"]["need_store_mj"] - 3600.0) < 0.5,
+   str(cc["degraded"]["need_store_mj"]))
+cc_ok = en.coverage(P, 12000.0, curve=NIGHT_DAY)    # 给足储能（> 10800）
+ck("给足储能 → 不断线（dead_at=None）", cc_ok["curve"]["dead_at_s"] is None
+   and cc_ok["covers"] and cc_ok["verdict"] == "ok", str(cc_ok["curve"]))
+CC_WEAK = [[0, 0.0], [6 * 3600, 0.0], [6 * 3600, 0.6],
+           [18 * 3600, 0.6], [18 * 3600, 0.0], [24 * 3600, 0.0]]
+cw = en.coverage(P, 12000.0, curve=CC_WEAK)
+ck("★ 采集不够自给（日均 0.3mW < 支出 0.5mW）→ sustainable=False + 周期净亏 −17.28 J："
+   "此时 need_store 只是“撑过一个周期”，**再大的储能也只是拖时间**",
+   not cw["curve"]["sustainable"] and abs(cw["curve"]["cycle_net_mj"] + 17280.0) < 1.0
+   and cw["verdict"] != "ok", str(cw["curve"]))
+ck("曲线路径不给单值“能撑多久”（不编不适用的秒数）",
+   cc["cover_s"] is None and cc["gap_deficit_mw"] is None)
+ck("阶跃写法（相邻同刻点）合法；时间**倒退**才报错",
+   en.coverage(P, 1500.0, curve=[[0, 0.0], [10, 0.0], [10, 1.0], [20, 1.0]])["gap_s"] == 20.0)
+for bad, why in (([[0, 0.0], [10, 0.5], [5, 0.0]], "时间倒退"),
+                 ([[0, 0.0]], "点数<2"),
+                 ([[0, -1.0], [10, 0.0]], "功率为负")):
+    try:
+        en.coverage(P, 1500.0, curve=bad)
+        ck("曲线畸形（%s）→ 报错，不静默算出差数" % why, False)
+    except ValueError:
+        ck("曲线畸形（%s）→ 报错，不静默算出差数" % why, True)
+ck("纯函数：同一输入两次结果完全一样（不藏状态）",
+   en.coverage(P, 1500.0, gap_s=3600.0) == en.coverage(P, 1500.0, gap_s=3600.0)
+   and en.coverage(P, 1500.0, curve=NIGHT_DAY) == en.coverage(P, 1500.0, curve=NIGHT_DAY))
+
 print()
 if FAIL:
     print(f"{len(FAIL)} 项失败: " + "; ".join(FAIL))

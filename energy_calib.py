@@ -29,6 +29,8 @@ JSON。路径由 **`ORPAH_ENERGY_CALIB`** 指定；没设就找仓库根目录�
   "report": {"ES256": {"active_ma": 12, "report_ms": 45},  // → 2.00 mJ
              "HS256": {"active_ma": 12, "report_ms": 22}}, // → 0.98 mJ
   "listen": {"listen_ma": 12, "listen_ms": 200},          // 听窗口 200ms @12mA → 8.88 mJ/次
+  "harvest_curve": {"period_s": 86400, "points": [[0, 0], [21600, 0], [21600, 1.2],
+                                                  [64800, 1.2], [64800, 0], [86400, 0]]},
   "store_mj": 2000, "charge0_mj": 1500,
   "cell": {"empty_mv": 3000, "full_mv": 4200}
 }
@@ -37,6 +39,12 @@ JSON。路径由 **`ORPAH_ENERGY_CALIB`** 指定；没设就找仓库根目录�
 **听窗口（`listen`）与上报用同一套换算**（都是“活跃电流 × 电压 × 时长”）。
 注意 **`listen_interval_s`（多久听一次）不是标定项** —— 它是产品选择（听间隔变大 =
 下行变慢、发现更慢），写进文件只会被列进「已忽略」。
+
+**取能曲线（`harvest_curve`，可选）** = **实测**的“取能功率随时间变化”（分段常数，
+秒为单位，`points` 时间非递减；相邻同刻点 = 阶跃）。它用于算**覆盖**（能不能不断线、
+要多少储能）—— 归标定文件，因为它是测出来的数据，不是策略选择。不给就只用“最坏缺口”
+参数（保守：不假装知道中间过程）。⚠ 它**不**计入那 8 项标定的计数（它是时间序列，不是单值），
+页面单独一行显示。
 
 等价写法（已有换算结果时）：`"sleep": {"sleep_mw": 0.03}`、
 `"report": {"ES256": {"cost_mj": 2.0}}`、`"listen": {"listen_mj": 6.0}`；`v_mv`
@@ -116,8 +124,8 @@ LIMITS = {
 # （听间隔↑ = 下行变慢、发现更慢），写进文件只会被列进「已忽略」。
 POLICY_KEYS = ("min_interval_s", "max_useful_interval_s", "emergency_interval_s",
                "listen_interval_s")
-KNOWN_TOP = {"schema", "source", "v_mv", "sleep", "report", "listen", "store_mj",
-             "charge0_mj", "cell"}
+KNOWN_TOP = {"schema", "source", "v_mv", "sleep", "report", "listen", "harvest_curve",
+             "store_mj", "charge0_mj", "cell"}
 
 NOTE_KEYS = {
     "no_source": "en_cal_note_no_source",
@@ -131,7 +139,8 @@ NOTE_KEYS = {
 # 拼错一个 kind 当场报错（否则页面上只会显示成 `en_cal_err_xx`，什么都不报）。
 ERROR_KINDS = ("read", "parse", "not_object", "schema", "field_type",
                "field_range", "raw_incomplete", "source_type",
-               "charge_gt_store", "cell_order")
+               "charge_gt_store", "cell_order",
+               "curve_shape", "curve_point", "curve_negative", "curve_order")
 
 
 def i18n_keys():
@@ -201,6 +210,7 @@ class Calib(object):
         self.errors = []                      # [{key, args}]
         self.notes = []                       # [{key, args}]
         self.calc = {}                        # fid -> 算式字符串（仅实测项）
+        self.curve = None                     # 实测取能曲线 [[t_s, mW], …]（可选，不计入 8 项计数）
         self.values = self.demo_values()
         self.prov = {f: "demo" for f in FIELD_IDS}
 
@@ -269,14 +279,15 @@ class Calib(object):
 
     def summary(self):
         """一行给启动日志/自检看的话（中英无关，纯事实）。"""
+        extra = "，含取能曲线 %d 点" % len(self.curve) if self.curve else ""
         if not self.exists:
             return "未标定 → 用 energy.py 演示值（可设 %s 或放 %s）" % (
                 ENV_PATH, os.path.basename(default_path()))
         if not self.ok:
             return "标定文件不可用 → 仍用演示值：%s（%s）" % (
                 self.errors[0]["key"] if self.errors else "?", self.path)
-        return "已加载 %s：实测 %d/%d 项%s%s" % (
-            self.path, self.n_measured, self.n_total,
+        return "已加载 %s：实测 %d/%d 项%s%s%s" % (
+            self.path, self.n_measured, self.n_total, extra,
             "，指纹 " + self.digest if self.digest else "",
             "" if not self.notes else "，%d 条提示" % len(self.notes))
 
@@ -299,6 +310,10 @@ class Calib(object):
         return out
 
     def view(self):
+        cv = None
+        if self.curve:
+            cv = {"present": True, "n": len(self.curve),
+                  "period_s": round(self.curve[-1][0] - self.curve[0][0], 1)}
         return {
             "schema": SCHEMA,
             "exists": self.exists,
@@ -311,6 +326,7 @@ class Calib(object):
             "origin": dict(self.origin),
             "n_measured": self.n_measured,
             "n_total": self.n_total,
+            "curve": cv or {"present": False},       # 曲线单独一行显示（不计入 8 项计数）
             "values": {f: round(self.values[f], FIELD_DIGITS[f]) for f in FIELD_IDS},
             "prov": dict(self.prov),
             "rows": self.rows(),
@@ -360,6 +376,7 @@ def load(path=None):
         return c
 
     vals, prov, calc = {}, {}, {}
+    curve = None
     root_v = doc.get("v_mv")
     if "v_mv" in doc and not _is_num(root_v):
         c._bad(None, "field_type", key="v_mv")
@@ -516,16 +533,44 @@ def load(path=None):
         c._bad("cell_full_mv", "cell_order",
                lo="%g" % eff["cell_empty_mv"], hi="%g" % eff["cell_full_mv"])
 
+    # --- 实测取能曲线（可选；形状/时序/功率全查，坏了**整份不采用**）---
+    hc = doc.get("harvest_curve")
+    if hc is not None:
+        pts = hc.get("points") if isinstance(hc, dict) else hc
+        if not isinstance(pts, list):
+            c._bad(None, "curve_shape", detail=type(pts).__name__)
+        elif len(pts) < 2:
+            c._bad(None, "curve_shape", n=len(pts))
+        else:
+            out = []
+            for i, pt in enumerate(pts):
+                if (not isinstance(pt, (list, tuple)) or len(pt) != 2
+                        or not _is_num(pt[0]) or not _is_num(pt[1])):
+                    c._bad(None, "curve_point", i=i)
+                    continue
+                t, mw = float(pt[0]), float(pt[1])
+                if mw < 0:
+                    c._bad(None, "curve_negative", i=i, mw="%g" % mw)
+                    continue
+                if out and t < out[-1][0]:
+                    c._bad(None, "curve_order", i=i, t="%g" % t, prev="%g" % out[-1][0])
+                    continue
+                out.append([t, mw])
+            if len(out) == len(pts) and len(out) >= 2:
+                curve = out
+
     # --- 采用 / 整份不采用（硬规则 2） ---
     if not c.ok or c.errors:
         c.ok, c.source = False, "error"
         c.values = c.demo_values()                  # 整份回到演示值（值 + 出处一致）
         c.prov = {f: "demo" for f in FIELD_IDS}
         c.calc = {}
+        c.curve = None
         return c
     c.values.update(vals)
     c.prov.update(prov)
     c.calc = calc
+    c.curve = curve
     n = sum(1 for f in FIELD_IDS if c.prov[f] == "measured")
     c.source = "measured" if n == c.n_total else ("mixed" if n else "none")
     return c
@@ -547,6 +592,8 @@ def main():
             r["value"], " " + r["unit"] + ("  [" + r["calc"] + "]" if r["calc"] else "")))
     for e in c.errors:
         print("  !! " + e["key"] + " " + json.dumps(e["args"], ensure_ascii=False))
+    if c.curve:
+        print("  取能曲线：%d 点，周期 %.0f s" % (len(c.curve), c.curve[-1][0] - c.curve[0][0]))
     return 0 if c.ok else 1
 
 

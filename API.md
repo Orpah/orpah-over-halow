@@ -1110,6 +1110,16 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
   不能确认人是否在场，而 ORPAH 的目标正是确认人还在不在。宁可如实沉默（服务端按沉默处置），
   也不发一条无法确认在场的报。见 SPEC §5.2 规则 E2。
 
+> **覆盖（不断线，2026-09-13）**：`state.cover` —— 缺口（`params.gap_s`）或**实测取能曲线**
+> （标定文件的 `harvest_curve`，两者都给时曲线优先）里**会不会断线**：
+> `verdict`（`ok`/`degrade`/`short`/`none`）、`gap_deficit_mw`、`cover_s`、`covers`、`gap_short_s`、
+> **`need_store_mj`**（覆盖该缺口所需的最小储能）、`need_harvest_mw`（自给自足的线）、
+> `degraded{level,interval_s,deficit_mw,cover_s,covers,gap_short_s,extra_s,need_store_mj}`、
+> `curve{n,period_s,min_charge_mj,dead_at_s,max_drawdown_mj,longest_gap_s,cycle_net_mj,sustainable}`。
+> ★ **`short` = 设计不足**（要出警的），不是“正常作息”；★ 曲线路径下 `cover_s` / `gap_deficit_mw` 为
+> **`null` = 不适用**（答案是 `curve.dead_at_s`），**不要**当成“永远够”；★ `sustainable=false` 时
+> “需要多少储能”不成立（再大也只是拖时间）；★ `degraded.extra_s` 可能为负（常态本来就不报 → 降级无益）。
+
 ### `axis`（扫描表：这就是「能量轴」这个名字）
 
 `rows[]` 每行 = 一个采集功率点上的策略：`harvest_mw / level / degraded / degraded_reason /

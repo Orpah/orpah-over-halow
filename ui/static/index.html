@@ -315,6 +315,7 @@
     <label><input id="enOn" type="checkbox"> <span data-i18n="en_on">启用能量模型</span></label>
     <label><span data-i18n="en_harvest">采集</span> <input id="enHarvest" type="number" value="0.5" step="0.01" min="0" style="width:80px"> mW</label>
     <label><span data-i18n="en_listen">听</span> <input id="enListen" type="number" value="60" step="10" min="0" style="width:70px"> s</label>
+    <label><span data-i18n="en_gap">缺口</span> <input id="enGap" type="number" value="12" step="0.5" min="0" style="width:70px"> h</label>
     <label><span data-i18n="en_charge">储能</span> <input id="enCharge" type="number" value="1500" step="100" min="0" style="width:90px"> mJ</label>
     <label><span data-i18n="en_store">满储</span> <input id="enStore" type="number" value="2000" step="100" min="0" style="width:90px"> mJ</label>
     <label><input id="enPush" type="checkbox"> <span data-i18n="en_push">按能量放慢上报（关=按固定间隔“硬撑”）</span></label>
@@ -345,9 +346,20 @@
       </table>
     </div>
     <div class="hint" id="enCalOrigin"></div>
+    <div class="hint" id="enCalCurve"></div>
     <p class="hint" data-i18n="en_cal_foot">标定只改物理量（待机/上报代价/储能/电压端点），模型形状没变（仍是单点平均功率收支，没有时变取能与储能缓冲）；电压↔电量仍是线性近似。一份文件 = 一次标定（某台样机、某个温度），温度/老化/批次差异没建，别当全生命周期承诺。标定值来自本地文件，不是设备上报。</p>
   </details>
   <div id="enState" class="id-grid"></div>
+  <!-- 覆盖（不断线）：取能波动 ≠ 允许夜间停机 —— 夜间/低谷必须覆盖，不够就降级换覆盖，绝不沉默 -->
+  <div class="id-stream">
+    <div class="pub-head"><span data-i18n="en_cov_title">覆盖（缺口里会不会断线）</span>
+      <span class="hint" id="enCovMsg"></span></div>
+    <div id="enCover" class="id-grid"></div>
+    <details class="fold">
+      <summary data-i18n="en_cov_fold">覆盖口径：取能波动 ≠ 允许夜间停机；不够就降级换覆盖</summary>
+      <p class="hint" data-i18n="en_cov_foot">取能功率会随环境波动（光/运动/温差）—— 那是换能器的事；但 ORPAH 是找人，夜间/取能低谷恰恰是必须覆盖的时段，「天黑就不工作」既不是需求、也不许当正常循环。缺口口径：先算常态能撑多久与要多少储能；不够就降级换覆盖 —— 先降到 HS256（最便宜）再把上报间隔拉到可用上限（再长就跟不住人），算出能多撑多久、还差多少，绝不为了省电沉默（沉默 = 丢人）。断线是设计不足（该出警的），不是作息。曲线（若已载入）是实测数据，归标定文件，它比「最坏缺口」参数准，但不会把「夜间停机」说成正常。</p>
+    </details>
+  </div>
   <div class="id-stream">
     <div class="pub-head"><span data-i18n="en_axis_title">能量轴扫描（采集功率 → 上报间隔）</span>
       <span class="hint" id="enAxisMsg"></span></div>

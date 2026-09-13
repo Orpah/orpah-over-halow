@@ -213,6 +213,34 @@ def check_energy_calib(src):
     return bad
 
 
+def check_energy_cover(src):
+    """覆盖（缺口/曲线）的接线守卫（2026-09-13 加）。
+
+    这条也是“静默空白”型的坑：`renderCover()` 没被调，覆盖块就是一片空 —— 不报错、
+    不影响其它任何测试；而用户看到的只是“这块没做”。另两条：
+    ① 页面输入用**小时**、模型用**秒**，换算只能在提交处做一次（写反了缺口就变 36 倍）；
+    ② 覆盖块必须读后端算好的 `state.cover`，不许页面自己算份数（否则两处漂）。
+    """
+    bad = 0
+    m = re.search(r"function\s+renderEnergy\s*\([^)]*\)\s*\{(.*?)\n\}", src, re.S)
+    if "renderCover(" not in (m.group(1) if m else ""):
+        print("  FAIL renderEnergy() 里没调 renderCover() —— 覆盖块会是空白（看着像没做）")
+        bad += 1
+    if "st.cover" not in src or "function renderCover" not in src:
+        print("  FAIL 覆盖块没读后端的 `state.cover`（页面不许自己算）")
+        bad += 1
+    if "gap_s: (parseFloat($(\"enGap\").value) || 0) * 3600" not in src:
+        print("  FAIL 缺口输入（小时）→ gap_s（秒）的换算不在提交处/写反了")
+        bad += 1
+    for el in ("#enGap", "#enCover"):
+        if el.lstrip("#") not in src:
+            print("  FAIL app.js 里没有用到 %s" % el)
+            bad += 1
+    if not bad:
+        print("  OK   覆盖接线完整（renderCover 挂在 renderEnergy 上 / 只读后端算好的 state.cover / 小时→秒）")
+    return bad
+
+
 def main():
     if not os.path.exists(APP_JS):
         print("  FAIL 找不到 ui/static/app.js")
@@ -229,6 +257,8 @@ def main():
     fail += check_sound_default_off(src)
     print("== 能量标定出处：开页拉整表 / 单一字段表 ==")
     fail += check_energy_calib(src)
+    print("== 覆盖（缺口/曲线）：接线不能静默空白 ==")
+    fail += check_energy_cover(src)
     print("== 页面守卫（app.js 确实被加载） ==")
     fail += page_guard()
     if fail:

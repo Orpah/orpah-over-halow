@@ -750,10 +750,82 @@ function renderCalib(cb) {
     const bits = ["device", "who", "when", "how"].filter(k => o[k]).map(k => o[k]);
     org.textContent = bits.length ? T("en_cal_origin") + "：" + bits.join("  ·  ") : "";
   }
+  // 取能曲线（可选，实测数据）：单独一行 —— 它不计入那 8 项计数，不能让人以为“没标定”
+  const cvEl = $("enCalCurve");
+  if (cvEl && cb.curve !== undefined) {
+    const c = cb.curve || {};
+    cvEl.textContent = c.present
+      ? T("en_cal_curve_present").replace("{n}", enNum(c.n, 0))
+          .replace("{p}", enNum((c.period_s || 0) / 3600, 1))
+      : T("en_cal_curve_none");
+  }
+}
+
+function renderCover(st, on) {
+  const box = $("enCover");
+  if (!box) return;
+  const cell = (k, v, cls) =>
+    `<div class="id-row"><span>${esc(T(k))}</span><b class="${cls || ""}">${v}</b></div>`;
+  const c = st && st.cover;
+  if (!on) {                      // 模型没开 ≠ 缺口没建模：两件事必须分开说
+    box.innerHTML = cell("en_cov_hold", esc(T("en_cov_off")));
+    if ($("enCovMsg")) $("enCovMsg").textContent = "";
+    return;
+  }
+  if (!c || c.verdict === "none") {
+    box.innerHTML = cell("en_cov_hold", esc(T("en_cov_none")));
+    if ($("enCovMsg")) $("enCovMsg").textContent = "";
+    return;
+  }
+  const shortTxt = x => (x == null || x <= 0) ? "" :
+    " · " + T("en_cov_short").replace("{s}", fmtSilence(x));
+  // 「还能撑多久」两种口径：有曲线 → **断线时刻**；没有曲线 → 缺口里能撑的秒数（None = 收支平衡）。
+  // 两种口径**不能混着说**（曲线的 cover_s 恒为 null，那是“不适用”而不是“收支平衡”）。
+  const holdTxt = (node, cv) => {
+    if (cv) {
+      return (cv.dead_at_s == null) ? T("en_cov_curve_ok")
+        : T("en_cov_curve_dead").replace("{s}", fmtSilence(cv.dead_at_s));
+    }
+    return (node.cover_s == null) ? T("en_cov_balance") : fmtSilence(node.cover_s);
+  };
+  // 结论用色 + 文字双通道（红=设计不足 / 橙=得降级 / 绿=覆盖得住）
+  const okCls = c.verdict === "ok" ? "ok" : (c.verdict === "degrade" ? "warn" : "lost-yes");
+  const gapH = (c.gap_s || 0) / 3600;
+  const defHint = (c.gap_deficit_mw == null) ? "" :
+    ` <span class="hint">(${esc(T("en_cov_deficit"))} ${enNum(c.gap_deficit_mw, 3)} mW)</span>`;
+  const deg = c.degraded || {};
+  let degTxt = "—";
+  if (deg.level) {
+    degTxt = esc(deg.level + " + " + enNum(deg.interval_s, 0) + " s") + " → " +
+      esc(holdTxt(deg, deg.curve) + shortTxt(deg.gap_short_s)) +
+      (deg.extra_s != null && deg.extra_s <= 0 ? " " + esc(T("en_cov_deg_no")) : "");
+  }
+  const needDeg = deg.need_store_mj != null
+    ? esc("（" + T("en_cov_need_deg") + " " + enNum(deg.need_store_mj / 1000, 1) + " J）") : "";
+  box.innerHTML =
+    cell("en_cov_gap", esc(enNum(gapH, 1) + " h") + defHint) +
+    cell("en_cov_hold", esc(holdTxt(c, c.curve) + shortTxt(c.gap_short_s)), okCls) +
+    cell("en_cov_verdict", esc(T("en_cov_verdict_" + (c.verdict || "none")))) +
+    cell("en_cov_deg", degTxt) +
+    cell("en_cov_need", esc(enNum((c.need_store_mj || 0) / 1000, 1) + " J") + " " + needDeg) +
+    cell("en_cov_self", esc(enNum(c.need_harvest_mw, 3) + " mW"));
+  if (c.curve) {
+    const cu = c.curve;
+    const sus = cu.sustainable
+      ? T("en_cov_curve_sus_yes").replace("{n}", enNum(cu.cycle_net_mj, 0))
+      : T("en_cov_curve_sus_no").replace("{n}", enNum(cu.cycle_net_mj, 0));
+    box.innerHTML +=
+      cell("en_cov_curve", esc(fmtSilence(cu.longest_gap_s))) +
+      cell("en_cov_curve_sus", esc(sus), cu.sustainable ? "" : "lost-yes");
+  }
+  const msg = $("enCovMsg");
+  if (msg) msg.textContent = T("en_cov_msg" + (c.verdict === "ok" ? "_ok"
+    : (c.verdict === "degrade" ? "_degrade" : "_short")));
 }
 
 function renderEnergy(e, ax) {
   renderCalib(e && e.calib);
+  renderCover(e && e.state, !!(e && e.on));   // 覆盖：缺口里会不会断线（数据在 state.cover 里）
   const box = $("enState");
   if (!box) return;
   const on = !!(e && e.on);
@@ -797,6 +869,7 @@ function renderEnergy(e, ax) {
   const p = (e && e.params) || {};
   if (ae !== "enHarvest" && p.harvest_mw != null) $("enHarvest").value = p.harvest_mw;
   if (ae !== "enListen" && p.listen_interval_s != null) $("enListen").value = p.listen_interval_s;
+  if (ae !== "enGap" && p.gap_s != null) $("enGap").value = (p.gap_s / 3600);
   if (ae !== "enCharge" && p.charge_mj != null) $("enCharge").value = p.charge_mj;
   if (ae !== "enStore" && p.store_mj != null) $("enStore").value = p.store_mj;
   if (ae !== "enSpeedup" && p.speedup != null) $("enSpeedup").value = p.speedup;
@@ -871,6 +944,7 @@ if ($("btnEnApply")) {
     on: !!$("enOn").checked,
     harvest_mw: parseFloat($("enHarvest").value) || 0,
     listen_interval_s: parseFloat($("enListen").value) || 0,
+    gap_s: (parseFloat($("enGap").value) || 0) * 3600,   // 页面用小时，模型用秒
     charge_mj: parseFloat($("enCharge").value) || 0,
     store_mj: parseFloat($("enStore").value) || 0,
     push: !!$("enPush").checked,
