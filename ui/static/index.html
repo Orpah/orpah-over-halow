@@ -285,7 +285,8 @@
 <section class="card" id="ctlsec">
   <h3 data-i18n="ctl_title">上报控制</h3>
   <div class="config-row">
-    <label><span data-i18n="ctl_every">间隔</span> <input id="ctlEvery" type="number" value="2" min="0.3" step="0.1"> <span data-i18n="ctl_sec">秒</span></label>
+    <label><span data-i18n="ctl_every">间隔</span> <input id="ctlEvery" type="number" value="60" min="0.3" step="0.1"> <span data-i18n="ctl_sec">秒</span>
+      <span class="hint" data-i18n="ctl_every_note">常态 60 s（正常情况下客户端每 60 s 连一次 HaLow 路由器）；演示想看得快可改小</span></label>
     <label><span data-i18n="ctl_sn">序列号</span> <input id="ctlSn" value="CN-WH01-9AF3C1D2"></label>
     <label><span data-i18n="ctl_clock">设备时钟偏移</span> <input id="ctlClock" type="number" step="5" value="0" style="width:80px"> <span data-i18n="ctl_sec">秒</span></label>
     <label><span data-i18n="ctl_cap">设备能力</span>
@@ -367,6 +368,7 @@
       <thead><tr>
         <th data-i18n="en_th_harvest">采集 mW</th><th data-i18n="en_th_net">净余 mW</th>
         <th data-i18n="en_th_level">级别</th><th data-i18n="en_th_interval">间隔 s</th>
+        <th data-i18n="en_th_tier">常态</th>
         <th data-i18n="en_th_silence">还能撑 s</th><th data-i18n="en_th_why">原因</th>
       </tr></thead>
       <tbody id="enAxisList"></tbody>
@@ -426,6 +428,7 @@
   <details class="fold">
     <summary data-i18n="alert_th_head">当前阀值（可用环境变量覆盖）</summary>
     <div class="id-grid" id="alertTh"></div>
+    <p class="hint" data-i18n="alert_th_note">长未上报两档阈值随设计常态周期成比例（2.5×/5× 60 s = 150/300 s），常态周期改了它们跟着变；RSSI 突变只在 0.5~15 s 的相邻样本间比，所以把上报周期调到常态 60 s 后它不会触发（要看得把周期调小，或重标定阈值与窗口 —— 重标定未做）。</p>
   </details>
 </section>
 

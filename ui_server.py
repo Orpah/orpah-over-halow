@@ -12,8 +12,12 @@ ui_server.py — ORPAH-over-HaLow L1 demo Web UI（纯 PC，无硬件）
 - 启动 OrpahServer（UDP 19447）+ RouterBridge + ClientHost（周期自动上报）
 - 浏览器打开即看：三层拓扑 + ORPAH-REPORT 实时报文流 + 三端计数
 
-运行：python ui_server.py [--port 8901] [--every 2] [--sn CN-WH01-9AF3C1D2] [--host 0.0.0.0]
+运行：python ui_server.py [--port 8901] [--every 60] [--sn CN-WH01-9AF3C1D2] [--host 0.0.0.0]
 零第三方依赖（仅标准库）。启动后自动打开浏览器 http://127.0.0.1:8901/
+
+`--every`（2026-09-14 用户定）：默认 = **设计常态周期**（`energy.NORMAL_INTERVAL_S` = 60 s，
+即“正常情况下客户端每 60 s 连一次 HaLow 路由器”）—— 不另写一个数（页面/告警阈值也跟它走）。
+演示想看到数字动得快可以传小值（如 `--every 2`），但那是**演示加速**，不是设备常态。
 
 `--host`（2026-09-13）：**只改 HTTP 监听地址**，默认 `127.0.0.1`（只本机可达）。
 想让手机/平板在同网段打开看，传 `--host 0.0.0.0`；组件端口（模拟器 console/link/host、
@@ -151,8 +155,12 @@ ID_LEVEL_MODES = {
 class OrpahApp:
     """装配整条 L1 链路 + 状态/计数（供 UI 轮询）。"""
 
-    def __init__(self, every=2.0, sn="CN-WH01-9AF3C1D2", rssi=-55, walk=True):
+    def __init__(self, every=float(en.NORMAL_INTERVAL_S), sn="CN-WH01-9AF3C1D2",
+                 rssi=-55, walk=True):
+        # 默认间隔 = **设计常态**（60 s，见 energy.NORMAL_INTERVAL_S）—— 单一源，不在各处再写一遍。
+        # 想“演示加速”就显式传小值（任务/命令行）或设能量模式（它会按能量算间隔）。
         self.every = every
+        self.design_every = float(en.NORMAL_INTERVAL_S)   # 页面回显用（与 --every 无关）
         self.sn = sn
         self.rssi = rssi
         # 演示数据：让被保护对象沿路线走动，并按「多台路由器各自测到它」写观测
@@ -693,6 +701,12 @@ class OrpahApp:
             "usable_mw": p["usable_mw"], "report_mw": p["report_mw"],
             "short_of": p["short_of"],
             "silence_in_s": silence_in_s, "usable": p["usable"], "why": p["why"],
+            # 常态三档（2026-09-14）：ok=达到设计常态 / slower=已降速 X 倍 / too_slow=跟不住 /
+            # silent=没得报。**与 `usable` 不是一回事**（usable 只回答“还跟得住吗”）。
+            "tier": p["tier"], "slower_by": p["slower_by"], "normal_s": p["normal_s"],
+            # 取舍备选：现规则“安全优先”（保 ES256），所以低采集下先出现“ES256 但已降速”；
+            # 若降到 HS256 能回到常态，这里给出那条路（页面只陈述，**不自动降级**）。
+            "to_reach_normal": p["to_reach_normal"],
             # 覆盖（缺口/曲线）：能不能**不断线**、要多少储能、降级换覆盖能多撑多久
             "cover": cover,
             "silent": bool(no_interval and not hard), "hard": hard,
@@ -1214,6 +1228,12 @@ class OrpahApp:
                          "gap_s": en.GAP_S_DEMO,          # 缺口时长默认 = **演示场景值**
                          "min_interval_s": en.MIN_INTERVAL_S,
                          "max_useful_interval_s": en.MAX_USEFUL_INTERVAL_S,
+                         # 设计常态周期（2026-09-14）：页面回显/“已降速 X 倍”都按它算 ——
+                         # 不另写 60（也不拿 max_useful 当常态，那只是底线）。
+                         "normal_interval_s": en.NORMAL_INTERVAL_S,
+                         # 演示实际在用的上报周期（`--every`，被能量模式覆盖后是能量算出的）
+                         "every_s": round(float(self.every), 2),
+                         "design_every_s": self.design_every,
                          "charge0_mj": en.CHARGE0_MJ, "store_mj": en.STORE_MJ,
                          "emergency_interval_s": en.EMERGENCY_INTERVAL_S,
                          "cell_empty_mv": en.CELL_EMPTY_MV, "cell_full_mv": en.CELL_FULL_MV},
@@ -2505,7 +2525,8 @@ def build_parser():
     ap.add_argument("--host", default="127.0.0.1",
                     help="HTTP 监听地址（默认 127.0.0.1 只本机；0.0.0.0 = 同网段可用，"
                          "但页面**无认证**，只在可信局域网临时用）")
-    ap.add_argument("--every", type=float, default=2.0, help="自动上报间隔秒")
+    ap.add_argument("--every", type=float, default=float(en.NORMAL_INTERVAL_S),
+                    help="自动上报间隔秒（默认=设计常态 60 s；演示加速可改小）")
     ap.add_argument("--sn", default="CN-WH01-9AF3C1D2",
                     help="终端序列号（Orpah ID：CC-ORG-UNIQUE[-CHECK]）")
     ap.add_argument("--rssi", type=int, default=-55)

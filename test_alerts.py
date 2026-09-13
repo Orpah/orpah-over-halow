@@ -17,7 +17,12 @@ for _k in [k for k in os.environ if k.startswith("ORPAH_ALERT_")]:
 
 import alerts as alr       # noqa: E402
 import cases as cs         # noqa: E402
+import energy as enmod   # 注意：下面第 327 行有个测试助手也叫 `en`，别把模块名占上
 import registry as reg     # noqa: E402
+
+# 长未上报的时间尺度：**跟着设计常态周期走**（2026-09-14）——
+# 那时它不是拍的 30 s，而是 2.5×60 s = 150 s（改周期就跟着变）。
+GAP = int(2.5 * enmod.NORMAL_INTERVAL_S) + 50      # 落在 warn 带里的一个间隔（200s）
 
 NOW = 1_800_000_000     # 固定"现在"，测试可复现
 FAILS = []
@@ -65,20 +70,24 @@ def check(name, cond):
 # ---- 规则 1：长未上报 ------------------------------------------------------
 # 口径（2026-09-12 复核修正）：工作态 = 启用 **或 走失**，且**曾经上报过**。
 # 走失者的追踪器最该盯（掉线往往就是找不到人的原因）；停用/报废不盯。
-r = regis(dev("A", last_seen=NOW - 100),                        # 启用+超时 → 应告警
+r = regis(dev("A", last_seen=NOW - GAP),                        # 启用+超时 → 应告警
           dev("B", last_seen=NOW - 10),                         # 启用+正常 → 不告警
           dev("C", last_seen=None),                             # 从未上报 → 不告警
-          dev("D", status=reg.STATUS_LOST, last_seen=NOW - 100),   # 走失中+超时 → **应告警**
-          dev("E", status=reg.STATUS_DISABLED, last_seen=NOW - 100),  # 停用 → 不告警
-          dev("F", status=reg.STATUS_SCRAPPED, last_seen=NOW - 100))  # 报废 → 不告警
+          dev("D", status=reg.STATUS_LOST, last_seen=NOW - GAP),   # 走失中+超时 → **应告警**
+          dev("E", status=reg.STATUS_DISABLED, last_seen=NOW - GAP),  # 停用 → 不告警
+          dev("F", status=reg.STATUS_SCRAPPED, last_seen=NOW - GAP))  # 报废 → 不告警
 a = alr.evaluate(r, case_mgr(), deque(), now=NOW)
 check("长未上报：启用/走失中的都报，停用/报废不报",
       [x["sn"] for x in a] == ["A", "D"])
-check("长未上报：带 gap 且等级 warn", a[0]["gap"] == 100 and a[0]["level"] == "warn")
+check("长未上报：带 gap 且等级 warn", a[0]["gap"] == GAP and a[0]["level"] == "warn")
 
 # ---- C 方案：按持续时长分级（2026-09-12）----------------------------------
-# 起步 > 30s 是 warn；沉默超过 NO_REPORT_CRIT_SEC（默认 300s）升 crit。
+# 起步 > 2.5×设计常态周期（150s）是 warn；沉默超过 NO_REPORT_CRIT_SEC（默认 5×=300s）升 crit。
 NRC = alr.NO_REPORT_CRIT_SEC
+check("★ 两档阈值都**随设计常态周期成比例**（2.5×/5× 60s = 150/300s），"
+      "不是拍的数字（2026-09-14）",
+      (alr.NO_REPORT_SEC, alr.NO_REPORT_CRIT_SEC)
+      == (int(2.5 * enmod.NORMAL_INTERVAL_S), int(5 * enmod.NORMAL_INTERVAL_S)))
 check("C：默认 no_report 升级阈值 300s（ORPAH_ALERT_NO_REPORT_CRIT_SEC）", NRC == 300)
 check("C：默认 case_handled 升级阈值 48h（ORPAH_ALERT_CASE_HANDLED_CRIT_SEC；"
       "注意与起步阈值 CASE_HANDLED_SEC=24h 是两个不同的量）",
@@ -132,12 +141,12 @@ check("C：排序 crit 在前（同 kind 不同等级也遵守）",
       [(x["sn"], x["level"]) for x in a] == [("B", "crit"), ("A", "warn")])
 
 # 走失设备的告警单独确认（避免以后又被“非启用就不报”改回去）
-a_lost = alr.evaluate(regis(dev("D", status=reg.STATUS_LOST, last_seen=NOW - 100)),
+a_lost = alr.evaluate(regis(dev("D", status=reg.STATUS_LOST, last_seen=NOW - GAP)),
                       case_mgr(), deque(), now=NOW)
-check("长未上报：走失中的追踪器掉线要报（2026-09-12 修正）",
+check("长未上报：走失中的跟踪器掉线要报（2026-09-12 修正）",
       [x["sn"] for x in a_lost] == ["D"])
 check("长未上报：停用的设备不报",
-      alr.evaluate(regis(dev("E", status=reg.STATUS_DISABLED, last_seen=NOW - 100)),
+      alr.evaluate(regis(dev("E", status=reg.STATUS_DISABLED, last_seen=NOW - GAP)),
                    case_mgr(), deque(), now=NOW) == [])
 
 # 边界：刚好等于阈值不算超时（用 > 比较）
@@ -596,7 +605,7 @@ check("阈值快照：覆盖值生效（th 注入优先）",
 # ---- 排序 / 计数 / 空态 ----------------------------------------------------
 
 
-a = alr.evaluate(regis(dev("A", last_seen=NOW - 100)),
+a = alr.evaluate(regis(dev("A", last_seen=NOW - GAP)),
                  case_mgr(case("C001", created=NOW - 300)),
                  deque([rep(False)] * 5), now=NOW)
 check("排序：crit 在 warn 之前", [x["level"] for x in a] == ["crit", "crit", "warn"])
@@ -610,7 +619,7 @@ r2 = reg.Registry(":memory:")
 pid = r2.add_person("测试")
 r2.register("CN-WH01-AAAAAAAA", person_id=pid)     # 会被立案 → 转 lost
 r2.register("CN-WH02-BBBBBBBB")                     # 另一台，不入案
-r2.touch("CN-WH02-BBBBBBBB", ts=NOW - 100)         # 超时
+r2.touch("CN-WH02-BBBBBBBB", ts=NOW - GAP)         # 超时
 c2 = cs.CaseManager(":memory:")
 c2.mark(pid, r2, ts=NOW - 300)                      # 立案 300s 前
 real = alr.evaluate(r2, c2, deque(), now=NOW)
@@ -654,8 +663,9 @@ def reload_with(**env):
 a = reload_with(ORPAH_ALERT_CASE_OVERTIME_SEC="600",
                 ORPAH_ALERT_NO_REPORT_SEC=None, ORPAH_ALERT_SIG_WINDOW=None,
                 ORPAH_ALERT_SIG_FAIL_RATIO=None)
-check("env：未设的项保持默认",
-      (a.NO_REPORT_SEC, a.SIG_WINDOW, a.SIG_FAIL_RATIO) == (30, 5, 0.5))
+check("env：未设的项保持默认（no_report 默认随设计常态周期）",
+      (a.NO_REPORT_SEC, a.SIG_WINDOW, a.SIG_FAIL_RATIO)
+      == (int(2.5 * enmod.NORMAL_INTERVAL_S), 5, 0.5))
 check("env：超时阈值被覆盖", a.CASE_OVERTIME_SEC == 600)
 check("env：未设时 B 的接手阈值保持默认 24h", a.CASE_HANDLED_SEC == 86400)
 
@@ -673,7 +683,9 @@ check("env：B 未超新阈值则不报",
 a = reload_with(ORPAH_ALERT_CASE_HANDLED_SEC=None)
 
 # C 的两个升级阈值也要能用环境变量改（并把“关闭分级”的途径测到：crit <= warn → 直接 crit）
-c = reload_with(ORPAH_ALERT_NO_REPORT_CRIT_SEC="120")
+# 注：起步阈值现已随常态周期（150s），所以下面把两个都显式压小 —— 只压 CRIT 会得到
+# “没有 warn 带”（crit 比 150 还小，一超就直接 crit），那是另一条用例。
+c = reload_with(ORPAH_ALERT_NO_REPORT_SEC="100", ORPAH_ALERT_NO_REPORT_CRIT_SEC="120")
 check("env：C 的 no_report 升级阈值可覆盖", c.NO_REPORT_CRIT_SEC == 120)
 check("env：C 覆盖值切实生效（130s → crit）",
       [x["level"] for x in c.evaluate(regis(dev("A", last_seen=NOW - 130)), case_mgr(),
@@ -681,11 +693,14 @@ check("env：C 覆盖值切实生效（130s → crit）",
 check("env：C 覆盖值切实生效（110s → warn）",
       [x["level"] for x in c.evaluate(regis(dev("A", last_seen=NOW - 110)), case_mgr(),
                                        deque(), now=NOW)] == ["warn"])
-c = reload_with(ORPAH_ALERT_NO_REPORT_CRIT_SEC="10")     # 设得比起步阈值 30 还小
+c = reload_with(ORPAH_ALERT_NO_REPORT_SEC="30",
+                ORPAH_ALERT_NO_REPORT_CRIT_SEC="10")     # crit 比起步阈值 30 还小
 check("env：crit 阈值 <= 起步阈值 → 直接 crit（相当于关掉分级）",
       [x["level"] for x in c.evaluate(regis(dev("A", last_seen=NOW - 40)), case_mgr(),
                                        deque(), now=NOW)] == ["crit"])
-a = reload_with(ORPAH_ALERT_NO_REPORT_CRIT_SEC=None)
+check("env：段内没超起步阈值就什么都不报",
+      c.evaluate(regis(dev("A", last_seen=NOW - 20)), case_mgr(), deque(), now=NOW) == [])
+a = reload_with(ORPAH_ALERT_NO_REPORT_SEC=None, ORPAH_ALERT_NO_REPORT_CRIT_SEC=None)
 # 立案 300s 前：默认 180 会告警，改成 600 后不该告警
 check("env：覆盖值切实用于评估",
       a.evaluate(regis(), case_mgr(case("C001", created=NOW - 300)),

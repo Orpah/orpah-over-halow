@@ -195,6 +195,15 @@ tr.new { animation: rowin .4s; }
   border-radius: 6px; padding: 4px 8px;
 }
 .lost-yes { color: var(--red); font-weight: 600; }
+/* 常态三档（2026-09-14）：状态格的 <b> 与扫描表的 <td> 共用 —— 绿=设计常态、
+   橙=已降速、红=跟不住/沉默。
+   ⚠ 状态格里必须写成 `.id-row .tier-*`：里面那条 `.id-row span { color: var(--mut) }`
+   （0,1,1）会赢过单个类选择器（0,1,0）→ 徽标会**静默变成灰色**、三档看不出区别
+   （实测踩过：表格里颜色对、状态格里全灰）。 */
+.tier-ok, .id-row .tier-ok { color: var(--grn); }
+.tier-slower, .id-row .tier-slower { color: var(--org); }
+.tier-too-slow, .id-row .tier-too-slow,
+.tier-silent, .id-row .tier-silent { color: var(--red); }
 
 /* ---- 能量模型：实测标定（“这个数是实测的还是演示的”必须一眼看得到） ----
    徽标四态用颜色 + 文字双通道（不辨色也能读）；算式用等宽数字对齐，便于核对。 */

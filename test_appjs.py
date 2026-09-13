@@ -241,6 +241,36 @@ def check_energy_cover(src):
     return bad
 
 
+def check_energy_tier(src):
+    """设计常态三档（2026-09-14）的接线守卫。
+
+    “常态 60 s”是个**一等基准**：页面要能一眼分出「在常态 / 已降速 / 跟不住」——
+    而它坏起来同样是静默的：没画标记 = 看着一切正常（跟“够用”一模一样）。
+    所以钉三件事：
+      ① 三档映射只有一份（`EN_TIER`），**不要**在状态格与扫描表各写一套措辞；
+      ② 两处都真的用了它（少一处 = 那处根本没有常态信息）；
+      ③ “要不要降级换常态”只**陈述**（`to_reach_normal`），页面不许自动降级/替用户选。
+    """
+    bad = 0
+    if src.count("function EN_TIER") != 1:
+        print("  FAIL 常态映射 `EN_TIER` 不是恰好一份（多份就会漂）")
+        bad += 1
+    if src.count("EN_TIER(") < 3:          # 1 处定义 + 状态格 + 扫描表
+        print(f"  FAIL `EN_TIER(` 只用 {src.count('EN_TIER(')} 处（状态格与扫描表都要带常态标记）")
+        bad += 1
+    if "to_reach_normal" not in src:
+        print("  FAIL 页面没用到后端的 `to_reach_normal`（降级换常态这条路要摆出来）")
+        bad += 1
+    with open(INDEX_HTML, encoding="utf-8") as f:
+        html = f.read()
+    if 'data-i18n="en_th_tier"' not in html:
+        print("  FAIL 扫描表缺「常态」表头（en_th_tier）—— 多了列就得有表头")
+        bad += 1
+    if not bad:
+        print("  OK   常态三档接线完整（单一映射 / 状态格+扫描表都带 / 降级备选只陈述）")
+    return bad
+
+
 def main():
     if not os.path.exists(APP_JS):
         print("  FAIL 找不到 ui/static/app.js")
@@ -259,6 +289,8 @@ def main():
     fail += check_energy_calib(src)
     print("== 覆盖（缺口/曲线）：接线不能静默空白 ==")
     fail += check_energy_cover(src)
+    print("== 设计常态三档：状态格与扫描表都要带标记 ==")
+    fail += check_energy_tier(src)
     print("== 页面守卫（app.js 确实被加载） ==")
     fail += page_guard()
     if fail:

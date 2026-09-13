@@ -58,6 +58,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | 时钟可信：①无 RTC 设备 `ts=0` → 服务器接收时刻（唯一入口）②设备时钟**偏移/漂移估计**（只估计不改数据；长基线才给漂移，原因可见：基线不足/噪声）③**设备自报能力位 `cap.rtc`**（三态；已签声明防篡改；无 RTC ⇒ 一律服务器时刻且不喂估计器；声明有 RTC 却给不出可用时间 → `id_cap_mismatch` 告警） | `orpah_proto`（`effective_ts`/`cap_of`/`rtc_of`） / `clock.py`（`ClockTracker`） | `test_clock.py`（88 条）+ `test_server.py`（28 条）+ `test_alerts.py` + `demo_clock.py` + 首页「上报控制」能力下拉/ts 置 0 |
 | 抓包解析 / 双源对照（pcap → ORPAH 报文；与 UDP 侧计数对差） | `capture.py`（解析复用 `orpah_proto` 单一源） | `test_capture.py` |
 | **能量轴（免电池客户端）**：模型（采集 / 储能 / 上报代价 / **监听开销**）→ 由能量决定**间隔与降级**；降级**下限 L1**（永不 L3，§8.3 里 L3 不能确认人在场）；电量写进**已签**上报的 `battery_mv`，服务端从（级别+电量）**推导成因**；“没电了”从沉默里**分流**出来（`no_report_energy` warn vs `no_report` crit）。**监听（下行）是固定开销**：听窗口耗时按平均功率计入（`listen_mj ÷ listen_interval_s`）；采集连监听都供不上时**如实报“听不成了”**（`short_of=listen`）并沉默，**不偷偷拉长听间隔**（那是产品取舍） | `energy.py` + `alerts.py` + `server.py`/`ui_server.py` | `test_energy.py`（73 条，含“关掉监听 = 逐位复现旧行为”的回归锁）+ `test_alerts.py` + 首页「能量轴」卡片（含扫描表） |
+| **★设计常态 60 s（一等基准）**：“正常情况下客户端每 60 s 连一次 HaLow 路由器”= `energy.NORMAL_INTERVAL_S`（单一源；`--every`/App/页面/告警阀值全指向它）。“**还跟得住**”（`usable`，≤300 s 底线）与“**在常态**”**分开说**：`tier` 四档 = `ok` 常态 / `slower` 已降速（带倍数）/ `too_slow` 跟不住 / `silent`；三个采集门槛分开显示（维持常态 0.4 mW（ES256）/ 允许降级换常态 0.233 mW / 只求跟得住 0.167 mW）；选级仍是**安全优先** → 低采集下先出现「用着 ES256 但已降速」，模型给出 `to_reach_normal`（降级能不能回常态）但**不自动降级**（强签名 vs 更新频率是产品取舍）；告警 `no_report` 两档随节拍走（2.5×/5× = 150/300 s） | `energy.py` + `alerts.py` + `ui_server.py` + `ui/static/app.js` | `test_energy.py`（第 14 节）+ `test_server.py::TestEnergyDesignNormal`（四个落点逐处点名）+ `test_alerts.py`（阈值比例锁）+ `test_appjs.py`（三档接线） |
 | **能量参数实测标定（把演示值换成实测值）**：JSON 文件（`ORPAH_ENERGY_CALIB` 指路径，缺省仓库根 `energy_calib.json`）—— 可写**原始实测**（`sleep_ua` / `active_ma`×`report_ms` / `listen_ma`×`listen_ms`，代码按 `µA×mV÷1e6 = mW`、`mA×mV×ms÷1e6 = mJ` 换算并附算式）或直接给 mW/mJ；**8 项逐项标出处**（实测 / 演示，页面徐标常显）；**文件有问题整份不采用**（值回演示值 + 错误可见，绝不半份生效）；策略项（含 **`listen_interval_s` 多久听一次**）**不是**标定项（会被列为“已忽略”）；带 `who/when/how/device` 溯源与文件指纹 | `energy_calib.py` + `ui_server.py` + 首页能量卡 | `test_energy_calib.py`（70 条）+ `test_i18n.py`（下标 40 个键）+ `test_appjs.py`（开页拉整表 / 单一字段表） |
 | 存储：SQLite（元数据）+ IoTDB（时序/事件） | `registry`/`cases`/`keystore`/`stations` + `tsdb.py` | `test_tsdb_audit.py` |
 | **覆盖（不断线）—— 取能波动 ≠ 允许夜间停机**：夜间/取能低谷**必须覆盖**（黄金时间含夜），“天黑就不工作”不当正常循环。回答三个可执行的数：缺口里能撑多久 / **要覆盖它需要多少储能** / 不够时**降级换覆盖**（HS256 + 间隔拉到可用上限）能多撑多久、还差多少；**绝不为了省电沉默**。支持两种取能描述：最坏缺口参数（保守）与**实测取能曲线**（分段常数，归标定文件；给出最长缺口、是否可永续、断线时刻、需多少储能）；**不可永续时如实说“再大储能也只是拖时间”**。★ **接进了告警**（SPEC E4③）：`id_cover_short`（`degrade` warn / `short` crit）—— 断线**之前**就能看到，红点/通知/跳转齐全 | `energy.coverage()` + `alerts.id_cover_short` + `ui_server`（缺口参数/曲线/快照）+ 首页覆盖块 | `test_energy.py`（第 12/13 节）+ `test_energy_calib.py`（曲线校验）+ `test_alerts.py`（覆盖告警）+ `test_appjs.py`（接线守卫） |
@@ -268,7 +269,7 @@ Router 主动拉表已在 **L3b** 落地（见下）。
 
 ```bash
 python ui_server.py                  # 自动开浏览器 http://127.0.0.1:8901/（在本仓库根目录跑）
-# 或：python ui_server.py --every 1.5 --sn CN-WH01-9AF3C1D2
+# 或：python ui_server.py --every 2 --sn CN-WH01-9AF3C1D2    # --every 默认 60（设计常态），改小 = 演示加速
 # 想在手机/平板上看（布局已适配窄屏）：加上 --host 0.0.0.0，按启动时打印的局域网地址访问
 python ui_server.py --host 0.0.0.0
 ```

@@ -9,9 +9,16 @@ alerts.py — 告警规则引擎（供页面红点消费）
   告警表达的是"当前状态"，不是"历史"——历史由 IoTDB 事件流（`root.orpah.events`）负责。
 - 阈值默认值是**演示压缩时间**（真实部署要调大），但**全部可用环境变量覆盖**
   （与事件保留期限 `ORPAH_EVENT_RETENTION_DAYS` 同一套机制，改了要重启）：
+  ⚠ **例外（2026-09-14）**：`no_report` 两档**不再拍数字，按设计常态周期成比例**
+  （`2.5×` / `5×` `energy.NORMAL_INTERVAL_S`=60 s → 150 s / 300 s）。
+  理由：客户端的节操就是「正常每 60 s 连一次」，于是“多久没上报才算不正常”
+  **随节拍走**，而不随演示快慢走（以前写 30 s 是拿 2 s 演示周期拍的）。
+  推论（如实写出来，别当 bug）：把演示周期调到 60 s 后 `rssi_jump` **不会自然触发**
+  —— 它只在间隔 0.5~15 s 的相邻样本间比（见下），60 s 已经超出那个窗 → 要看效果
+  得把上报周期调小（或把 `ORPAH_ALERT_RSSI_JUMP_*` 重标定，**这事还没做**）。
 
-      ORPAH_ALERT_NO_REPORT_SEC       长未上报（秒，默认 30）
-      ORPAH_ALERT_NO_REPORT_CRIT_SEC  长未上报升级为 crit（秒，默认 300；C 方案）
+      ORPAH_ALERT_NO_REPORT_SEC       长未上报（秒，默认 2.5×**设计常态周期** = 150）
+      ORPAH_ALERT_NO_REPORT_CRIT_SEC  长未上报升级为 crit（秒，默认 5×常态周期 = 300；C 方案）
       ORPAH_ALERT_CASE_OVERTIME_SEC   走失超时（秒，默认 180）
       ORPAH_ALERT_CASE_HANDLED_SEC    接手后仍未被发现（秒，默认 86400 = 24 小时）
       ORPAH_ALERT_CASE_HANDLED_CRIT_SEC 接手后又多久升 crit（秒，默认 172800 = 48 小时）
@@ -84,14 +91,14 @@ L3（无可用密钥、裸上报）→ 触发“设备异常”通知运维。
 **按持续时长分级（2026-09-12 用户定 C 方案）**：从“有时间阈值”的两条规则开始，时长越长等级越高：
 
     规则                      起步         升级
-    no_report                > 30s  warn   > 300s  crit
+    no_report                > 2.5×常态周期  warn   > 5×常态周期  crit   （默认 150s / 300s）
     case_handled_overtime    > 24h  warn   > 48h   crit
 
 - 为什么只给这两条升级：它们是**“设备/案子沉默得越来越久”**型问题，严重度随时间单调增长；
   而 `case_overtime`（没人接手）与 `sig_fail_rate`（验签被拒）是**定性**问题，
   一发生就该是 crit —— 给它们加 warn 反而会把 A 方案刚解决的问题又拿回来（刚超时先 warn 不报红）。
 - 阈值全部可配（含升级阈值）；两个 crit 阈值默认值是**演示压缩 / 真实**混着的：
-  `NO_REPORT_CRIT_SEC=300`（5 min，与 30s 同一个演示时间尺度）、
+  `NO_REPORT_CRIT_SEC` 与 `NO_REPORT_SEC` **都随设计常态周期成比例**（5×/2.5× 60 s = 300/150 s），
   `CASE_HANDLED_CRIT_SEC=172800`（48h，真实尺度）。
 - 若把 crit 阈值设得比起步阈值还小/相等，则只要超起步阈值就直接 crit（当“关闭分级”用）。
 
@@ -134,6 +141,7 @@ import os
 import time
 
 import cases as cs
+import energy as en
 import registry as reg
 
 LEVEL_CRIT = "crit"
@@ -156,8 +164,11 @@ def _env_float(name, default):
         return default
 
 
-NO_REPORT_SEC = _env_int("ORPAH_ALERT_NO_REPORT_SEC", 30)        # 超过这么久没上报 → 告警
-NO_REPORT_CRIT_SEC = _env_int("ORPAH_ALERT_NO_REPORT_CRIT_SEC", 300)   # 再久 → 升 crit（C）
+# 「多久没上报才算不正常」——**按设计常态周期成比例**，不拍数字（2026-09-14 用户定：
+# 正常每 60 s 连一次 → 150 s 未报属异常，300 s 升 crit）。周期本身就是单一源（energy.NORMAL_INTERVAL_S）。
+NO_REPORT_SEC = _env_int("ORPAH_ALERT_NO_REPORT_SEC", int(2.5 * en.NORMAL_INTERVAL_S))
+NO_REPORT_CRIT_SEC = _env_int("ORPAH_ALERT_NO_REPORT_CRIT_SEC",
+                             int(5 * en.NORMAL_INTERVAL_S))   # 再久 → 升 crit（C）
 CASE_OVERTIME_SEC = _env_int("ORPAH_ALERT_CASE_OVERTIME_SEC", 180)  # 立案后这么久还没发现
 CASE_HANDLED_SEC = _env_int("ORPAH_ALERT_CASE_HANDLED_SEC", 86400)  # 接手后这么久还没发现（B）
 CASE_HANDLED_CRIT_SEC = _env_int("ORPAH_ALERT_CASE_HANDLED_CRIT_SEC", 172800)  # 再久 → crit（C）

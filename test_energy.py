@@ -355,6 +355,66 @@ ck("纯函数：同一输入两次结果完全一样（不藏状态）",
    en.coverage(P, 1500.0, gap_s=3600.0) == en.coverage(P, 1500.0, gap_s=3600.0)
    and en.coverage(P, 1500.0, curve=NIGHT_DAY) == en.coverage(P, 1500.0, curve=NIGHT_DAY))
 
+print("== 14. 设计常态（60 s）≠ 底线（300 s）：三档 tier 与两个门槛 ==")
+# 口径（2026-09-14 用户定）：正常情况下客户端每 60 s 连一次 HaLow 路由器；比它慢 = **已降速**，
+# 300 s 只是“还跟得住”的底线 —— `usable=True` **不等于**正常运行，两者必须分开。
+ck("设计常态常数 = 60 s（用户定，模型单一源）", en.NORMAL_INTERVAL_S == 60.0)
+p = en.plan(1.0, en.CHARGE0_MJ)                     # 间隔 17.65 s
+ck("快于常态 → tier=ok（且没有 slower_by）",
+   p["tier"] == "ok" and p["slower_by"] is None and p["to_reach_normal"] is None,
+   str((p["tier"], p["slower_by"], p["to_reach_normal"])))
+ck("tier 回显 normal_s（页面不必自己写 60）", p["normal_s"] == en.NORMAL_INTERVAL_S)
+p = en.plan(0.25, en.CHARGE0_MJ)                    # 可上报 0.1 → ES256 150s（仍 ≤300，故保 ES256）
+ck("★ **安全优先**：ES256 还跟得住就保 ES256 —— 结果是「强签名但已降速 150 s」",
+   p["tier"] == "slower" and p["level"] == "ES256" and p["interval_s"] == 150.0,
+   str((p["tier"], p["level"], p["interval_s"])))
+ck("★ 同时把另一条路摆出来：降级到 HS256 → 50 s，**能回到常态**",
+   p["to_reach_normal"] == {"level": "HS256", "interval_s": 50.0,
+                            "degraded": True, "tier": "ok"},
+   str(p["to_reach_normal"]))
+p = en.plan(0.20, en.CHARGE0_MJ)                    # 可上报 0.05 → ES256 300s（正好到上限）
+ck("★ 比常态慢但没超上限 → tier=slower + slower_by=5.0（**已降速**）",
+   p["tier"] == "slower" and abs(p["slower_by"] - 5.0) < 1e-9,
+   str((p["tier"], p["interval_s"], p["slower_by"])))
+ck("★ 同一行 `usable=True` 且 `why=ok`（**还跟得住**）—— 所以“跟得住”≠“正常运行”",
+   p["usable"] and p["why"] == "ok" and p["tier"] == "slower",
+   str((p["usable"], p["why"], p["tier"])))
+ck("★ 此处的降级备选：HS256 → 100 s > 60 s，**回不到常态** → 不编一个备选",
+   p["to_reach_normal"] is None, str(p["to_reach_normal"]))
+p = en.plan(0.16, en.CHARGE0_MJ)                    # 可上报 0.01 → ES256 1500s / HS256 500s
+ck("两种级别都超上限 → tier=too_slow（跟不住人）+ slower_by=8.33",
+   p["tier"] == "too_slow" and abs(p["slower_by"] - 8.33) < 0.01 and not p["usable"],
+   str((p["tier"], p["interval_s"], p["slower_by"])))
+ck("没有可维持间隔 → tier=silent", en.plan(0.08, en.CHARGE0_MJ)["tier"] == "silent")
+
+ax2 = en.axis(n=13, h_max=1.0)
+ck("★ 三个门槛都有、且**递增**（底线 0.167 < 降级换常态 0.25 < 常态 0.417 mW）",
+   abs(ax2["min_harvest_mw"] - 0.167) < 1e-9
+   and abs(ax2["min_harvest_normal_alt_mw"] - 0.25) < 1e-9
+   and abs(ax2["min_harvest_normal_mw"] - 0.417) < 1e-9,
+   str((ax2["min_harvest_mw"], ax2["min_harvest_normal_alt_mw"],
+        ax2["min_harvest_normal_mw"])))
+ck("维持常态那个点用的是 ES256（安全优先），降级备选那条路是 HS256",
+   ax2["normal_level"] == "ES256" and ax2["normal_alt_level"] == "HS256"
+   and ax2["normal_s"] == 60.0,
+   str((ax2["normal_level"], ax2["normal_alt_level"])))
+ck("★ 解析值对得上：常态（ES256）0.15 + 15/60 = 0.4 mW；降级换常态 0.15 + 5/60 ≈ 0.2333 mW",
+   abs((OVERHEAD + 15.0 / en.NORMAL_INTERVAL_S) - 0.4) < 1e-9
+   and abs((OVERHEAD + 5.0 / en.NORMAL_INTERVAL_S) - 0.233333) < 1e-6)
+ck("★ 这差得不小：靠强签名维持常态比“降级换常态”贵 1.7 倍（0.4 / 0.2333）",
+   abs(0.4 / (OVERHEAD + 5.0 / en.NORMAL_INTERVAL_S) - 1.714) < 0.01)
+no_l_ax = en.axis(n=13, h_max=1.0, **NO_L)
+ck("★ 监听也会把常态化门槛顶高：关监听 0.333 → 开监听 0.417 mW",
+   abs(no_l_ax["min_harvest_normal_mw"] - 0.333) < 1e-9
+   and abs(ax2["min_harvest_normal_mw"] - 0.417) < 1e-9,
+   str((no_l_ax["min_harvest_normal_mw"], ax2["min_harvest_normal_mw"])))
+ck("扫描表每行都带 tier / slower_by / normal_s / to_reach_normal（页面不必自己算）",
+   all(("tier" in r and "slower_by" in r and "to_reach_normal" in r
+        and r["normal_s"] == 60.0) for r in ax2["rows"]))
+ck("全都不够维持常态时不编数（h_max 很小 → 两个常态化门槛都是 None）",
+   en.axis(n=5, h_max=0.001)["min_harvest_normal_mw"] is None
+   and en.axis(n=5, h_max=0.001)["min_harvest_normal_alt_mw"] is None)
+
 print()
 if FAIL:
     print(f"{len(FAIL)} 项失败: " + "; ".join(FAIL))

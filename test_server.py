@@ -498,5 +498,48 @@ class TestUiHostBind(unittest.TestCase):
             self.assertIn(need, src, f"暴露提示里少了「{need}」")
 
 
+class TestEnergyDesignNormal(unittest.TestCase):
+    """设计常态周期（2026-09-14 用户定）：**正常每 60 s 连一次 HaLow 路由器**。
+
+    为什么值得单独立一组用例：这个数有**四个落点**（模型常量、CLI 默认、`OrpahApp` 默认、
+    页面输入框默认），并且**告警阈值由它成比例推出**（2.5×/5×）。各写一份的典型坏法不是报错，
+    而是「页面显示 60 s、后端还在 2 s 默认」、「改周期后阈值没跟着变」这种**看着都正常**的漂移。
+    所以逐处点名，并让它们指向同一个源（`energy.NORMAL_INTERVAL_S`）。
+    """
+
+    def setUp(self):
+        self.ui = __import__("ui_server")
+        self.en = __import__("energy")
+
+    def test_constant_is_60s(self):
+        self.assertEqual(self.en.NORMAL_INTERVAL_S, 60.0)
+
+    def test_cli_default_is_design_normal(self):
+        args = self.ui.build_parser().parse_args([])
+        self.assertEqual(args.every, self.en.NORMAL_INTERVAL_S, "CLI 默认必须是设计常态，不是演示值 2s")
+
+    def test_app_default_is_design_normal(self):
+        import inspect
+        sig = inspect.signature(self.ui.OrpahApp.__init__)
+        self.assertEqual(sig.parameters["every"].default,
+                         float(self.en.NORMAL_INTERVAL_S), "OrpahApp 默认也要跟同一个源")
+
+    def test_page_default_is_design_normal(self):
+        """页面控制栏的 `#ctlEvery` 默认值 = 设计常态（离线兜底，不许另写一个数）。"""
+        import re as _re
+        with open(os.path.join(HERE, "ui", "static", "index.html"), encoding="utf-8") as f:
+            src = f.read()
+        m = _re.search(r'id="ctlEvery"[^>]*value="([^"]+)"', src)
+        self.assertTrue(m, "没找到 #ctlEvery 的默认值")
+        self.assertEqual(float(m.group(1)), self.en.NORMAL_INTERVAL_S,
+                         "页面默认上报间隔与设计常态不一致（改了模型常量就要同步这里）")
+
+    def test_alert_thresholds_scale_with_cycle(self):
+        """告警阈值**跟着节拍走**：2.5× / 5× 设计常态 → 150 s / 300 s。"""
+        alr = __import__("alerts")
+        self.assertEqual(alr.NO_REPORT_SEC, int(2.5 * self.en.NORMAL_INTERVAL_S))
+        self.assertEqual(alr.NO_REPORT_CRIT_SEC, int(5 * self.en.NORMAL_INTERVAL_S))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -823,6 +823,22 @@ function renderCover(st, on) {
     : (c.verdict === "degrade" ? "_degrade" : "_short")));
 }
 
+// 常态三档（2026-09-14）：`energy.plan()` 的 tier —— ok=设计常态 / slower=已降速 X 倍 /
+// too_slow=跟不住人 / silent=没得报。**与 usable 不是一回事**（usable 只回答“还跟得住吗”）。
+// 颜色与措辞只有这一份（状态格与扫描表共用）——别在别处再写一套“够用/不够用”。
+function EN_TIER(t) {
+  const x = (t && t.slower_by != null) ? enNum(t.slower_by, 1) : "?";
+  switch (t && t.tier) {
+    case "ok": return { cls: "tier-ok", txt: T("en_tier_ok") };
+    case "slower":
+      return { cls: "tier-slower", txt: T("en_tier_slower").replace("{x}", x) };
+    case "too_slow":
+      return { cls: "tier-too-slow", txt: T("en_tier_too_slow").replace("{x}", x) };
+    case "silent": return { cls: "tier-silent", txt: T("en_tier_silent") };
+    default: return { cls: "", txt: "—" };      // 没数据就说没数据，不猜
+  }
+}
+
 function renderEnergy(e, ax) {
   renderCalib(e && e.calib);
   renderCover(e && e.state, !!(e && e.on));   // 覆盖：缺口里会不会断线（数据在 state.cover 里）
@@ -853,12 +869,19 @@ function renderEnergy(e, ax) {
           ? ` <span class="hint">(${enNum(st.listen_interval_s, 0)}s/${T("en_listen_once")})</span>` : "");
     // “缺钱在哪一层”（仅在吃储能时才有值）——只说事实，不猜原因
     const wh = EN_WHY(st.why) + (st.short_of ? " · " + T("en_short_" + st.short_of) : "");
+    // 常态标记：一眼看出“现在是不正常吗”（且与“还跟得住”分开说）
+    const tg = EN_TIER(st);
+    const alt = (st.to_reach_normal && st.tier !== "ok")
+      ? ` <span class="hint">${esc(T("en_tier_alt").replace(
+          "{x}", enNum(st.to_reach_normal.interval_s, 1)))}</span>`
+      : "";
     box.innerHTML =
       cell("en_st_state", esc(T("en_state_on"))) +
       cell("en_st_mv", lv, lvCls) +
       cell("en_st_level", esc(st.level || "—") +
            (st.degraded ? ` <span class="hint">${esc(T("en_degraded"))}</span>` : "")) +
-      cell("en_st_interval", esc(fmtInterval(st.interval_s))) +
+      cell("en_st_interval", esc(fmtInterval(st.interval_s)) +
+           ` <span class="${tg.cls}">${esc(tg.txt)}</span>` + alt) +
       cell("en_st_silence", esc(sTxt)) +
       cell("en_st_listen", lTxt) +
       cell("en_st_net", enNum(st.usable_mw, 3) + " mW") +
@@ -889,6 +912,12 @@ function renderEnergy(e, ax) {
     const cur = (e && e.params && Math.abs(r.harvest_mw - e.params.harvest_mw) < 1e-9);
     if (cur) tr.className = "en-cur";
     const usable = !!r.usable;
+    // 常态列：这个采集功率下“离设计常态多远”（与“能否跟得住”分开两列说，不混）
+    const tg = EN_TIER(r);
+    const alt = (r.to_reach_normal && r.tier !== "ok")
+      ? ` <span class="hint">${
+          esc(T("en_tier_alt").replace("{x}", enNum(r.to_reach_normal.interval_s, 1)))}</span>`
+      : "";
     tr.innerHTML =
       `<td>${enNum(r.harvest_mw, 3)}${cur ? " ◀" : ""}</td>` +
       `<td>${enNum(r.usable_mw, 3)}</td>` +
@@ -896,6 +925,7 @@ function renderEnergy(e, ax) {
       `${r.degraded ? ` <span class="hint">${esc(T("en_degraded"))}</span>` : ""}</td>` +
       `<td>${esc(fmtInterval(r.interval_s))}` +
       `${r.every_s != null ? ` <span class="hint">(${enNum(r.every_s, 1)}s)</span>` : ""}</td>` +
+      `<td class="${tg.cls}">${esc(tg.txt)}${alt}</td>` +
       `<td>${esc(fmtSilence(r.silence_in_s))}</td>` +
       `<td>${esc(EN_WHY(r.why) +
                 (r.short_of ? " · " + T("en_short_" + r.short_of) : ""))}</td>`;
@@ -903,7 +933,11 @@ function renderEnergy(e, ax) {
   });
   if (msg) {
     msg.textContent = (ax && ax.min_harvest_mw != null)
-      ? T("en_axis_head").replace("{n}", enNum(ax.min_harvest_mw, 2))
+      ? T("en_axis_head").replace("{n}", enNum(ax.min_harvest_normal_mw, 2))
+          .replace("{na}", enNum(ax.min_harvest_normal_alt_mw, 2))
+          .replace("{nl}", ax.normal_level || "—")
+          .replace("{al}", ax.normal_alt_level || "—")
+          .replace("{nu}", enNum(ax.min_harvest_mw, 2))
           .replace("{n2}", enNum(ax.n, 0))
       : T("en_axis_none");
   }

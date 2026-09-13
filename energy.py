@@ -85,8 +85,11 @@ ORPAH 的终端设定是**免电池可穿戴**（项链/鞋/钮扣，靠运动/�
 6. **`why="deficit"` 另给归因**（`short_of`）：`"sleep"` = 采集连待机都不够；
    `"listen"` = 供得住待机、供不住监听（**听不成了**，页面/告警据此说清差在哪）。
    没有单个 why 能描述“哪一层缺钱”—— 所以不在 `why` 里堆码，而是另给一个字段（同理于
-   服务端从（级别+电量）**推导** `degraded_reason` 而不是新增报文字段）。
-
+   服务端从（级别+电量）**推导** `degraded_reason` 而不是新增报文字段）。7. ★ **常态 ≠ 底线**（三者必须分开，2026-09-14 用户定）：`tier` 描述**离设计常态有多远** ——
+   `ok`（间隔 ≤ `NORMAL_INTERVAL_S` = 常态）/ `slower`（> 常态但 ≤ `MAX_USEFUL_INTERVAL_S`
+   = **已降速**，带 `slower_by` 倍率）/ `too_slow`（> 上限 = 跟不住人）/ `silent`（没有可维持间隔）。
+   所以“`usable=True`”只意味着**还跟得住**，**不等于正常运行** —— 页面/告警要按 `tier` 分颜色
+   与措辞（绿=常态 / 橙=已降速 / 红=跟不住）；**别把 300 s 叫“正常”**。
 ## 覆盖（不断线）—— 取能波动 ≠ 可以夜间停机（2026-09-13 用户定口径）
 
 取能功率会随环境波动（光/运动/温差）—— 那是**换能器的事（物理）**。但 ORPAH 是**找人**：
@@ -123,7 +126,10 @@ LISTEN_INTERVAL_S = 60.0             # **多久听一次**（s）—— 产品�
 GAP_S_DEMO = 12 * 3600.0             # **演示场景**：最长无取能时长（12h）—— 只为了让 demo 一上来就有个
 #                                      缺口可看（不是实测值：现场按天气/树木/通风/穿戴遮挡标定）
 MIN_INTERVAL_S = 2.0                 # 间隔下限（再快服务器/空口也撑不住，且无意义）
-MAX_USEFUL_INTERVAL_S = 300.0        # 间隔上限：超过就"跟不住人"（追踪语义上限）
+NORMAL_INTERVAL_S = 60.0             # **设计常态周期**：正常情况下客户端每 60 s 连一次 HaLow 路由器
+#                                      （连接时顺带把下行听了 → 与 LISTEN_INTERVAL_S 同值）。
+#                                      来源：用户 2026-09-14 定。比它慢 = **已降速**（不是“正常”）
+MAX_USEFUL_INTERVAL_S = 300.0        # 间隔上限：超过就“跟不住人”（只是个底线，**不是常态**）
 EMERGENCY_INTERVAL_S = 60.0          # `interval_s=None`（采不敷出）时演示用的"硬撑"间隔：
 #                                      调用方想"宁可吃储能也要被听见"时用它 + survive_s() 算能撑多久
 STORE_MJ = 2000.0                    # 默认储能容量（mJ）
@@ -154,7 +160,8 @@ def mv_of(charge_mj, store_mj=STORE_MJ, empty_mv=CELL_EMPTY_MV, full_mv=CELL_FUL
 
 def plan(harvest_mw, charge_mj, store_mj=STORE_MJ, sleep_mw=SLEEP_MW, cost=None,
          min_interval_s=MIN_INTERVAL_S, max_useful_s=MAX_USEFUL_INTERVAL_S,
-         listen_mj=LISTEN_MJ, listen_interval_s=LISTEN_INTERVAL_S):
+         listen_mj=LISTEN_MJ, listen_interval_s=LISTEN_INTERVAL_S,
+         normal_s=NORMAL_INTERVAL_S):
     """能量 → 可执行策略：用哪个级别、多久报一次、还能撑多久、会不会沉默。
 
     `listen_interval_s=0` = **不建模监听**（拿来做对照实验：加监听之前的行为可以逐位复现）。
@@ -176,6 +183,16 @@ def plan(harvest_mw, charge_mj, store_mj=STORE_MJ, sleep_mw=SLEEP_MW, cost=None,
     | `silence_in_s` | 还能撑多久（秒）；`None` = 收支平衡，不会因没电沉默 |
     | `short_of` | 缺钱在哪一层（仅 `budget_ok=False`）：`"sleep"` / `"listen"` / `None` |
     | `usable` | 是否持续“跟得住人”（间隔 ≤ `max_useful_s` 且收支平衡且电量够发下一条） |
+    | `tier` | **离设计常态多远**：`ok`（≤ `normal_s`，正常运行）/ `slower`（已降速）/ `too_slow`（跟不住人）/ `silent`（没有可维持间隔） |
+    | `slower_by` | 比常态慢多少倍（`tier="slower"` 时有值；其它情况 `None`） |
+    | `normal_s` | 设计常态周期回显（单一源：`NORMAL_INTERVAL_S`） |
+    | `to_reach_normal` | **取舍摆明白**：当前没达到常态、但**降级到 HS256 可以回到常态**时给出
+      `{"level", "interval_s", "degraded", "tier"}`；否则 `None` |
+
+    ⚠ `to_reach_normal` 为什么会存在：选级规则是**安全优先**（只要 ES256 还跟得住 ≤ `max_useful_s`
+    就保 ES256），所以低采集下会先出现「**用 ES256 但已降速**」（如 150 s）——此时还存在另一个选项
+    「**降级到 HS256 换回 60 s 常态**」。**哪个更合适应由人来定**（签名强度 vs 更新频率），
+    模型只把两条路的数据都算出来（见 `interval_es256_s` / `interval_hs256_s`），**不自己拍板**。
     | `why` | 机器码：`ok` / `degraded_saves` / `too_slow` / `deficit` / `no_energy` / `empty` |
 
     `interval_s=None` = **没有可维持的间隔**（采集连固定开销都供不住）：调用方应让它**如实沉默**，
@@ -233,6 +250,24 @@ def plan(harvest_mw, charge_mj, store_mj=STORE_MJ, sleep_mw=SLEEP_MW, cost=None,
         why = "empty"
     usable = bool(interval is not None and interval <= max_useful_s + _EPS
                   and budget_ok and can_afford_next)
+    # ★ 常态三档（与 `usable` **不是**一回事：usable 只回答“还跟得住吗”）：
+    #   ok=达到设计常态 / slower=已降速（比常态慢 X 倍）/ too_slow=跟不住 / silent=没得报
+    normal_s = float(normal_s)
+    if interval is None:
+        tier, slower_by = "silent", None
+    elif interval <= normal_s + _EPS:
+        tier, slower_by = "ok", None
+    elif interval <= max_useful_s + _EPS:
+        tier, slower_by = "slower", round(interval / normal_s, 2)
+    else:
+        tier, slower_by = "too_slow", round(interval / normal_s, 2)
+    # 取舍备选（不替用户选）：现规则下选级是“安全优先”，所以可能“用着 ES256 却已降速”；
+    # 若降到 HS256 能回到常态，就把这条路也标出来（页面/告警只陈述，不自动降级）。
+    to_reach_normal = None
+    if (tier != "ok" and iv_hs is not None and iv_hs <= normal_s + _EPS
+            and (interval is None or iv_hs < interval - _EPS)):
+        to_reach_normal = {"level": "HS256", "interval_s": round(iv_hs, 2),
+                           "degraded": True, "tier": "ok"}
     return {
         "level": level,
         "degraded": bool(degraded),
@@ -251,6 +286,10 @@ def plan(harvest_mw, charge_mj, store_mj=STORE_MJ, sleep_mw=SLEEP_MW, cost=None,
         "silence_in_s": None if silence_in_s is None else round(silence_in_s, 1),
         "short_of": short_of,
         "usable": usable,
+        "tier": tier,
+        "slower_by": slower_by,
+        "normal_s": normal_s,
+        "to_reach_normal": to_reach_normal,
         "why": why,
     }
 
@@ -455,11 +494,16 @@ def coverage(p, charge_mj, gap_s=None, gap_harvest_mw=0.0, curve=None, cost=None
 
 
 def sweep(harvests, charge_mj=CHARGE0_MJ, store_mj=STORE_MJ, **kw):
-    """扫采集功率（能量轴的横轴）→ 每个点的策略表 + **头条数字**。
+    """扫采集功率（能量轴的横轴）→ 每个点的策略表 + **两个门槛**。
 
-    返回 `{"rows": [...], "min_harvest_mw": X|None, "n": len(rows)}`；
-    `min_harvest_mw` = 最小"够用"的采集功率（第一行 `usable=True`）——
-    这是这一项真正想回答的问题：**要多少采集功率才持续跟得住人**。
+    这两个数分得很开，**不能混**（2026-09-14 用户定：常态 60 s、上限只是底线）：
+
+    | 字段 | 含义 |
+    |---|---|
+    | `min_harvest_normal_mw` | **维持设计常态**（`tier="ok"`）所需的最小采集功率；`normal_level` = 达成时用的级别（按“安全优先”规则通常是 ES256） |
+    | `min_harvest_normal_alt_mw` | **允许降级到 HS256 换回常态**所需的最小采集功率（比上一个低；`normal_alt_level` = 通常为 HS256）—— 这一条与下一条“跟得住”不同，它**仍然达到常态频率** |
+    | `min_harvest_mw` | 只求**跟得住人**（间隔 ≤ `MAX_USEFUL_INTERVAL_S`）所需的最小采集功率（旧口径，只是个底线） |
+
     全都不够用 → `None`（不编一个数）。
     """
     rows = []
@@ -467,7 +511,17 @@ def sweep(harvests, charge_mj=CHARGE0_MJ, store_mj=STORE_MJ, **kw):
         p = plan(h, charge_mj, store_mj, **kw)
         rows.append({"harvest_mw": round(float(h), 3), **p})
     first = next((r["harvest_mw"] for r in rows if r["usable"]), None)
-    return {"rows": rows, "min_harvest_mw": first, "n": len(rows)}
+    ok_row = next((r for r in rows if r["tier"] == "ok"), None)
+    alt_row = next((r for r in rows
+                    if r["tier"] == "ok" or r["to_reach_normal"] is not None), None)
+    return {"rows": rows, "min_harvest_mw": first, "n": len(rows),
+            "min_harvest_normal_mw": None if ok_row is None else ok_row["harvest_mw"],
+            "normal_level": None if ok_row is None else ok_row["level"],
+            "min_harvest_normal_alt_mw": None if alt_row is None else alt_row["harvest_mw"],
+            "normal_alt_level": None if alt_row is None else
+                                (alt_row["level"] if alt_row["tier"] == "ok" else
+                                 alt_row["to_reach_normal"]["level"]),
+            "normal_s": None if alt_row is None else alt_row["normal_s"]}
 
 
 def axis(n=13, h_max=12.0, charge_mj=CHARGE0_MJ, store_mj=STORE_MJ, **kw):

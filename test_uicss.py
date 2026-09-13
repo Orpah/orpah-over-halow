@@ -100,6 +100,14 @@ def check_css():
         m = re.search(re.escape(cls) + r"\s*\{([^}]*)\}", css)
         check(f"{cls} 带 max-width: 100%", bool(m) and "max-width: 100%" in m.group(1))
 
+    # 6) 常态三档的颜色必须对**状态格**也生效（2026-09-14 实测踩过）：
+    #    `.id-row span { color: var(--mut) }`（0,1,1）会赢过单个类选择器（0,1,0）→
+    #    徽标静默变成灰色，“在常态/已降速/跟不住”三档看不出区别（表格里却是对的）。
+    missing = [c for c in (".tier-ok", ".tier-slower", ".tier-too-slow", ".tier-silent")
+               if (".id-row " + c) not in css]
+    check("常态三档颜色对状态格也生效（`.id-row .tier-*`，否则徽标静默变灰）",
+          not missing, missing)
+
 
 def check_hierarchy():
     """信息层级（UI ③）的守卫：长口径必须收进折叠、折叠标签成对、长列表要限高。

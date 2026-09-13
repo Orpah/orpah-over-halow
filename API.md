@@ -641,7 +641,7 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 
 | 规则 | 起步 | 升级为 `crit` |
 |---|---|---|
-| `no_report` | `> 30s` → `warn` | `> 300s`（`ORPAH_ALERT_NO_REPORT_CRIT_SEC`） |
+| `no_report` | `> 2.5×常态周期`（=150s）→ `warn` | `> 5×常态周期`（=300s，`ORPAH_ALERT_NO_REPORT_CRIT_SEC`） |
 | `case_handled_overtime` | `> 24h` → `warn` | `> 48h`（`ORPAH_ALERT_CASE_HANDLED_CRIT_SEC`） |
 
 - **为何不给另外两条分级**：`case_overtime`（无人接手）与 `sig_fail_rate`（验签被拒）是**定性**问题，
@@ -671,22 +671,29 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 
 | kind | level | 条件 | 阈值 | 环境变量 |
 |---|---|---|---|---|
-| `no_report` | `warn` → `crit` | **工作态**（启用 **或 走失中**）且**曾上报过**的设备，距上次上报超过 N 秒；**最后一条已签电量低于 `energy_low_mv` 的拆到 `no_report_energy`**（例外），其余才是本条 | `30` / 升级 `300` | `ORPAH_ALERT_NO_REPORT_SEC` / `ORPAH_ALERT_NO_REPORT_CRIT_SEC` |
+| `no_report` | `warn` → `crit` | **工作态**（启用 **或 走失中**）且**曾上报过**的设备，距上次上报超过 N 秒；**最后一条已签电量低于 `energy_low_mv` 的拆到 `no_report_energy`**（例外），其余才是本条 | `150` / 升级 `300`（= **2.5× / 5× 设计常态周期** 60s） | `ORPAH_ALERT_NO_REPORT_SEC` / `ORPAH_ALERT_NO_REPORT_CRIT_SEC` |
 | `case_overtime` | `crit`（不分级） | `open` 状态的案件，立案超过 N 秒仍未发现 **且无人接手** | `180` | `ORPAH_ALERT_CASE_OVERTIME_SEC` |
 | `case_handled_overtime` | `warn` → `crit` | `open` 且**已有接手人**，距**接手时刻**超过 N 秒仍未发现（B 方案） | `86400` / 升级 `172800` | `ORPAH_ALERT_CASE_HANDLED_SEC` / `ORPAH_ALERT_CASE_HANDLED_CRIT_SEC` |
 | `sig_fail_rate` | `crit`（不分级） | 最近 N 条签名上报中，被拒比例 > 比例阈值 | `5` 条 / `0.5` | `ORPAH_ALERT_SIG_WINDOW` / `ORPAH_ALERT_SIG_FAIL_RATIO` |
 | `id_degraded` | L2 `warn` / L3 `crit` | 最近 N 秒内出现过**降级上报**（§8.3）：L2 = SE 不可用（仍更新定位）、L3 = 无可用密钥（裸上报） | `300` | `ORPAH_ALERT_ID_DEGRADED_SEC` |
 | `id_cap_mismatch` | `warn`（不分级） | 设备**已签**声明「有 RTC」（`cap_rtc is True`），却送出不可用的 `ts`（`ts_ok=false`） | `300` | `ORPAH_ALERT_CAP_MISMATCH_SEC` |
 | `id_energy` | `warn` / `crit` | 设备最后一条**已签**上报的电量低（`mv ≤ low` → warn）/ 已耗尽（`mv ≤ out` → crit）；数据带 `mv`/`silence_in_s`（还能撑多久） | `3300` / `3100` | `ORPAH_ALERT_ENERGY_LOW_MV` / `ORPAH_ALERT_ENERGY_OUT_MV` |
-| `no_report_energy` | `warn`（**不升级 crit**） | 设备沉默**且**最后一条已签电量低 → **疑似没电**（等它取能），与 `no_report` **分流**（处置相反，不得合并） | 同 `no_report`（`30`） | `ORPAH_ALERT_NO_REPORT_SEC` |
+| `no_report_energy` | `warn`（**不升级 crit**） | 设备沉默**且**最后一条已签电量低 → **疑似没电**（等它取能），与 `no_report` **分流**（处置相反，不得合并） | 同 `no_report`（`150`） | `ORPAH_ALERT_NO_REPORT_SEC` |
 | `id_cover_short` | `warn` / `crit` | **覆盖（不断线）不足**（SPEC §5.2 E4③）：模型算出缺口里撑不过 → `degrade`（降级换覆盖够）warn / `short`（降级也不够）crit。**设计不足**，不是“作息”。数据：`verdict/gap_s/cover_s/gap_short_s/need_store_mj/deg_covers/deg_cover_s/deg_need_store_mj/curve_gap_s/dead_at_s/sustainable`（**不重算**，直接取 `state.cover`；且要求该 SN 有**已签**电量） | — | — |
 | `ratelimit` | `warn` | 最近 N 秒内出现过**限频丢弃**（**两侧合并**，无论哪条防线）→ **只陈述事实、不归因**（大流量 ≠ 攻击）；数据带 `which` / `dropped_sn` / `dropped_router` / `sn` / `router` | `60` | `ORPAH_ALERT_RL_SEC` |
 
 ⚠ **默认值分两类，别看混**：
-- **演示压缩时间**（客户端 2s 一包，为了现场能看到效果）：`no_report` 30s（升级 300s）、
-  `case_overtime` 180s、`sig_window` 5 条、`sig_fail_ratio` 0.5。
+- **随设计常态周期（60s）成比例**（2026-09-14 起，**不是拍的数字**）：`no_report` 两档 =
+  `2.5×` / `5×` `energy.NORMAL_INTERVAL_S` = **150s / 300s** —— “多久没上报才算不正常”
+  本来就取决于“正常多久报一次”（改常态周期它们跟着变，与演示快慢无关）。
+- **演示压缩时间**（客户端默认已改为 60s 常态；`--every 2` 才算“演示加速”）：`case_overtime` 180s、
+  `sig_window` 5 条、`sig_fail_ratio` 0.5。
 - **真实时长**：`case_handled_overtime` 的 `86400`（= 24h，升级 48h）—— 真实世界里“接手后一天没找到”
   才算拖太久，演示里不会自然发生；想现场看效果把它压小（如 `ORPAH_ALERT_CASE_HANDLED_SEC=5`）。
+
+⚠ **一条如实的副作用（2026-09-14）**：`rssi_jump` 只在 **0.5~15 s** 的相邻样本间比（见上），
+而常态周期已是 **60 s** → **它不会自然触发**。页面阀值表下已写明；把周期调小可以看到效果，
+**重标定窗口/阀值未做**（记 `ROADMAP.md`）。
 
 ⚠ `no_report` 为什么把**走失中**也算工作态（2026-09-12 修正）：走失者的追踪器正是最该盯的一台，
 它掉线（没电/出范围）往往就是“找不到人”的原因；原来只算“启用”，一旦立案（设备转 `lost`）
@@ -1037,6 +1044,13 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
 都由「能量」决定。模型在 `energy.py`（采集 `harvest_mw` / 储能 `charge_mj` / 每次上报代价 `cost_mj` /
 **每次听窗口耗电 `listen_mj`** × 多久听一次 `listen_interval_s`）。
 
+> **★设计常态 = 60 s（2026-09-14 用户定）**：“正常情况下客户端每 60 s 连一次 HaLow 路由器”
+> （连接时顺带把下行听了 → 与 `listen_interval_s` 同值）。单一源 = `energy.NORMAL_INTERVAL_S`，
+> 四处都指向它：`OrpahApp.__init__(every=…)`、CLI `--every` 默认、页面 `#ctlEvery` 默认、
+> 告警阀值（`2.5×`/`5×`）。**`usable=true` 只意味着“还跟得住人”**（300 s 是**底线**），
+> **不等于正常运行**；离常态多远看 `state.tier`（见下）。演示想看得快就**显式**传小值
+> （`--every 2` 或页面改「间隔」），那是演示加速，不是设备常态。
+
 > **监听（下行）是固定开销（2026-09-13 加）**：下行不会自己送到，客户端得周期醒来听。
 > `listen_mw = listen_mj / listen_interval_s` 与上报间隔**无关**；真正决定间隔的是
 > **`usable_mw = 采集 − (待机 + 监听)`** —— 页面把它显示为「可上报」，**不要**再拿 `net_mw`
@@ -1063,9 +1077,13 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
              "listen_interval_s":60.0,
              "min_interval_s":2.0,
              "max_useful_interval_s":300.0,"charge0_mj":1500.0,"store_mj":2000.0,
+             "normal_interval_s":60.0,          // 设计常态（页面回显/“已降速 X 倍”都按它算）
+             "every_s":60.0,"design_every_s":60.0,   // 演示实际在用 / 设计值
              "emergency_interval_s":60.0,"cell_empty_mv":3000,"cell_full_mv":4200},
  "state":{ ...见下表... },
- "axis":{"rows":[{...}×13],"min_harvest_mw":0.083,"n":13,"speedup":10.0,"h_max":1.0},
+ "axis":{"rows":[{...}×13],"min_harvest_mw":0.167,"min_harvest_normal_mw":0.4,
+         "normal_level":"ES256","min_harvest_normal_alt_mw":0.233,"normal_alt_level":"HS256",
+         "normal_s":60.0,"n":13,"speedup":10.0,"h_max":1.0},
  "calib":{"source":"none","source_i18n":"en_cal_src_none","exists":false,"ok":true,
           "path":"…\\energy_calib.json","env":"ORPAH_ENERGY_CALIB","digest":null,
           "origin":{},"n_measured":0,"n_total":7,"values":{...},"prov":{...},
@@ -1102,6 +1120,14 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
   `listen_modeled` / `overhead_mw`（待机+监听）/ `usable_mw`（**可上报**，驱动间隔的那个数）/
   `report_mw`（选定间隔下的平均上报功率）/ `short_of`（`null`|`"sleep"`|`"listen"`，**仅**采不敷出时）。
   其中 `every_s` 是**页面周期**（= 真实间隔 ÷ `speedup`，演示加速用）、`silence_eta_s` 同理。
+- **常态三档（2026-09-14 加）**：`tier` / `slower_by` / `normal_s` / `to_reach_normal`。
+  `tier ∈ ok`（≤ 设计常态）/ `slower`（已降速）/ `too_slow`（跟不住人）/ `silent`（没有可维持间隔）；
+  `slower_by` = 比常态慢多少倍（`slower`/`too_slow` 时给）；`normal_s` = 常态回显（=60）。
+  ★ **`usable=true` ≠ 正常运行** —— 它只回答“还跟得住吗”（≤ `max_useful_interval_s`）。
+  `to_reach_normal`：当前没达常态、但**降级到 HS256 能回常态**时给
+  `{level, interval_s, degraded, tier}`，否则 `null`。原因是选级规则**安全优先**（ES256 还跟得住就不降）
+  → 低采集下会先出现「用着 ES256 但已降速」；**模型只把两条路的数据都算出来，不自动降级**
+  （签名强度 vs 更新频率是产品取舍）。
 - **`why` 取值**（机器值，页面按 `en_why_*` 翻译）：`ok`（够用 ES256）/ `degraded_saves`
   （只够 HS256 省电）/ `too_slow`（只够很慢地报）/ `deficit`（采不敷出，净亏）/
   `no_energy`（完全没采集）/ `empty`（电量不足一次上报）。恒不存在 `interval_s` 时：
@@ -1125,12 +1151,18 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
 
 `rows[]` 每行 = 一个采集功率点上的策略：`harvest_mw / level / degraded / degraded_reason /
 interval_s / interval_es256_s / interval_hs256_s / net_mw / budget_ok / silence_in_s / usable /
-why`（+ 页面用的 `every_s`）。横轴上限取 `max(2×当前采集, 0.5mW)` 共 13 点，
-`min_harvest_mw` = **第一个“够用”的点** → 页面头条「要多少 mW 才跟得住人」。
-**这个数跟着标定与听间隔走**：演示参数 + 听 60s 下 ≈ **`0.167 mW`**（= 固定开销 0.15 + HS256
-恰好跑在 300s 所需）；**关掉监听**（`listen_interval_s=0`）降到 ≈ `0.083 mW` —— 也就是
-**监听把门槛顶高了一倍**；换成一份实测样机（待机 8 µA、ES256 2 mJ、听窗口 8.88 mJ/次）
-则又是另一个数 —— 所以**别把任何一组演示参数下的门槛当结论**。
+tier / slower_by / normal_s / to_reach_normal / why`（+ 页面用的 `every_s`）。横轴上限取
+`max(2×当前采集, 0.5mW)` 共 13 点。**三个门槛**（2026-09-14，差得不小、不许混成一个数）：
+
+| 字段 | 含义 | 演示参数 + 听 60s |
+|---|---|---|
+| `min_harvest_normal_mw`（+ `normal_level`） | **维持设计常态**（60 s）所需采集；按“安全优先”通常靠 ES256 | **0.4 mW**（ES256） |
+| `min_harvest_normal_alt_mw`（+ `normal_alt_level`） | **允许降级到 HS256 换常态**所需（仍然 60 s） | **0.233 mW**（HS256） |
+| `min_harvest_mw` | 只求**跟得住人**（≤ `MAX_USEFUL_INTERVAL_S`=300 s）所需 —— 旧口径，**只是底线** | **0.167 mW** |
+
+**这个数跟着标定与听间隔走**：**关掉监听**（`listen_interval_s=0`）时底线条降到 ≈ `0.083 mW`、
+常态条降到 `0.333 mW` —— 也就是**监听把门槛顶高了**；换成一份实测样机（待机 8 µA、ES256 2 mJ、
+听窗口 8.88 mJ/次）则又是另一个数 —— 所以**别把任何一组演示参数下的门槛当结论**。
 
 ### `/api/status` 上的两个字段（1s 轮询用，**不含**扫描表）
 
@@ -1148,9 +1180,9 @@ why`（+ 页面用的 `every_s`）。横轴上限取 `max(2×当前采集, 0.5mW
 | kind | 级别 | 触发 | 阈值 |
 |---|---|---|---|
 | `id_energy` | `warn` / `crit` | 设备最后一条**已签**上报的电量 `mv ≤ low` → warn；`mv ≤ out` → crit。数据 `sn/mv/silence_in_s` | `3300` / `3100`（`ORPAH_ALERT_ENERGY_LOW_MV` / `ORPAH_ALERT_ENERGY_OUT_MV`） |
-| `no_report_energy` | `warn`（**不升级 crit**） | 设备沉默 **且最后一条已签电量低** → 疑似没电：**等它取能** | 同 `no_report` 的 `no_report_sec`（30s） |
+| `no_report_energy` | `warn`（**不升级 crit**） | 设备沉默 **且最后一条已签电量低** → 疑似没电：**等它取能** | 同 `no_report` 的 `no_report_sec`（150s） |
 | `id_cover_short` | `warn`（`degrade`）/ `crit`（`short`） | **覆盖（不断线）不足**（设计不足）：按模型给的 `verdict` 报 —— `degrade` 还能降级顶住、`short` 会在缺口里断线 | 无（条件就是模型的 verdict） |
-| `no_report` | `warn` → `crit`（30s → 300s） | 设备沉默**但电量充足** → 异常失联：**该出警** | `ORPAH_ALERT_NO_REPORT_SEC` / `_CRIT_SEC` |
+| `no_report` | `warn` → `crit`（150s → 300s） | 设备沉默**但电量充足** → 异常失联：**该出警** | `ORPAH_ALERT_NO_REPORT_SEC` / `_CRIT_SEC` |
 
 - **两者不合并**：处置相反（等它取能 vs 立刻搜），合并会让人做错事。
 - 沉默且**已耗尽**时两条同时出：`id_energy`（设备视角“它说没电了”）+
