@@ -76,6 +76,56 @@ def port_busy(port):
         s.close()
 
 
+# 端口常量形如 `CONSOLE_A, LINK_A, HOST_A = 9401, 9411, 9421   # 注释`（demo_l3 还有 A1/B2 这种后缀）——
+# 一行可以同时声明多个变量，名字与值按位置一一对应。
+# 只取 TCP 监听的几类（console/link/host 都是 TCP；UDP_SRV 是 UDP，TCP 探活查不出来，故不列）。
+_PORT_CONST = re.compile(
+    r"^\s*([A-Z][A-Z0-9_]*(?:\s*,\s*[A-Z][A-Z0-9_]*)*)\s*=\s*"
+    r"([0-9]+(?:\s*,\s*[0-9]+)*)\s*(?:#.*)?$", re.M)
+_PORT_KINDS = ("CONSOLE", "LINK", "HOST")
+
+
+def e2e_ports():
+    """从 e2e demo 的**源文件**里抽出它们要占的 TCP 端口 → {port: "demo_x.py:VAR"}。
+
+    为什么不写一张硬编码端口表：写了就会漂移（demo 换端口不会顺带改这张表），
+    而扫不到只会**少查一个端口**，不会制造假失败。也不 import 这些 demo：
+    它们会 import sim/host 并起全局对象，太沉且带副作用。
+    """
+    out = {}
+    for _lbl, scr, _args in E2E:
+        try:
+            with open(os.path.join(HERE, scr), encoding="utf-8") as f:
+                src = f.read()
+        except OSError:
+            continue
+        for names, nums in _PORT_CONST.findall(src):
+            for n, v in zip((x.strip() for x in names.split(",")),
+                            (x.strip() for x in nums.split(","))):
+                if v.isdigit() and any(k in n for k in _PORT_KINDS):
+                    out[int(v)] = f"{scr}:{n}"
+    return out
+
+
+def warn_e2e_ports():
+    """e2e 前把 demo 要占的端口探一遍：被占就**点名报出来**（不拦），免得又花时间
+    把“端口冲突”当成“代码坏了”（本套件存在的理由之一就是不制造假失败）。
+
+    探活方式是 TCP `connect_ex` → **只是个启发式**：对方 backlog 满/立刻 RST 时会有抖动
+    （实测同一状态两次调用可能差一两个端口）。所以这里只**提示**，不据此拒绝运行。
+    另：**UDP 端口查不出来**（UDP 没有 connect 成功/失败这回事）—— 那部分如实说明没查。
+    """
+    ports = e2e_ports()
+    busy = sorted(p for p in ports if port_busy(p))
+    if busy:
+        print("[!] 以下 e2e 端口已被占用（demo 会在用到它的那一步失败）——"
+              "先确认是不是残留的 python/UI 进程：")
+        for p in busy:
+            print(f"      :{p}  ← {ports[p]}")
+    print(f"[i] e2e 端口预检：查了 {len(ports)} 个 TCP 端口"
+          f"（UDP 端口占用 TCP 探活查不出来，未查；被占：{len(busy)} 个）")
+
+
 def git_head():
     try:
         out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=HERE,
@@ -179,9 +229,10 @@ def write_report(path, results, e2e_results, meta):
 
 def main():
     ap = argparse.ArgumentParser(description="ORPAH 批量合规测试台（一键跑 + 出报告）")
-    ap.add_argument("--e2e", action="store_true", help="额外跑 5 个端到端 demo（占端口）")
+    ap.add_argument("--e2e", action="store_true",
+                    help=f"额外跑 {len(E2E)} 个端到端 demo（占端口）")
     ap.add_argument("--out", default=os.path.join(HERE, "checks_report.md"),
-                    help="报告路径（默认 ./checks_report.md）")
+                    help="报告路径；相对路径按**当前目录**算，缺省 = <脚本目录>/checks_report.md")
     ap.add_argument("--verbose", action="store_true", help="把每个套件的完整输出都打印出来")
     a = ap.parse_args()
 
@@ -189,6 +240,8 @@ def main():
         print(f"[!!] :{UI_PORT} 被占用（orpah-ui 在跑）—— e2e demo 与它端口串扰，"
               f"会跑出假失败。\n     请先停掉 UI（或改用别的端口跑 UI），再执行 --e2e。")
         return 2
+    if a.e2e:
+        warn_e2e_ports()
 
     meta = {"when": time.strftime("%Y-%m-%d %H:%M:%S"), "head": git_head(),
             "py": f"{sys.version.split()[0]} @ {sys.executable}"}
@@ -207,7 +260,7 @@ def main():
     print(f"{'=' * 62}")
     print(f"总计 {len(results) + len(e2e_results) - len(fails)}/"
           f"{len(results) + len(e2e_results)} 通过，用时 {time.time() - t0:.1f}s")
-    print(f"报告：{a.out}")
+    print(f"报告：{os.path.abspath(a.out)}")
     return 1 if fails else 0
 
 

@@ -281,6 +281,10 @@ class RouterBridge:
         所以严比成立。**这是 fail-closed**：比不中就丢 —— 若真机部署里 Server 回包源地址
         与配置不同（NAT/多宿主/改过 server_host），会表现为“下行全被丢”，日志里看得到，
         属于“显式失败”而不是默默信任。
+
+        注：本 Router 的 UDP socket 建的是 **AF_INET**（IPv4），所以没有 IPv6 这条路；
+        将来若要上 IPv6，`socket.gethostbyname` 得换成 `getaddrinfo`（它只解析 A 记录），
+        并且要比对地址的归一化形式（同一个 IPv6 地址有多种写法）。
         """
         if not addr or len(addr) < 2:
             return False
