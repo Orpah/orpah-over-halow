@@ -1,21 +1,21 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 13:08:28
-- git HEAD：`d305379`
+- 时间：2026-09-13 13:22:44
+- git HEAD：`7eac20b`
 - 解释器：3.13.14 @ C:\Python313\python.exe
-- 结论：**全部通过**（22/22 套件通过）
+- 结论：**全部通过**（23/23 套件通过）
 
 ## 套件结果
 
 | 套件 | 脚本 | 结果 | 耗时 | 说明 |
 |---|---|---|---|---|
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
-| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.1s | 通过 |
+| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.2s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
 | 时钟可信（ts=0 无 RTC） | `test_clock.py` | ✅ PASS | 0.5s | 通过 |
-| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.6s | 通过 |
+| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.5s | 通过 |
 | UI 服务器契约 | `test_server.py` | ✅ PASS | 0.7s | 通过 |
 | 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.1s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
@@ -24,13 +24,14 @@
 | 设备时钟漂移（长基线） | `demo_clock.py` | ✅ PASS | 0.1s | 通过 |
 | 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
 | 限频（§5.8 令牌桶 / 两条防线） | `test_ratelimit.py` | ✅ PASS | 0.1s | 通过 |
+| Router 下行路径（来源校验） | `test_router.py` | ✅ PASS | 0.1s | 通过 |
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.1s | 通过 |
 | L1 端到端 | `demo_l1.py` | ✅ PASS | 1.3s | 通过 |
-| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.2s | 通过 |
+| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.3s | 通过 |
 | L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.2s | 通过 |
 | L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.1s | 通过 |
 | 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.7s | 通过 |
-| 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 6.3s | 通过 |
+| 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 6.4s | 通过 |
 
 ## 关键输出
 
@@ -45,7 +46,7 @@
       OK   truth_at：空输入 → 空表（页面显示“不适用”，不编 0）
     全部通过
 
-### 密钥生命周期 — PASS（0.1s）
+### 密钥生命周期 — PASS（0.2s）
 
     == 1. 签发（幂等） ==
     == 2. 验签（第 1 代） ==
@@ -95,7 +96,7 @@
       OK   并发：4 写 × 50 条 + 2 读线程 → 无异常且一条不丢
     时钟可信测试全部通过
 
-### IoTDB 审计/时间窗 — PASS（0.6s）
+### IoTDB 审计/时间窗 — PASS（0.5s）
 
     == 1. actor 字段 ==
     == 2. query_events 回读 actor ==
@@ -114,7 +115,7 @@
     [server] [id 3] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=- accepted=False
-    Ran 29 tests in 0.499s
+    Ran 29 tests in 0.511s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -190,12 +191,23 @@
     OK
     限频（§5.8）：34/34 通过
 
+### Router 下行路径（来源校验） — PASS（0.1s）
+
+    [router] 丢弃来源不明的下行报文 [1] <- -（只接受 Server 127.0.0.1:19447）
+    [router] 丢弃来源不明的下行报文 [1] <- 10.0.0.9:19447（只接受 Server 127.0.0.1:19447）
+    [router] LOST-TABLE 更新（1 项）
+    [router] 丢弃来源不明的下行报文 [1] <- 10.0.0.9:19447（只接受 Server 127.0.0.1:19447）
+    [router] LOST-TABLE 更新（1 项）
+    [router] LOST-TABLE 更新（0 项）
+    OK
+    Router 下行路径：9/9 通过
+
 ### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.1s）
 
-    PASS  字典 zh/en key 集合一致（860 / 860）
+    PASS  字典 zh/en key 集合一致（862 / 862）
     PASS  每个 key 恰好 2 次（zh + en）
     PASS  字典非空且含中文与英文条目（翻译真的两套）
-    PASS  扫描 14 个页面/脚本，引用 826 个 key（含动态前缀家族 12 个）
+    PASS  扫描 14 个页面/脚本，引用 828 个 key（含动态前缀家族 12 个）
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
@@ -204,7 +216,7 @@
     === ORPAH L1 验收 ===
     结果: [PASS]
 
-### L2 消息流 — PASS（2.2s）
+### L2 消息流 — PASS（2.3s）
 
     --- 分支一：走失库未命中 sn=CN-WH01-9AF3C1D2 ---
     --- mark 走失 sn=CN-WH01-9AF3C1D2（Server 下发 LOST-TABLE）---
@@ -235,14 +247,14 @@
 
       无认证空口防 spoof 端到端演示
       被冒充设备 SN : CN-WH01-9AF3C1D2
-      攻击者 SN    : CN-WH01-57SCPCCNEV-73（未登记 → 服务器不认识）
+      攻击者 SN    : CN-WH01-31ZHD0JYJP-85（未登记 → 服务器不认识）
       链路          : Client→STA→空口→AP→Router→UDP:19847→Server
       用例数        : 13（含 1 条合法对照）
     [server] 监听 127.0.0.1:19847 (UDP)，等待 ORPAH 报文…
       🎉 防 spoof 端到端验收全部通过
     ==========================================================================
 
-### 限频（§5.8）端到端 — PASS（6.3s）
+### 限频（§5.8）端到端 — PASS（6.4s）
 
       限频（§5.8）端到端演示
       链路        : Client→STA→空口→AP→Router→UDP:19947→Server

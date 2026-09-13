@@ -928,6 +928,9 @@ class OrpahApp:
             "conn_a": conn_a, "conn_b": conn_b,
             "sn": self.client.sn if self.client else "-",
             "router_lost_recv": self.router.lost_push_recv if self.router else 0,
+            # 下行来源校验（A 方案，2026-09-13）：被丢掉的下行报文数 —— 非 0 就意味着
+            # “有东西在往 Router 的 UDP 端口发包但不是 Server”，页面/日志上都应该看得到。
+            "router_down_rejected": self.router.down_rejected if self.router else 0,
             "every": self.every, "paused": self.paused,
             "reports": list(reversed(rows)),
             "flow": list(self.flow),

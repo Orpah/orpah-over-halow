@@ -111,6 +111,7 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 | **`spoof_kinds`** | **防 spoof 演示的攻击清单** `[{kind, zh, en, expect}]`（来自 `spoof.UI_KINDS`，脚本/页面同一份）。页面按当前语言取 `zh`/`en` 生成下拉，`expect` 用于「期望 vs 实际」对比——**后端不返回本地化文案，只给两种语言让页面挑**，避免中英混排 |
 | **`ratelimit`** | **限频（§5.8）状态 —— Server 侧**：`{on, params:{sn_rate,sn_burst,router_rate,router_burst,max_keys}, allowed, dropped:{sn,router,total}, sn_table, router_table, top_sn, recent[≤5], since}`。**参数以服务端为单一源**（页面不写死）；`recent` 只 5 条、**不含全表**（桶表可能几千 key，不该每秒重传）|
 | **`ratelimit_rtr`** | **限频状态 —— Router 侧**（§5.8 的行 1/2）：同 `ratelimit` 的形状（`params.sn_*` = 转发按 SN、`params.router_*` = REQ-CONNECT 按源 MAC），另加 `dropped_total` 与 `recent`。**必须与 `ratelimit` 分开报**：两侧参数不同（Router 侧更宽）、丢的后果也不同（砍带宽 vs 砍 CPU），合成一个数就说不清“报文死在哪一段”—— 而且 **Server 侧计数里不含 Router 丢掉的报文** |
+| **`router_down_rejected`** | **被下行来源校验丢掉的下行报文数**（A 方案，2026-09-13）：下行只接受来自 Server 源地址（IP+端口）的报文，别的在**解析之前**就丢。非 0 意味着“有东西不是在从 Server 发包给 Router”—— 页面 Router 行有显示与 tooltip；**它只挡来源，不等于真实性**（同源伪造仍能过，真解要下行带 HMAC/签名，见 SPEC §8 威胁 4 / F-14）|
 | **`energy`** | 能量轴（免电池客户端，2026-09-13）：`{on, params, state}` —— 形状与 GET `/api/energy` 的三项**一致**（页面同一份渲染代码吃两种来源）。**不含扫描表**（那个在 `energy_axis`，见 §13） |
 | **`energy_axis`** | 能量轴扫描表 `{rows[13], min_harvest_mw, n, speedup, h_max}`（页面画「采集功率 → 上报间隔」表 + 标出当前工作点） |
 

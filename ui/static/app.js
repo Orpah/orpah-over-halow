@@ -462,6 +462,11 @@ async function refresh() {
       T("lbl_id_fwd").replace("{n}", `<b class="cnt-id">${s.router_id_up || 0}</b>`);
     $("rowRouterLost").innerHTML =
       T("lbl_lost_recv").replace("{n}", `<b class="cnt">${s.router_lost_recv || 0}</b>`);
+    // 下行来源校验丢掉的数量（A 方案）：非 0 = 有东西不是从 Server 地址发包 → 显式可见
+    $("rowRouterRej").innerHTML =
+      T("lbl_down_rej").replace("{n}",
+        `<b class="${(s.router_down_rejected || 0) > 0 ? "cnt-bad" : "cnt"}">${s.router_down_rejected || 0}</b>`);
+    $("rowRouterRej").title = T("lbl_down_rej_tip");
     $("rowRouterFound").innerHTML =
       T("lbl_found").replace("{n}", `<b class="cnt-found">${s.found_total || 0}</b>`);
     $("rowServerCnt").innerHTML =

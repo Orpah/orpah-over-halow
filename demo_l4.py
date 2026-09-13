@@ -16,6 +16,9 @@ demo_l4.py — Router 主动拉取 LOST-TABLE 验收（F-03 补充，纯 PC，�
      ACCESS-INFO.tracked=True（重启后首问即拉取，不再等 Server 变更/首报推送）。
   ③ 推-拉协同：Server 之后 untrack → 变更推送（该 Router 已在“见过集”）→ 缓存
      tracked=False；再 REQ-CONNECT（sn 已在缓存，不触发拉取）→ 答 NOT-TRACKED。
+  ④ 下行来源校验（A 方案，2026-09-13）：LOST-TABLE **没有签名**，一条伪造的空表
+     会替换缓存并让 `_synced=True`（此后不再拉表、命中也不答 TRACKED、不再产生 FOUND）
+     → 本 demo 用**真 UDP** 从“不是 Server 的源地址”打一条假表进去，必须被丢且缓存不动。
 
 报文：R→S ORPAH-LOST-TABLE-REQ（新增，见 orpah_proto）；Server 回 ORPAH-LOST-TABLE。
 
@@ -23,6 +26,7 @@ demo_l4.py — Router 主动拉取 LOST-TABLE 验收（F-03 补充，纯 PC，�
 """
 import argparse
 import os
+import socket
 import sys
 import threading
 import time
@@ -48,7 +52,7 @@ from router import RouterBridge             # noqa: E402
 from client import ClientHost               # noqa: E402
 from waiting import wait_until, wait_new    # noqa: E402  等待工具（只这一份实现）
 from orpah_proto import (MSG_ACCESS_INFO, MSG_LOST_TABLE_REQ,   # noqa: E402
-                         build_lost_table, build_lost_table_req, new_rid)
+                         build_lost_table, build_lost_table_req, new_rid, encode_msg)
 
 # 端口独立（demo_l1/9401..、demo_l2/95xx、demo_l3/96xx、ui/9401..）
 CONSOLE_A, LINK_A, HOST_A = 9701, 9711, 9721   # AP（Router 侧）
@@ -188,6 +192,47 @@ def main():
     for name, passed in rid_checks.items():
         print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
 
+    # ---- 8) 下行来源校验（A 方案，2026-09-13）：伪造的 LOST-TABLE 进不来 ----
+    # 为什么在这测：这张表决定“谁被当成走失者”，而 LOST-TABLE **没有签名** ——
+    # 一条伪造的空表会替换缓存并让 `_synced=True`（此后不再拉表、命中也不答 TRACKED、
+    # 不再产生 ORPAH-FOUND）。这里用**真 UDP** 打一条假表进去，看它是否被挡在解析之前。
+    print("\n--- 下行来源校验：来源不明的 LOST-TABLE 必须被丢（A 方案）---")
+    down_checks = {}
+    rt_port = router.udp.getsockname()[1]
+    cache_before = dict(router.lost_cache)
+    rej_before = router.down_rejected
+    forged = None
+    try:
+        # 优先“端口对、IP 不对”（127.0.0.2 是回环段别名，Windows 上可 bind）；
+        # bind 不上就退回“IP 对、端口不对”（临时端口）。
+        try:
+            forged = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            forged.bind(("127.0.0.2", UDP_SRV))
+            why = "源 IP 不对（127.0.0.2，端口与 Server 相同）"
+        except OSError:
+            forged = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            why = f"源端口不对（临时端口，Server 是 {UDP_SRV}）"
+        forged.sendto(encode_msg(build_lost_table([], rid="RID-FAKE")),
+                      ("127.0.0.1", rt_port))
+        got = wait_until(lambda: router.down_rejected > rej_before,
+                         timeout=3.0, interval=0.02)
+        down_checks[f"伪造表被丢（{why}）"] = got and router.down_rejected == rej_before + 1
+        down_checks["伪造表**没有**动走失缓存（这是最关键的一条）"] = \
+            router.lost_cache == cache_before
+        # 对照组：Server 正常推一张（mark_tracked 触发变更推送）→ 必须生效
+        srv.mark_tracked(sn, note="down-guard")
+        ok_push = wait_until(
+            lambda: router.lost_cache.get(str(sn), {}).get("tracked") is True,
+            timeout=3.0, interval=0.02)
+        down_checks["对照组：Server 来的一定生效（没把正常下行也挡了）"] = ok_push
+    except OSError as e:
+        down_checks[f"（真 UDP 用例无法执行：{e}）"] = False
+    finally:
+        if forged is not None:
+            forged.close()
+    for name, passed in down_checks.items():
+        print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
+
     # ---- 汇总 ----
     print(f"\n=== ORPAH Router 主动拉表 验收 ===")
     checks = {
@@ -197,6 +242,7 @@ def main():
         "④ 变更推送仍生效且 REQ 不再多拉": pushed and ok_untrack and no_extra_pull,
     }
     checks.update(rid_checks)
+    checks.update(down_checks)
     for name, passed in checks.items():
         print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
     ok = all(checks.values())

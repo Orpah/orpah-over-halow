@@ -267,6 +267,17 @@
     就是扁平 `state`，页面按 `{on,params,state}` 读 → 状态格全「—」、输入框不回显、扫描表标不出当前点。
     POST `/api/energy` 里调 `_energy_step(drain=False)`（只重算策略不推电量）以便立即回显。
     测试：`test_energy.py`（51 条，含“各级别间隔单调不增 + 恰好一处有意跳变”的回归锁）+ `test_alerts.py`/`test_server.py`。
+  - **Router 下行来源校验（A 方案，2026-09-13 用户选）**：`router._from_server()` —— 下行
+    （LOST-TABLE / TRACKING-STATUS / ERROR）**只接受配置的 Server 源 IP + 源端口**，别的
+    **在解析报文之前**就丢 + `down_rejected` 计数/留痕（`/api/status.router_down_rejected`、页面 Router 行）。
+    为什么必须做：这三类下行都**未签名**，而 `_apply_lost_table` 会整体替换走失缓存并置 `_lost_event`
+    → **一条伪造的空表就能“弄瞎”这台 Router**（此后不再拉表、命中也不答 TRACKED、不再产生 FOUND）；
+    最阴的版本是只把某个 SN 从 entries 里摸掉（其他一切正常）。
+    ★ **源地址校验 ≠ 真实性**（同源也能伪造，且跨网段/NAT 会失效）—— 不得写成“已防住”；
+    真解是下行带 HMAC/签名（**B 方案未做**，见 SPEC §8 威胁 4 / F-14，与 CRL 分发同批）。
+    它是 **fail-closed**：真机若源地址与配置不同会表现为“下行全被丢”，日志/计数看得到。
+    测试：`test_router.py`（离线 9 项，含“没把正常下行也挡了”）+ `demo_l4.py` 第 ④ 组（真 UDP：
+    从 `127.0.0.2` 打假表 → 被丢且缓存不动；对照组 Server 来的照常生效）。
   - **查审计事件别读错字段**：`GET /api/ts/events` 返回的键是 **`rows`**（不是 `events`）；
     另注意它按 `etype`/`sn` 在**本地**过滤（值过滤不进 WHERE，见 §0 IoTDB 条），
     所以“某类事件为空”先确认字段名，再确认是不是真没写进去。

@@ -16,6 +16,12 @@ L2（双向，SPEC §4/§5）：
        - TRACKING-STATUS（Server 对 REPORT 的回执）→ 注入回 Client
        - LOST-TABLE（Server 下发）→ 更新本地走失缓存
 
+    ⚠ **下行只接受来自 Server 地址的报文**（2026-09-13，A 方案，见 `_from_server`）：
+    这几个下行报文本都**未签名**，伪造一张 LOST-TABLE 就能改走失缓存并让 `_synced=True`
+    （→ 此后不再拉表、命中也不答），最阴的版本是只摸掉某个 SN。
+    **源地址校验只挡“不是从 Server 来”，不等于真实性**（同源也能被伪造）——
+    真解 = LOST-TABLE 带 HMAC/签名（B 方案，待定；见 `Protocol/.../SPEC.md` §8 威胁 4）。
+
     AP 模块 --(host 口, 双向)--> router.py --(UDP, 双向)--> server.py
 
 HostBus 一个连接即可双向：recv_frame 收上行、send_frame 注入下行。
@@ -92,6 +98,20 @@ class RouterBridge:
             bytes([0x4A, 0x06, 0x59, 0x80, 0, 1])
         self.udp = None
         self._stop = threading.Event()
+        # 下行**来源校验**（2026-09-13 用户选 A）：只接受来自 Server 地址的报文。
+        # 为什么必须做：LOST-TABLE / TRACKING-STATUS / ERROR 都是**未签名**的，
+        # 而 `_apply_lost_table` 会整体替换走失缓存并置 `_lost_event`（→ `_synced=True`）——
+        # 也就是说**一条伪造的空表就能“弄瞎”这台 Router**（此后命中再也答不出 TRACKED、
+        # 不再产生 ORPAH-FOUND），最阴的版本是只把某个 SN 从 entries 里摸掉（其他一切正常）。
+        # 本校验只挡“不是从 Server 地址来的”，**不能**替代真实性（同源地址也能被伪造）——
+        # 真解是 LOST-TABLE 带 HMAC/签名（方案 B，待定，见 SPEC §8 威胁 4 / ROADMAP）。
+        # server_host 配置成主机名时先解析一次（如 localhost → 127.0.0.1），解析失败就按字面比。
+        try:
+            self._server_ip = socket.gethostbyname(str(server_host))
+        except OSError:
+            self._server_ip = str(server_host)
+        self.down_rejected = 0              # 被来源校验丢掉的下行报文数（供 UI/日志）
+        self.down_rejects = collections.deque(maxlen=10)   # 最近几条（最新在前）
         # 主动拉表同步用：收到 Server 的 LOST-TABLE（_apply_lost_table）时置位
         self._lost_event = threading.Event()
         # 是否已成功同步过走失表（此后依赖 Server 推送即可；重启后复位为未同步）
@@ -254,6 +274,18 @@ class RouterBridge:
             self.on_found(msg)
 
     # ---------------- 下行：Server UDP 应答 → 注入 Client ----------------
+    def _from_server(self, addr):
+        """下行报文是否来自 Server（A：源地址/端口比对）。
+
+        比的是**源 IP + 源端口**：Server 就是 bind 在 `server_port` 上回包的（`srv.sock`），
+        所以严比成立。**这是 fail-closed**：比不中就丢 —— 若真机部署里 Server 回包源地址
+        与配置不同（NAT/多宿主/改过 server_host），会表现为“下行全被丢”，日志里看得到，
+        属于“显式失败”而不是默默信任。
+        """
+        if not addr or len(addr) < 2:
+            return False
+        return str(addr[0]) == self._server_ip and int(addr[1]) == int(self.server_addr[1])
+
     def _udp_loop(self):
         while not self._stop.is_set():
             try:
@@ -262,22 +294,42 @@ class RouterBridge:
                 continue
             except OSError:
                 break
-            msg = decode_msg(data)
-            if msg is None:
-                continue
-            mtype = msg.get("type")
-            if mtype == MSG_LOST_TABLE:
-                self._apply_lost_table(msg)
-                continue
-            if mtype == MSG_TRACKING_STATUS:
-                self._down(msg)              # Server 回执 → 注入回 Client
-                continue
-            if mtype == MSG_ERROR:
-                # 服务器错误（如 FORMAT-ERR）→ 若带 sn 也回给 Client 参考
-                if msg.get("sn"):
-                    self._down(msg)
-                continue
-            log(f"收到 Server 类型 {mtype}，忽略")
+            self._handle_down(data, addr)
+
+    def _handle_down(self, data, addr):
+        """处理一条下行数据报：**先来源校验，再解析报文**。
+
+        顺序是有意的（A 方案）：伪造者要的是让一张假 LOST-TABLE 进 `_apply_lost_table`
+        （那会替换走失缓存 + 置 `_lost_event` → `_synced=True`），所以在**解析之前**就丢，
+        不给他任何“先解析再判”的机会。返回是否被接受（测试用）。
+        """
+        if not self._from_server(addr):
+            self.down_rejected += 1
+            rec = {"t": time.strftime("%H:%M:%S"),
+                   "from": f"{addr[0]}:{addr[1]}" if addr else "-",
+                   "want": f"{self._server_ip}:{self.server_addr[1]}",
+                   "bytes": len(data) if data else 0}
+            self.down_rejects.appendleft(rec)
+            log(f"丢弃来源不明的下行报文 [{self.down_rejected}] <- {rec['from']}"
+                f"（只接受 Server {rec['want']}）")
+            return False
+        msg = decode_msg(data)
+        if msg is None:
+            return False
+        mtype = msg.get("type")
+        if mtype == MSG_LOST_TABLE:
+            self._apply_lost_table(msg)
+            return True
+        if mtype == MSG_TRACKING_STATUS:
+            self._down(msg)                  # Server 回执 → 注入回 Client
+            return True
+        if mtype == MSG_ERROR:
+            # 服务器错误（如 FORMAT-ERR）→ 若带 sn 也回给 Client 参考
+            if msg.get("sn"):
+                self._down(msg)
+            return True
+        log(f"收到 Server 类型 {mtype}，忽略")
+        return False
 
     def _apply_lost_table(self, table):
         entries = table.get("entries") or []
@@ -294,7 +346,9 @@ class RouterBridge:
         log(f"LOST-TABLE 更新（{len(entries)} 项）")
         # 计数：Server 主动推送才算“收到走失表下发”；本机拉表的应答不算。
         # 判据 = **rid 是否在当前在飞集合里**（无 rid ⇒ 主动推送；rid 不在集合里 ⇒ 也是推送，
-        # 例：上一次超时的旧应答／别的 Router 的应答被广播给本机）。
+        # 例：上一次超时后迟到的旧应答）。
+        # 注：来源已在 `_udp_loop` 过一道（只收 Server 的），所以这里不再看 addr ——
+        # 「别的 Router 的应答被广播给本机」那种情形已被来源校验挡在外面。
         rid = table.get("rid")
         is_reply = False
         if rid:

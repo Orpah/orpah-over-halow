@@ -450,9 +450,9 @@
     拉取后光标**落在首个可定位时刻** + 可选「跳过无效段」（跳过的缺口在轨迹里断开，不画假直线）。
     分段统计用 `pos.js` 的 `obsSegments()`（复用 `obsOfStation` 同一套判定）。
 - [x] **重放/篡改自动化测试台（2026-09-12 完成）**：`orpah/run_checks.py` 一键跑全部检查 + 出报告。
-  - **一键**：`python run_checks.py` 跑全部离线套件（现 **16 个**：`test_motion`/`test_keys`/`test_spoof`/
+  - **一键**：`python run_checks.py` 跑全部离线套件（现 **17 个**：`test_motion`/`test_keys`/`test_spoof`/
     `test_alerts`/`test_metrics`/`test_clock`/`test_tsdb_audit`/`test_server`/`checks_batch`/`test_levels`/
-    `test_energy`/`test_capture`/`demo_clock`/`test_posjs`/`test_ratelimit`/`test_i18n`）；
+    `test_energy`/`test_capture`/`demo_clock`/`test_posjs`/`test_ratelimit`/`test_router`/`test_i18n`）；
     加 `--e2e` 再跑 **6 个**端到端 demo（L1/L2/L3/L3b/防 spoof/**限频**）；`--out` 指定报告路径；退出码可直接给 CI。
   - **报告**：`checks_report.md`（入库，同 `host/test_results.txt` 的惯例）—— 含 git HEAD、解释器版本、
     每套件结果/耗时/说明、关键输出行、失败套件的输出尾部 40 行。
@@ -515,6 +515,20 @@
     **术语口径**：禁用“谎报/撒谎/作弊”等归因性词，统一「偏差 / 不一致 / 离群」
     （规则写在本仓 `AGENTS.md` §0「孤证不立」条内 + 规格 `SPEC.md` §8 威胁 2 条 1b）。
   - **未做**：真实空口（需硬件，见 §四其余项）、攻击流量的 UI 独立面板（目前复用签名上报流 + 事件历史）。
+- [~] **Router 下行真实性（F-14，2026-09-13）**：Server → Router 的三类下行（LOST-TABLE /
+  TRACKING-STATUS / ERROR）**都未签名** → 能向 Router 的 UDP 端口发包的人可以送一张**伪造的
+  LOST-TABLE**：它会整体替换走失缓存并置 `_synced=True` → 此后不再拉表、命中也不答 TRACKED、
+  **不再产生 ORPAH-FOUND**（最阴的版本：只摸掉某个 SN，其他一切正常）——
+  即**一条伪造的空表就能“弄瞎”这台 Router**。
+  - **已做（A 方案，用户 2026-09-13 选）**：`router._from_server()` 下行**只收配置的
+    Server 源 IP + 源端口**，别的在**解析之前**就丢 + 计数/留痕（`down_rejected`、
+    `/api/status.router_down_rejected`、页面 Router 行）；`server_host` 为主机名时先解析。
+    **fail-closed**：真机若源地址与配置不同（NAT/多宿主）表现为“下行全被丢”，显式失败。
+    验收：`test_router.py`（9 项离线）+ `demo_l4.py` 真 UDP（从 `127.0.0.2` 打假表 →
+    被丢且缓存不动；对照组 Server 来的照常生效）。
+  - **未做（B 方案）**：下行带 **HMAC/签名**（Router 持共享密钥或 Server 公钥）—— 需与
+    **密钥分发**一起定，与「CRL 分发到 Router」（§一，用户已定不做）属同一批 Router 侧信任问题。
+    **注：源地址校验 ≠ 真实性**（同源可伪造、跨网段/NAT 失效）—— 不得写成“已防住”。
 - [x] **限频（《Orpah ID 协议规范》§5.8，P1）**：签名只能滤掉“伪造”，滤不掉“**洪水**”——
   合法设备被高频刷量时，每条都要走一次 ECDSA 验签，不设限就是自伤。
   - **已做（2026-09-13，四行全部）**：
