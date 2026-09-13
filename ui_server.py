@@ -66,6 +66,7 @@ import maps                               # noqa: E402  野外包（本地 XYZ �
 import energy as en                       # noqa: E402  能量轴（免电池客户端模型，纯计算）
 import ratelimit as rl_mod                # noqa: E402  限频（§5.8）：令牌桶 + 计数 + 快照
 import tsdb                               # noqa: E402  Apache IoTDB 时序库
+import freshness as fr                    # noqa: E402  「这是不是老数据」的单一源（UI ④）
 from waiting import wait_until            # noqa: E402  按截止时间等待（只这一份实现）
 import damm32 as d32                      # noqa: E402  校验算法单一源
 import luhn32 as l32                      # noqa: E402
@@ -235,7 +236,10 @@ class OrpahApp:
         self._ensure_demo_stations()
         # IoTDB 时序库（上报流 + 业务事件；未启动时优雅降级）
         self.tsdb = tsdb.Tsdb()
-        # 组件
+        # 数据新鲜度跟踪（UI ④，2026-09-13）：各条周期流的“最近一次真的动了”+ 各自节拍。
+        # 打点位置就是这几条流**真正推进的地方**（下面 start()/_report_loop 等），
+        # 不在页面侧猜 —— 页面只能看到结果，看不到“后端其实停了”。
+        self.fresh = fr.Tracker()
         self.cores = []
         self.srv = None
         self.router = None
@@ -580,6 +584,11 @@ class OrpahApp:
                 time.sleep(0.25)
                 self.client.report_once()
                 self._id_tick()
+                # 数据新鲜度（UI ④）：这一轮**真的发出去了**才算“周期上报在动”。
+                # 节拍随能量轴变（2s → 30s）→ 一起更新，否则省电模式会被自己判成“停摆”
+                # （一条假告警比没有告警更坏）。人工 `pause` **不打点** ——
+                # 那是“我知道它停了”，打点会把暂停伪装成正常。
+                self.fresh.touch("report_cycle", period=self.every)
             time.sleep(self.every)
 
     def _energy_step(self, drain=True):
@@ -927,6 +936,8 @@ class OrpahApp:
                 v = self.alert_view()
                 self.alert_cache = dict(v, t=time.strftime("%H:%M:%S"))
                 self._notify_step(v["alerts"])
+                # 数据新鲜度：巡视图每转一圈就算“告警扫描在动”（节拍 = 本函数的 interval）
+                self.fresh.touch("alert_scan", period=interval)
             except Exception as e:        # 巡视图不能死（死了通知会静默停摆）
                 print(f"[notify] 巡视出错：{type(e).__name__}: {e}")
             self.stop.wait(interval)
@@ -1033,6 +1044,9 @@ class OrpahApp:
             "cap_rtc": rec.get("cap_rtc"), "ts_ok": rec.get("ts_ok"),
         }
         self.id_report_total += 1
+        # 数据新鲜度：**服务端真的收到并走完验签**才算“ID 上报流在动”——
+        # 在本机注入处打点会把“链路断了（帧没到）”也标成新鲜。
+        self.fresh.touch("id_report", period=self.every)
         self.id_reports.appendleft(rec)
         self._emit("id_report", rec)
         # 攻击流量面板：这条验签结果是不是我们注入的攻击流量（按 nonce 认领）——
@@ -1202,6 +1216,10 @@ class OrpahApp:
             "lost": self.lost,
             "lost_sns": self.registry.lost_sns(),
             "tsdb": self.tsdb.available,
+            # 数据新鲜度（UI ④，2026-09-13）：每条流「最近一次真的动了」+ 按各自节拍算的状态。
+            # `age_s` 在**服务端**算 —— 浏览器与本机时钟不一致时，年龄不该由前端自己减。
+            # 诚实边界：它只回答「我们这侧还在不在推进」，**不代表对端设备在线**。
+            "fresh": self.fresh_view(),
             "publishes": list(self.publishes),
             "publish_total": self.publish_total,
             "founds": list(self.founds),
@@ -1259,6 +1277,20 @@ class OrpahApp:
             "id_revoked": (self.id_ks.is_revoked(self.client.sn)
                            if self.client else False),
         }
+
+    def fresh_view(self):
+        """数据新鲜度视图（UI ④，2026-09-13）—— 4 条流的单一源。
+
+        只列**周期性**的东西（各自有真实节拍）；事件型（发现/走失表）不入列：
+        它们本来就是“几天才动一次”的，列出来只会一直红了（那是噪声不是信号）。
+
+        IoTDB 落库行多给一个 `on`：**没启用**与**本该写却停了**是两回事，
+        页面文案也不同（一个中性、一个告警），不许合成一句。
+        """
+        rows = self.fresh.rows()
+        rows.append(fr.tsdb_row(self.tsdb.write_state(), self.every))
+        return {"now": round(time.time(), 3), "worst": self.fresh.worst(rows),
+                "rows": rows}
 
     def cmd(self, action, sn=None, every=None, note="", kind=None, level=None, sec=None,
             rtc="__missing__", on=None, n=None, rotate=None, url=None, resolve=None):

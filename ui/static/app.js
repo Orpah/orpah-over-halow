@@ -455,6 +455,10 @@ async function refresh() {
   try {
     const r = await fetch("/api/status");
     const s = await r.json();
+    /* 数据新鲜度（UI ④，2026-09-13）：先记“本轮轮询成功”，再拿服务端的 `fresh` 渲染。
+       顺序不能反 —— 否则渲染出来的“本页轮询”还悬着上一轮的失败计数。 */
+    freshPollOk();
+    freshRender($("freshBox"), s.fresh, T);
     $("snClient").textContent = s.sn;
     // 计数行（字典 fmt，数字高亮）。**按内容分色**：同一颜色 = 同一类内容，
     // 蓝 = L2（REQ-CONNECT/REPORT）、紫 = Orpah ID 签名上报、黄 = 发现（ORPAH-FOUND）。
@@ -592,7 +596,13 @@ async function refresh() {
         : T("clock_none") + tsTxt;
     }
     renderEnergy(s.energy, s.energy_axis);
-  } catch (e) { /* 服务器未就绪 */ }
+  } catch (e) {
+    /* 服务器未就绪 / 网络断：**这里必须把失败显现出来**（UI ④）——
+       以前是彻底静默：页面上的数字保持最后一次的值，看着“稳定”，
+       但读者没有任何线索知道它已经不再更新了。 */
+    freshPollFail();
+    freshRender($("freshBox"), null, T);
+  }
 }
 
 /* ---------- 控制按钮 ---------- */
@@ -913,6 +923,9 @@ connect();
    要不要补”的新问题（漏刷新 = 页面数字停住不更新，比多几次请求更难发现）。
    ⇒ **将来若给 status() 加了 IO/慢查询，必须在这里补防重入**（忙时置 pending、忙完补一次），
    否则请求会堆积且旧响应可能后到（数字瞬时回退）。 */
+/* 本页轮询节拍 = 1s（上面的 setInterval）——「数据新鲜度」按 2.5×/6× 这个节拍判滞后/停摆，
+   所以节拍必须在这里声明（写死成别的值会让状态判断与真实轮询对不上）。 */
+freshPollArm(1);
 setInterval(refresh, 1000);
 refresh();
 

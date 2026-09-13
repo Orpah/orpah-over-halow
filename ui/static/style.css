@@ -119,6 +119,21 @@ details.fold > :not(summary) { margin-top: 4px; }
 /* 表内滚动时表头跟着滚走：给限高表再加一条细边框提示“这里可以滚” */
 .scroll-y { border-bottom: 1px solid var(--bd); }
 
+/* ---- 数据新鲜度条（UI ④，2026-09-13）----
+   一行一块，形状 + 颜色**双通道**（●正常 / ◐滞后 / ✕停摆 / ○没见过 / ·事实陈述），
+   而且**每块都带文字**（不辨色也能读、色觉障碍下也不丢信息）。
+   窄屏靠 flex-wrap 自然折行，不设固定宽（否则又会把卡片撑宽，见上面窄屏那节）。 */
+.freshstrip { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 2px 0 6px; }
+.freshstrip .fitem { display: inline-flex; align-items: baseline; gap: 5px; font-size: 12px; }
+.freshstrip .flab { color: var(--mut); }
+.freshstrip .fage { font-weight: 600; }
+.freshstrip .fdot { font-size: 12px; line-height: 1; }
+.f-live { color: var(--grn); }
+.f-stale { color: var(--org); }
+.f-stop { color: var(--red); }
+.f-unknown { color: var(--mut); }
+.f-fact { color: var(--mut); }
+
 /* ---- 拓扑 ---- */
 .topo {
   display: flex; align-items: stretch; justify-content: center; gap: 6px;

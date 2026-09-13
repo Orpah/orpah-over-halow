@@ -82,6 +82,10 @@
     <label>n <input id="rpN" type="number" step="0.1" value="2.5"></label>
   </div>
   <p class="hint" id="rpInfo"></p>
+  <!-- 数据新鲜度（UI ④）：回放看的是**历史窗**，所以最要紧的两个事实是
+       「这批数据里最新一条是什么时候」与「本页何时取的」—— 二者都是**陈述**，不判好坏
+       （回放窗本来就可以是昨天的；设备多久报一次也由设备决定）。 -->
+  <div id="rpFresh" class="freshstrip"></div>
   <p class="hint" data-i18n="rp_hint">回放读 IoTDB 时间窗（重启不丢）；定位用与实时页同一个内核（pos.js），站位按当时的悬停时间窗取 RSSI 中位数。回放只看某时刻之前的样本 —— 不会"看到未来"。</p>
 </section>
 
@@ -233,6 +237,7 @@
 <script src="vendor/leaflet/leaflet.js?v=1.9.4"></script>
 <script src="map.js"></script>
 <script src="pos.js"></script>
+<script src="fresh.js?v=20260913a"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -471,9 +476,13 @@ async function loadSnList() {
 
 async function loadReplay() {
   const sn = $("rpSn").value;
-  if (!sn) { rpInfo(T("rp_no_sn"), "err"); return; }
+  if (!sn) { rpInfo(T("rp_no_sn"), "err"); freshDataset($("rpFresh"), { error: T("rp_no_sn") }, T); return; }
   const from = msOfInput($("rpFrom").value), to = msOfInput($("rpTo").value);
-  if (from === null || to === null || to <= from) { rpInfo(T("rp_bad_range"), "err"); return; }
+  if (from === null || to === null || to <= from) {
+    rpInfo(T("rp_bad_range"), "err");
+    freshDataset($("rpFresh"), { error: T("rp_bad_range") }, T);
+    return;
+  }
   stop();
   rpInfo(T("rp_loading"));
   try {
@@ -481,7 +490,11 @@ async function loadReplay() {
       fetch(`/api/replay?sn=${encodeURIComponent(sn)}&from=${from}&to=${to}`).then(x => x.json()),
       fetch("/api/stations").then(x => x.json()),
     ]);
-    if (!rep.ok) { rpInfo(T("rp_offline"), "err"); return; }
+    if (!rep.ok) {
+      rpInfo(T("rp_offline"), "err");
+      freshDataset($("rpFresh"), { error: T("rp_offline") }, T);
+      return;
+    }
     S.sn = sn; S.from = rep.from; S.to = rep.to;
     S.points = rep.points || [];
     S.obs = rep.obs || {};                 // {sid: [{t,rssi,seq}]} 各路由器本窗测量（升序）
@@ -498,6 +511,16 @@ async function loadReplay() {
       .replace("{p}", S.points.length).replace("{e}", S.events.length)
       .replace("{o}", nObs)
       + (rep.truncated ? " · " + T("rp_truncated") : "");
+    /* 数据新鲜度（UI ④）：回放看的是**历史窗**，所以只陈说两个事实——
+       「这批数据最新一条是什么时候」（不判好坏：昨天也可以是正常回放）与「本页何时取的」。
+       `poll:false`：回放不轮询（一次取一窗），不该出现“本页轮询滞后”那一行。 */
+    const cutoff = S.points.reduce((m, p) => (p && p.t && p.t > m ? p.t : m), 0);
+    freshDataset($("rpFresh"), {
+      fetchAt: Date.now() / 1000,
+      cutoff: cutoff ? cutoff / 1000 : null,
+      n: S.points.length,
+      poll: false,
+    }, T);
     rpInfo("");                     // 先清掉「拉取中…」，再由 analyzeValid 写「光标已落…」
     analyzeValid();
     precomputeFrames();             // 全窗位置帧 + 卡尔曼平滑（一次算完，之后每帧只取 t<=光标）
@@ -508,6 +531,7 @@ async function loadReplay() {
     render();
   } catch (e) {
     rpInfo(T("err_offline"), "err");
+    freshDataset($("rpFresh"), { error: T("err_offline") }, T);
   }
 }
 

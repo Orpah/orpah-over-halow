@@ -93,9 +93,36 @@ police_case_no, police_station, belongings, vehicle, outcome, closed_at`
 ## 4. `/api/status`（与 index 对齐）
 
 `status` 返回新增 `lost_sns: [sn...]`（当前 `lost` 状态设备），
-index 报文流据此把丢失设备 SN 标红；SN 已链接 `registry.html?sn=`。
+index 报文流据此把丢失设备标红；SN 已链接 `registry.html?sn=`。
 另含 `tsdb: bool`（IoTDB 是否在线）。
 registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
+
+### `fresh`：数据新鲜度（UI ④，2026-09-13）
+
+```json
+"fresh": {"now": 1789..., "worst": "live",
+  "rows": [
+    {"key": "report_cycle", "last": 1789..., "age_s": 1.2, "period_s": 2.0, "state": "live"},
+    {"key": "id_report",    "last": 1789..., "age_s": 0.8, "period_s": 2.0, "state": "live"},
+    {"key": "alert_scan",   "last": 1789..., "age_s": 2.1, "period_s": 3.0, "state": "live"},
+    {"key": "tsdb_write",   "last": 1789..., "age_s": 0.3, "period_s": 2.0, "state": "live",
+     "on": true, "available": true, "err": ""}]}
+```
+
+- **谁算**：`freshness.Tracker`（服务端）。`age_s` **在服务端算** —— 浏览器与本机时钟不一致时，
+  年龄不该由前端自己减；页面只负责显示（阈值倍数 `LIVE_MULT`/`STALE_MULT` 也只在
+  `freshness.py` 与 `fresh.js` 各存一份，`test_fresh.py` 会**逐字比**这两个数）。
+- **怎么判**：按**每条流自己的节拍** `period_s` → `≤2.5×` = `live`、`≤6×` = `stale`、再久 = `stopped`；
+  `last` 缺失 = `unknown`（**不是** 0、不是 live —— “没有时间戳”与“刚刚更新过”是两件事）。
+  节拍随能量轴变（省电时周期会涨），所以打点时会一并更新 `period_s`。
+- **`tsdb_write` 行的两个特例**：`on=false`（没装 iotdb 包/显式关掉）→ `unknown`
+  （“没打算落库”不是故障）；`enabled` 但从未成功过 → `unknown`（没有基准）。
+- **不包括什么**：事件型（发现/走失表）不入列 —— 它们本来几天才动一次，列出来只会一直红。
+  **人工 `pause` 不打点**：那是“我知道它停了”，打点会把暂停伪装成正常。
+- **诚实边界**（页面必须写出来）：它只说明**我们这侧**这类数据还在不在推进，
+  **不代表对端设备在线**（设备不发报也可能是没电了/被屏蔽了）。
+- **本页轮询**（`fresh.js` 的 `freshPoll*`）是**页面自己**观察的事实，不来自本接口：
+  后端停摆与“本页在后台被浏览器限流”（`document.hidden`）是两回事，分开呈现。
 
 ### 下行报文的新字段（F-14 B 方案，2026-09-13）
 

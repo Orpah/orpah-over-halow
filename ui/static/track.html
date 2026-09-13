@@ -63,6 +63,7 @@
     <button class="btn" id="dsLoad" data-i18n="tk_fetch">立即拉取</button>
   </div>
   <p class="hint" id="dsInfo" data-i18n="tk_ds_info_sim">模拟模式：本地合成 RSSI。切到「真实上报」会从 IoTDB 读取该设备真实上报的 RSSI 时序。</p>
+  <div id="dsFresh" class="freshstrip"></div>
 </section>
 
 <section class="card" id="cardMap">
@@ -222,6 +223,7 @@
 <script src="nav.js?v=20260913a"></script>
 <script src="map.js"></script>
 <script src="pos.js"></script>
+<script src="fresh.js?v=20260913a"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -797,12 +799,14 @@ async function loadReal() {
     realSamples = [];
     realObs = {};
     info.textContent = T("tk_no_dev");
+    freshDataset($("dsFresh"), { error: T("tk_no_dev") }, T);
     updateRealStat(); renderStations(); draw(); return;
   }
   const limit = Math.min(5000, Math.max(10, parseInt($("dsLimit").value) || 200));
   try {
     const r = await fetch(`/api/ts/query?sn=${encodeURIComponent(sn)}&limit=${limit}`).then(x => x.json());
     if (my !== realSeq) return;                                       // 丢弃过期响应
+    freshPollOk();                                                    // 本页轮询：这一拍拿到了答复
     realSamples = (r.ok && r.rows) ? r.rows.slice().reverse() : [];   // IoTDB 按时间倒序返回 → 翻正
     realObs = r.obs || {};                                            // 各路由器各自的测量序列
     const nObs = Object.keys(realObs).reduce((a, k) => a + (realObs[k] || []).length, 0);
@@ -816,11 +820,25 @@ async function loadReal() {
         + (nObs ? T("tk_real_obs").replace("{n}", nObs) : "")
         + T("tk_real_caveat");
     }
+    /* 数据新鲜度（UI ④）：**取数时刻**（本页）与**数据截止**（设备最后一条上报）分开说。
+       不判好坏 —— 设备多久报一次由设备决定（低功耗设备可能半小时一条），
+       拿“截止多久以前”当故障会把正常省电误报成停摆。 */
+    const last = realSamples.length ? realSamples[realSamples.length - 1] : null;
+    freshDataset($("dsFresh"), {
+      fetchAt: Date.now() / 1000,
+      cutoff: (last && last.t) ? last.t / 1000 : null,     // rows 的 t 是毫秒 → 统一成秒
+      n: r.ok ? realSamples.length : null,
+      error: r.ok ? null : T("tk_iotdb_down"),
+      poll: $("dsAuto").checked,        // 关了自动刷新就没有“本页轮询”这回事（不显示，不谎报滞后）
+    }, T);
   } catch (e) {
     if (my !== realSeq) return;                                       // 丢弃过期响应
+    freshPollFail();
     realSamples = [];
     realObs = {};
     info.textContent = T("tk_query_fail") + e;
+    /* 取数失败也要看得见（否则页上还是上一轮的点，看着“有数据”） */
+    freshDataset($("dsFresh"), { error: T("tk_query_fail") + e }, T);
   }
   updateRealStat();
   renderStations();          // 站位观测 / 定位随新数据刷新
@@ -1229,11 +1247,16 @@ function applyMode() {
   if (realTimer) { clearInterval(realTimer); realTimer = null; }
   if (real) {
     if (timer) { clearInterval(timer); timer = null; $("btnRun").textContent = T("tk_run"); }
+    freshPollArm(2);                    // 本页轮询节拍 = 自动刷新 2s（状态判定靠它）
+    freshPollReset();
     refreshSnList().then(loadReal);
     loadStations();
     if ($("dsAuto").checked) realTimer = setInterval(loadReal, 2000);
   } else {
     refreshRouters();          // 回模拟模式 → 地图标记换回测点表
+    /* 模拟模式：数据是本页合成的，没有“取数时刻/数据截止”这回事 ——
+       如实说清（否则那两行会一直空白，让人以为取了但没数据）。 */
+    freshDataset($("dsFresh"), { sim: true, poll: false }, T);
     draw(); updateStat(null);
   }
   applyView();
@@ -1246,6 +1269,8 @@ $("dsLimit").onchange = loadReal;
 $("dsAuto").onchange = () => {
   if (realTimer) { clearInterval(realTimer); realTimer = null; }
   if (dsMode === "real" && $("dsAuto").checked) realTimer = setInterval(loadReal, 2000);
+  /* 开关一变，新鲜度条要跟着变：关了自动刷新就不该再显示“本页轮询滞后” */
+  if (dsMode === "real") loadReal();
 };
 $("plA").onchange = () => { if (dsMode === "real") { updateRealStat(); renderStations(); draw(); } };
 $("plN").onchange = () => { if (dsMode === "real") { updateRealStat(); renderStations(); draw(); } };
@@ -1332,6 +1357,9 @@ loadPacks().then(() => { if ($("tileSrc").value === "pack" && $("view").value ==
    留在模拟模式的话 URL 里的 SN 根本看不到（用户会以为跳错了）。
    `applyMode()` 内部会 `refreshSnList().then(loadReal)`，所以不要再重复调 refreshSnList。 */
 if (QP_SN) { $("dsMode").value = "real"; applyMode(); } else refreshSnList();
+/* 初始是模拟模式：新鲜度条也要有个交代（否则那一块空白，看着像“取数失败但没报错”）。
+   `applyMode()` 只在**切模式**时被调，所以这里单独喂一次。 */
+if ($("dsMode").value !== "real") freshDataset($("dsFresh"), { sim: true, poll: false }, T);
 draw(); updateStat(null);
 loadConfig();            // A/n 默认值取自服务端标定（异步；填完会重画一帧）
 loadAnchorDefaults();    // 默认测点取自服务端站位表（单一源；异步；取不到用 ANCHORS_FALLBACK）

@@ -50,6 +50,12 @@ class Tsdb:
         self._evt_last_ms = 0            # 事件时间戳单调递增游标
         self._last_try = 0.0
         self._retry_delay = 1.0
+        # 「落库在不在推进」的事实（UI ④ 数据新鲜度，2026-09-13）：**只记事实，不判好坏** ——
+        # `available` 是一个瞬时布尔（一次失败就 False），看不出“已经坏了 30 秒”还是
+        # “刚坏一下又好了”。所以另记两个时刻给页面自己算龄：最后成功 / 最后失败。
+        self.last_ok_ts = None           # 最后一次写入成功的时刻（epoch 秒）
+        self.last_err_ts = None          # 最后一次写入失败的时刻
+        self.last_err = ""               # 最近一条错误摘要（截断，供页面/日志排查）
         self.event_retention_days = EVENT_RETENTION_DAYS
         self.purged_upto = None          # 最近一次清理的截止时间(ms)
         self._purged = False             # 本次进程是否已执行过启动清理
@@ -110,6 +116,19 @@ class Tsdb:
                 + "." + (sn or "?").replace("-", "_"))
 
     # ---------------- 写入 ----------------
+    def _mark(self, ok, err=""):
+        """记一次写入结果（成功/失败各记一个时刻）。
+
+        为什么在写入处记、而不是在调用方记：调用方有 write_report / write_event /
+        write_router_obs 三处，漏一处就会让页面上的“落库”新度说谎（以前就吃过
+        “某条路径的成功没被计入”的亏）。
+        """
+        if ok:
+            self.last_ok_ts = time.time()
+        else:
+            self.last_err_ts = time.time()
+            self.last_err = str(err)[:120]
+
     def write_report(self, sn, ts=None, rssi=None, seq=None, router_id=""):
         """写一条设备上报点（rssi/seq/router_id）。返回是否成功。"""
         if not self._ensure() or self.session is None:
@@ -124,9 +143,11 @@ class Tsdb:
                     [float(rssi) if rssi is not None else 0.0,
                      int(seq) if seq is not None else 0,
                      router_id or ""])
+            self._mark(True)
             return True
-        except Exception:
+        except Exception as e:
             self.available = False
+            self._mark(False, f"{type(e).__name__}: {e}")
             return False
 
     def write_event(self, etype, sn="", detail="", ts=None, actor=""):
@@ -156,9 +177,11 @@ class Tsdb:
                      TSDataType.TEXT],
                     [etype, sn or "", detail or "",
                      (actor or "").strip() or "system"])
+            self._mark(True)
             return True
-        except Exception:
+        except Exception as e:
             self.available = False
+            self._mark(False, f"{type(e).__name__}: {e}")
             return False
 
     # ---------------- 查询 ----------------
@@ -212,10 +235,24 @@ class Tsdb:
                     [TSDataType.FLOAT, TSDataType.INT64],
                     [float(rssi) if rssi is not None else 0.0,
                      int(seq) if seq is not None else 0])
+            self._mark(True)
             return True
-        except Exception:
+        except Exception as e:
             self.available = False
+            self._mark(False, f"{type(e).__name__}: {e}")
             return False
+
+    def write_state(self):
+        """落库侧的**事实**快照（UI ④ 数据新鲜度行用；不含判断，判断只在 freshness.py）。
+
+        `enabled` = 这套环境到底启没启用 IoTDB（没装 iotdb 包 / 显式关闭 → False）；
+        `available` = 当前连接可用；`last_ok`/`last_err` 是 epoch 秒。
+        注意：`enabled=False` 时这行应显示「未启用」而**不是**「停摆」——
+        两者处置完全不同（一个是不打算落库，一个是本该落库却停了）。
+        """
+        return {"enabled": bool(self.enabled), "available": bool(self.available),
+                "last_ok": self.last_ok_ts, "last_err": self.last_err_ts,
+                "err": self.last_err}
 
     def query_router_range(self, sid, sn, t0_ms, t1_ms, limit=20000):
         """某路由器在某时间窗内对某设备的测量，**按时间升序** → [{t, rssi, seq}]。"""

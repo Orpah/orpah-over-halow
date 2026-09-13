@@ -55,6 +55,15 @@
 </header>
 
 
+<!-- ============ 数据新鲜度（UI ④）：先回答「这页的数字是不是老的」 ============
+     摆在拓扑之前，是因为后面所有数字的可信度都建在它上面：后端停了的话，
+     拓扑上的计数就一直是那几个数（看着“没变”，其实根本不在跑）。 -->
+<section class="card" id="freshCard">
+  <h3 data-i18n="fresh_head">数据新鲜度</h3>
+  <div id="freshBox" class="freshstrip"><span class="hint" data-i18n="fresh_wait">正在读取…</span></div>
+  <p class="hint" data-i18n="fresh_hint">口径：每条流按它自己的节拍判「在动 / 滞后 / 停摆」（节拍与上次时刻看悬停提示）。「本页轮询」是本页自己观察的 —— 后端停摆与「本页在后台被浏览器限流」是两回事，分开说。它只说明我们这侧在不在推进，不代表对端设备在线（设备不发报也可能是它没电了或被屏蔽了）。</p>
+</section>
+
 <!-- ============ 告警（规则引擎见 alerts.py；无告警时整卡隐藏） ============ -->
 <section class="card" id="alertCard" hidden>
   <h3 data-i18n="alert_title">告警</h3>
@@ -384,7 +393,8 @@
 
 <script src="ui_i18n.js"></script>
 <script src="nav.js?v=20260913a"></script>
+<script src="fresh.js?v=20260913a"></script>
 <script>navInit();</script>
-<script src="app.js?v=20260913d"></script>
+<script src="app.js?v=20260913e"></script>
 </body>
 </html>
