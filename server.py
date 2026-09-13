@@ -14,6 +14,9 @@ L2 扩展（SPEC §7/§5）：Server 是**走失表权威**：
     下行只回最新 Router）；**首次见到某台 Router 上报/拉表**（`_note_router`：REPORT /
     ORPAH-FOUND / LOST-TABLE-REQ，不以 REQ-CONNECT 为依据）立即推当前走失表（新 Router 追平）。
   - 维护走失库（内存表）：mark_tracked(sn) / untrack(sn) / snapshot()
+  - 限频（§5.8，2026-09-13）：REPORT / ORPAH-ID-REPORT 进**验签之前**先过两条令牌桶
+    （per-SN + per-Router，见 `ratelimit.py`）；超限直接丢弃并计数/留痕（`ratelimit` 事件），
+    **不**记成签名失败。ORPAH-FOUND **故意不限**（业务关键事件，漏一条 = 一个人没被找到）。
   - 走失库变更 → 向所有见过（上报过）的 Router 下发 LOST-TABLE（Router 据此在
     REQ-CONNECT 阶段直接告知 ACCESS-INFO 的 tracked 标志）
 
@@ -44,6 +47,7 @@ from orpah_proto import (ORPAH_UDP_PORT, MSG_REPORT, MSG_REQ_CONNECT,
                          TS_SRC_DEVICE, rtc_of)
 from alerts import ENERGY_LOW_MV     # 能量轴：低电量阈值（只在“成因推导”里用，避免两处阈值）
 import orpah_id as oid                     # Orpah ID 验签（§9.3）
+import ratelimit as rl_mod                 # 限频（§5.8）：验签**之前**的两条防线
 
 LOG = True
 
@@ -58,7 +62,8 @@ class OrpahServer:
 
     def __init__(self, port=ORPAH_UDP_PORT, on_report=None, on_down=None,
                  on_lost=None, on_push=None, on_found=None,
-                 keystore=None, id_nonces=None, on_id_report=None):
+                 keystore=None, id_nonces=None, on_id_report=None,
+                 rl=None, on_ratelimit=None):
         self.port = port
         self.on_report = on_report          # callable(msg) or None（收到 REPORT）
         self.on_down = on_down              # callable(msg, router_addr) 下行应答
@@ -77,6 +82,13 @@ class OrpahServer:
         self.on_id_report = on_id_report
         self.id_report_total = 0
         self.id_reports = deque(maxlen=20)     # 环形（appendleft 自动截断，线程安全）
+        # 限频（§5.8，2026-09-13）：**验签之前**的两条防线（per-SN + per-Router）。
+        # 只作用于 REPORT / ID-REPORT；**ORPAH-FOUND 故意不限**（发现走失是业务关键事件，
+        # 漏一条 = 一个人没被找到；「某台 Router 刷 FOUND」属 Router 身份问题，见 F-12）。
+        self.rl = rl if rl is not None else rl_mod.RateLimiter.from_env()
+        self.on_ratelimit = on_ratelimit       # callable(rec) 被限频丢弃
+        self.rl_dropped = 0                    # 本实例丢弃总数（= rl 两桶之和，冗余但好读）
+        self.rl_drops = deque(maxlen=50)       # 最近被丢弃的（供 UI/事件）
         self._stop = threading.Event()
         self.sock = None
         # 权威走失库：sn -> {"tracked": bool, "note": str, "since": ts}
@@ -167,6 +179,15 @@ class OrpahServer:
     def _handle(self, msg, addr):
         mtype = msg.get("type")
         sn = msg.get("sn")
+        # 限频（§5.8）：放在**验签/业务处理之前** —— 它是为了省 CPU（ECDSA），不是为了判真假。
+        # 代价必须说明：per-SN 桶的 key 来自**未验签**的 payload.sn → 轮换 SN 能绕过它，
+        # 所以另有 per-Router 桶（源地址）兜底；两条都过才放行（见 ratelimit.py）。
+        if mtype in (MSG_REPORT, MSG_ID_REPORT):
+            dec = self.rl.check(sn=sn, router=addr[0],
+                                kind="id" if mtype == MSG_ID_REPORT else "report")
+            if not dec.ok:
+                self._on_ratelimit(mtype, sn, addr, dec)
+                return
         # 非 REPORT 的带 sn 报文也记住 Router（如误达 Server 的 REQ-CONNECT，仅记录）
         if mtype == MSG_REPORT:
             self._on_report(msg, addr)
@@ -207,6 +228,26 @@ class OrpahServer:
             self._on_id_report(msg, addr)
         else:
             log(f"收到未处理类型 {mtype}（来自 {addr}），忽略")
+
+    def _on_ratelimit(self, mtype, sn, addr, dec):
+        """被限频丢弃：计数 + 留痕（**不当成签名失败**，也不进验签链路）。
+
+        语义边界（写在线上就是为了以后别把两者混起来）：
+        - `id_reject` = 过了限频，但**验签链**判不合格（伪造/重放/吊销…）；
+        - 本次 = **根本没让进验签**（省 CPU 的丢弃）→ 另记 `ratelimit` 事件。
+        把丢弃记成 `id_reject` 会让「被哪道防线拒」失真，也会污染签名失败率告警。
+        """
+        which = dec.which or "-"
+        retry = dec.retry_after
+        rec = {"t": time.strftime("%H:%M:%S"), "mtype": mtype, "sn": sn or "-",
+               "router": f"{addr[0]}:{addr[1]}", "which": which,
+               "retry_after": None if retry == float("inf") else round(retry, 2)}
+        self.rl_dropped += 1
+        self.rl_drops.appendleft(rec)
+        log(f"限频丢弃 [{self.rl_dropped}] {mtype} sn={rec['sn']} "
+            f"<- {rec['router']}（{which} 防线，{rec['retry_after']}s 后可再试）")
+        if self.on_ratelimit:
+            self.on_ratelimit(rec)
 
     def _on_report(self, msg, addr):
         sn = msg.get("sn")

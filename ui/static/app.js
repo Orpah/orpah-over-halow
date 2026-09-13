@@ -338,6 +338,84 @@ function renderIdReports(list) {
   });
 }
 
+/* ---------------- 限频（§5.8）：计数 + 刷量演示 ----------------
+   参数一律读服务端（`/api/status.ratelimit.params`）——页面**不写死**限频参数，
+   否则改了环境变量会出现“页面说的与服务器做的不一致”。*/
+let rlBusy = false;
+let rlP = {};                     // 最近一次 /api/status 里的限频参数（刷量条数按它算）
+function renderRatelimit(rl) {
+  if (!rl) return;
+  const p = rl.params || {};
+  rlP = p;
+  $("rlState").textContent = rl.on
+    ? T("rl_on")
+    : T("rl_off");
+  $("rlState").className = rl.on ? "ok" : "";
+  $("rlParams").textContent = T("rl_params_fmt")
+    .replace("{a}", `${p.sn_burst}/${p.sn_rate}`)
+    .replace("{b}", `${p.router_burst}/${p.router_rate}`);
+  $("rlAllowed").textContent = rl.allowed;
+  const d = rl.dropped || {};
+  $("rlDropped").textContent = T("rl_drop_fmt")
+    .replace("{t}", d.total || 0).replace("{s}", d.sn || 0)
+    .replace("{r}", d.router || 0);
+  $("rlDropped").className = (d.total || 0) > 0 ? "bad" : "ok";
+  const tbody = $("rlRecent");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  const rows = rl.recent || [];
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="6" class="pub-empty">${esc(T("rl_recent_empty"))}</td>`;
+    tbody.appendChild(tr);
+    return;
+  }
+  rows.forEach(r => {
+    const tr = document.createElement("tr");
+    const which = r.which === "router" ? T("rl_which_router") : T("rl_which_sn");
+    tr.innerHTML =
+      `<td>${esc(r.t || "")}</td><td>${esc(r.kind || "-")}</td>` +
+      `<td>${esc(r.sn || "-")}</td><td>${esc(r.router || "-")}</td>` +
+      `<td class="no">${esc(which)}</td>` +
+      `<td>${r.retry_after == null ? "-" : esc(String(r.retry_after))}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function rlMsg(txt, cls) {
+  const el = $("rlMsg");
+  if (!el) return;
+  el.textContent = txt;
+  el.className = cls ? "hint " + cls : "hint";
+}
+
+async function rlFlood(btn, n, rotate) {
+  if (rlBusy) return;
+  rlBusy = true;
+  const all = ["btnRlFlood", "btnRlRotate", "btnRlReset"];
+  all.forEach(id => { if ($(id)) $(id).disabled = true; });
+  rlMsg(T(rotate ? "rl_running_rotate" : "rl_running").replace("{n}", n));
+  try {
+    const r = await fetch("/api/ctl", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "flood", n: n, rotate: rotate }),
+    }).then(x => x.json());
+    if (!r || r.ok === false && r.sent === undefined) {
+      rlMsg(T("rl_fail") + (r && r.err ? r.err : ""), "err");
+    } else {
+      // 数字含同一时刻的周期报文（同一 SN 的 L2 REPORT 也会被限）
+      rlMsg(T(rotate ? "rl_done_rotate" : "rl_done")
+        .replace("{n}", r.sent).replace("{a}", r.accepted).replace("{d}", r.dropped)
+        + (r.ok ? "" : " " + T("rl_timeout")), r.dropped > 0 ? "" : "err");
+    }
+  } catch (e) {
+    rlMsg(T("rl_fail") + e, "err");
+  } finally {
+    all.forEach(id => { if ($(id)) $(id).disabled = false; });
+    rlBusy = false;
+  }
+}
+
 async function refresh() {
   try {
     const r = await fetch("/api/status");
@@ -414,6 +492,7 @@ async function refresh() {
     renderFounds(s.founds || []);
     renderId(s.id_demo || {});
     renderIdReports(s.id_reports || []);
+    renderRatelimit(s.ratelimit || {});
     fillSpoofKinds(s.spoof_kinds || []);
     spoofKinds = s.spoof_kinds || spoofKinds;
     // §8.2 降级演示下拉：选项来自 /api/status（单一源），选中值回显当前模式
@@ -756,6 +835,23 @@ $("btnIdSpoofAll").onclick = async () => {
     + " " + T("spoof_all_hint"), "");
 };
 $("btnIdSpoofStop").onclick = () => { spoofRunning = false; };
+
+/* 限频：刷量演示（走真链路；请求会阻塞到发完+服务端处理完）。
+   条数**按服务端参数算**：同一 SN 取 3×桶容量（保证明显超限），轮换取
+   per-Router 桶容量 +20（一定要超它，否则一条都不丢、什么也证明不了）。 */
+if ($("btnRlFlood")) {
+  $("btnRlFlood").onclick = () => rlFlood($("btnRlFlood"),
+    Math.max(60, Math.round((rlP.sn_burst || 20) * 3)), false);
+  $("btnRlRotate").onclick = () => rlFlood($("btnRlRotate"),
+    Math.round((rlP.router_burst || 60) + 20), true);
+  $("btnRlReset").onclick = async () => {
+    await fetch("/api/ctl", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "rl_reset" }),
+    });
+    rlMsg(T("rl_reset_done"));
+  };
+}
 
 applyI18n();               // 本文件在 </body> 前加载，DOM 已就绪，直接应用
 connect();

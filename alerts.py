@@ -22,6 +22,7 @@ alerts.py — 告警规则引擎（供页面红点消费）
       ORPAH_ALERT_CAP_MISMATCH_SEC    能力声明不一致的消警窗口（秒，默认 300）
       ORPAH_ALERT_ENERGY_LOW_MV       电量低阈值（mV，默认 3300）→ id_energy warn
       ORPAH_ALERT_ENERGY_OUT_MV       电量耗尽阈值（mV，默认 3100）→ id_energy crit
+      ORPAH_ALERT_RL_SEC              限频丢弃告警窗口（秒，默认 60；窗口内有丢弃就报）
 
   例（立案后 10 分钟才算超时，避免演示时刚立案就亮红点）：
       PowerShell:  $env:ORPAH_ALERT_CASE_OVERTIME_SEC=600; python ui_server.py --port 8901
@@ -41,6 +42,7 @@ alerts.py — 告警规则引擎（供页面红点消费）
     id_cap_mismatch         设备**已签**声明「有 RTC」却送出不可用的 ts（故障/被动手脚的信号）
     id_energy               设备自报电量低（warn）/ 耗尽（crit）——免电池终端的预期状态，提醒运维
     no_report_energy        设备沉默**且最后自报电量低** → 疑似没电（warn，不升级 crit）
+    ratelimit               最近 rl_sec 内有限频丢弃（warn）——**只陈述事实、不归因**（大流量 ≠ 攻击）
 
 **能量轴归因分流（2026-09-13）**：沉默有两种相反成因，「没电了」该等它取能、「被藏/被干扰」该立刻搜
 —— 不能报同一条。判据用设备**最后自签上报里的**电量（在签名预像内，不可抵赖）加“还能撑多久”：
@@ -135,6 +137,7 @@ CAP_MISMATCH_SEC = _env_int("ORPAH_ALERT_CAP_MISMATCH_SEC", 300)  # 能力声明
 # `energy.mv_of()` 把电量映射成电压；服务端只用电压做两档判断（不从电压反推电量）。
 ENERGY_LOW_MV = _env_int("ORPAH_ALERT_ENERGY_LOW_MV", 3300)
 ENERGY_OUT_MV = _env_int("ORPAH_ALERT_ENERGY_OUT_MV", 3100)
+RL_SEC = _env_int("ORPAH_ALERT_RL_SEC", 60)   # 限频丢弃告警窗口（秒）
 
 
 def _alert(kind, level, key_obj, msg, since, **data):
@@ -153,7 +156,8 @@ def level_by_gap(gap, warn_after, crit_after):
     return LEVEL_CRIT if crit_after <= warn_after or gap > crit_after else LEVEL_WARN
 
 
-def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None, **th):
+def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None,
+             ratelimit=None, **th):
     """返回活跃告警列表（crit 在前，同级按触发时间）。
 
     参数与阈值都可注入，便于单测（见 test_alerts.py）。
@@ -162,6 +166,9 @@ def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None, **t
     `energy` = `{sn: {"mv": int|None, "interval_s": …|None, "silence_in_s": …|None,
     "level": "ES256"|"HS256", "degraded_reason": …|None}}`（**能量轴**，2026-09-13；
     不传则不评估能量规则、也不做沉默归因分流）。
+    `ratelimit` = `{"on": bool, "dropped": {"sn":…, "router":…, "total":…},
+    "last_drop": {"t": epoch秒, "which": …, "sn": …, "router": …}|None}`
+    （**限频**，2026-09-13；不传则不评估限频规则）。
     """
     now = int(now if now is not None else time.time())
     no_rep = th.get("no_report_sec", NO_REPORT_SEC)
@@ -177,6 +184,7 @@ def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None, **t
     drift_max = th.get("clock_drift_ppm", CLOCK_DRIFT_PPM)
     en_low = th.get("energy_low_mv", ENERGY_LOW_MV)
     en_out = th.get("energy_out_mv", ENERGY_OUT_MV)
+    rl_sec = th.get("rl_sec", RL_SEC)
     energy = energy or {}
     out = []
 
@@ -333,6 +341,22 @@ def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None, **t
             out.append(_alert("id_energy", LEVEL_WARN, sn, "alert_id_energy_low",
                               en.get("since") or now, sn=sn, mv=mv,
                               silence_in_s=en.get("silence_in_s")))
+
+    # 8) 限频（2026-09-13，§5.8）：窗口内**有丢弃**就报一条（warn）。
+    #    只陈述事实，**不归因**（术语硬规则）：可能是某台设备被高频刷、网络重传风暴、
+    #    或一台 Router 后面的很多设备一起上报 —— 大流量 ≠ 有人在攻击。
+    #    窗口（`rl_sec`，默认 60s）之内报；窗口外自动消警（与 sig_fail 同一习惯）。
+    if ratelimit:
+        ld = ratelimit.get("last_drop") or {}
+        lts = int(ld.get("t") or 0)
+        dropped = ratelimit.get("dropped") or {}
+        if lts and now - lts <= rl_sec and int(dropped.get("total") or 0) > 0:
+            which = ld.get("which") or "-"
+            out.append(_alert("ratelimit", LEVEL_WARN, which, "alert_ratelimit",
+                              lts, which=which,
+                              dropped_sn=int(dropped.get("sn") or 0),
+                              dropped_router=int(dropped.get("router") or 0),
+                              sn=ld.get("sn"), router=ld.get("router")))
 
     out.sort(key=lambda a: (0 if a["level"] == LEVEL_CRIT else 1, a["since"]))
     return out

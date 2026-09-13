@@ -372,6 +372,41 @@ check("分流：两条的严重度不同（沉默那条反而更轻）",
       {x["kind"]: x["level"] for x in a} == {"no_report_energy": "warn", "id_energy": "crit"})
 
 
+# ---- 规则 8：限频丢弃（2026-09-13，§5.8）------------------------------------
+# 只陈述事实、**不归因**（大流量 ≠ 有人在攻击）；窗口内有丢弃就报，窗口外自动消警。
+def rl(which="sn", t=None, total=7, by_sn=None, by_router=None):
+    return {"on": True,
+            "dropped": {"sn": by_sn if by_sn is not None else total,
+                        "router": by_router or 0, "total": total},
+            "last_drop": {"t": t if t is not None else NOW, "which": which,
+                          "sn": "A", "router": "127.0.0.1:40001"}}
+
+
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW, ratelimit=rl())
+check("限频：窗口内有丢弃 → ratelimit warn（带防线与计数）",
+      kinds(a) == ["ratelimit"] and a[0]["level"] == "warn"
+      and a[0]["which"] == "sn" and a[0]["dropped_sn"] == 7)
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW,
+                 ratelimit=rl(which="router", by_sn=0, by_router=9, total=9))
+check("限频：per-Router 防线也如实报（which=router）",
+      kinds(a) == ["ratelimit"] and a[0]["which"] == "router"
+      and a[0]["dropped_router"] == 9)
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW,
+                 ratelimit=rl(t=NOW - alr.RL_SEC - 1))
+check("限频：超出窗口 → 自动消警（不再视为当前问题）", kinds(a) == [])
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW,
+                 ratelimit={"on": True, "dropped": {"sn": 0, "router": 0, "total": 0},
+                            "last_drop": None})
+check("限频：从未丢弃过 → 不报", kinds(a) == [])
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW, ratelimit=rl(total=0, by_sn=0))
+check("限频：有 last_drop 但计数为 0（异常组合）→ 不报（宁可漏报不误报）", kinds(a) == [])
+check("限频：不传 ratelimit → 不评估（与 clock/energy 同约定）",
+      kinds(alr.evaluate(regis(), case_mgr(), deque(), now=NOW)) == [])
+check("限频：阈值可配（rl_sec=1 时 5 秒前的丢弃不再报）",
+      kinds(alr.evaluate(regis(), case_mgr(), deque(), now=NOW,
+                         ratelimit=rl(t=NOW - 5), rl_sec=1)) == [])
+
+
 # ---- 规则 4：降级上报（含“没有可用 ts_eff”时不漏报）-------------------------
 # 外部评审（2026-09-13）读 `ts = int(r.get("ts_eff") or 0)` + `if ts and ...` 后断言
 # “缺 ts_eff 的记录会跳过 → 漏报”。**实际不会**：ts=0 只是**不参与窗口判定**，

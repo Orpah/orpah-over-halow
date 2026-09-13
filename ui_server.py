@@ -61,6 +61,7 @@ import alerts as alr                      # noqa: E402  告警规则引擎（页
 import clock as clk                       # noqa: E402  设备时钟偏移/漂移估计（纯计算）
 import metrics                            # noqa: E402  指标面板纯计算（/api/metrics）
 import energy as en                       # noqa: E402  能量轴（免电池客户端模型，纯计算）
+import ratelimit as rl_mod                # noqa: E402  限频（§5.8）：令牌桶 + 计数 + 快照
 import tsdb                               # noqa: E402  Apache IoTDB 时序库
 from waiting import wait_until            # noqa: E402  按截止时间等待（只这一份实现）
 import damm32 as d32                      # noqa: E402  校验算法单一源
@@ -185,6 +186,9 @@ class OrpahApp:
         self.id_report_total = 0
         self._last_id_report = None        # 最近一条已签上报（供“重放”演示）
         self.id_attacker = None            # 防 spoof 演示：攻击者设备（自造钥匙，未登记）
+        # ---- 限频（§5.8，2026-09-13）：与 server 共用同一实例（页面要读它的计数） ----
+        self.rl = rl_mod.RateLimiter.from_env()
+        self.rl_events = []                # 最近被丢弃的（最新在前，供卡片展示）
         # 数字签名工具：临时密钥对（供 /api/sig 演示 ES256/HS256）
         self.sig_dev = None
         # 设备清册 + 走失案件（SQLite 持久化；首次启动播种）
@@ -460,7 +464,8 @@ class OrpahApp:
                                on_lost=self._on_lost, on_push=self._on_publish,
                                on_found=self._on_found_server,
                                keystore=self.id_ks, id_nonces=self.id_used,
-                               on_id_report=self._on_id_report)
+                               on_id_report=self._on_id_report,
+                               rl=self.rl, on_ratelimit=self._on_ratelimit)
         self.srv.start()
 
         # 2.5) 已立案案件名下设备同步进权威走失表（种子案件等）
@@ -666,6 +671,66 @@ class OrpahApp:
         return True, {"kind": kind, "zh": zh, "en": en,
                       "expect": expect, "note": note}
 
+    def rl_alert_view(self):
+        """给告警引擎的限频视图（`alerts.evaluate(ratelimit=…)`）。
+
+        只给形状需要的最小集：累计计数 + 最近一次丢弃的时刻/防线（不搬整张桶表）。
+        """
+        snap = self.rl.snapshot()
+        return {"on": snap["on"], "dropped": snap["dropped"],
+                "last_drop": self.rl.last_drop}
+
+    def flood(self, n=200, rotate=False, timeout=30.0):
+        """演示限频（§5.8）：连发 n 条 ID-REPORT，看有多少被丢。
+
+        **走真实链路**（client→STA→AP→router→UDP→server），不是"直接调限频器" ——
+        否则演示的与代码里跑的不是一回事。
+          · `rotate=False`：同一 SN 连发 → 命中 **per-SN** 防线（页面 `which=sn`）；
+          · `rotate=True`：每条换一个 SN（源地址不变）→ per-SN 桶每台都拿满桶、
+            **根本拦不住**（这正是"必须两条防线"的证据）→ 由 **per-Router** 桶拦。
+            轮换用的报文是**最简骨架**（未签名）：限频层本来就不该信任报文内容，
+            这里要看的只是"这条线怎么反应"。
+
+        判据用 `wait_until` 等**服务端真的处理完**（按计数增量）；超时**可见地报**，
+        不静默返回一个好看的数字。
+        """
+        n = max(1, min(int(n or 200), 2000))          # 上限防手滑（2000 条 ≈ 几秒）
+        before_a = self.srv.id_report_total
+        before_d = self.srv.rl_dropped
+        sn0 = self.client.sn if self.client else self.sn
+        for i in range(n):
+            if rotate:
+                self._inject_id(P.build_id_report(
+                    {"payload": {"sn": f"CN-WH01-RL{i:04d}"}}))
+            else:
+                self._send_id_report()                # 真签名（含 ECDSA 开销：这才叫刷量）
+        done = wait_until(
+            lambda: (self.srv.id_report_total + self.srv.rl_dropped
+                     >= before_a + before_d + n),
+            timeout=timeout, interval=0.02)
+        acc = self.srv.id_report_total - before_a
+        drop = self.srv.rl_dropped - before_d
+        if not done:
+            print(f"[ui] 警告：刷量 {n} 条在 {timeout}s 内未被服务端处理完"
+                  f"（已处理 {acc + drop} 条）")
+        return {"ok": bool(done), "sn": sn0, "rotate": bool(rotate), "sent": n,
+                # 注意：这两个数含**同一时刻的周期报文**（同一 SN 的 L2 REPORT 也会被限）
+                "accepted": acc, "dropped": drop}
+
+    def _on_ratelimit(self, rec):
+        """被限频丢弃（server 回调）：留痕 + 落库。
+
+        **与 `id_reject` 分开**：那些是过了限频但**验签链**判不合格（伪造/重放/吊销）；
+        这里是**根本没让进验签**（省 CPU）。混在一起会让“被哪道防线拒”失真，
+        也会污染签名失败率告警（`sig_fail_rate`）。
+        """
+        self.rl_events.insert(0, rec)
+        del self.rl_events[20:]
+        self.tsdb.write_event(
+            "ratelimit", sn=rec.get("sn", "") if rec.get("sn") != "-" else "",
+            detail=(f"which={rec.get('which')} mtype={rec.get('mtype')} "
+                    f"router={rec.get('router')} retry_after={rec.get('retry_after')}"))
+
     def _on_id_report(self, rec):
         """Server 验签结果回调：更新卡片 + 签名上报流（带 trust）。"""
         self.id_demo = {
@@ -867,6 +932,9 @@ class OrpahApp:
             "energy": {"on": self.en_on, "params": self._energy_params(),
                        "state": self.en_state},
             "energy_axis": self.energy_axis(),
+            # 限频（§5.8，2026-09-13）：形状 `on/params/counters/...`（单一源，页面不写死参数）。
+            # `recent` 用 ui_server 自己那份（server 的环形也可，但这里要保证与审计事件同序）。
+            "ratelimit": dict(self.rl.snapshot(), recent=self.rl_events[:5]),
             # 防 spoof 演示的攻击清单（脚本/UI 同一份，见 spoof.py；页面按语言取 zh/en）
             "spoof_kinds": [{"kind": k, "zh": spoof.case_info(k)[0],
                              "en": spoof.case_info(k)[1],
@@ -877,7 +945,7 @@ class OrpahApp:
         }
 
     def cmd(self, action, sn=None, every=None, note="", kind=None, level=None, sec=None,
-            rtc="__missing__", on=None):
+            rtc="__missing__", on=None, n=None, rotate=None):
         if action == "pause":
             self.paused = True
         elif action == "resume":
@@ -935,6 +1003,14 @@ class OrpahApp:
             # 调用方得靠“没有 ok”推断失败；现在显式 false。前端 `if (!info.ok)` 两种都能工作。
             ok, info = self.spoof_attack(kind or "legit")
             return dict({"ok": bool(ok)}, **info)
+        elif action == "flood":
+            return self.flood(n=n, rotate=bool(rotate))
+        elif action == "rl_reset":
+            # 演示用：清零计数后重新刷量，页面上的数字才对得上（**不**清桶本身 ——
+            # 清了就等于“把限频关一下”，会把演示变成假的）
+            self.rl.reset_counters()
+            self.rl_events = []
+            return {"ok": True}
         return {"ok": True}
 
     def stop_all(self):
@@ -1002,7 +1078,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/alerts":
             # 无状态评估：每次用当前快照重算活跃告警（规则见 alerts.py）
             al = alr.evaluate(APP.registry, APP.cases, APP.id_reports,
-                              clock=APP.clock.snapshot(), energy=APP.energy_snapshot())
+                              clock=APP.clock.snapshot(), energy=APP.energy_snapshot(),
+                              ratelimit=APP.rl_alert_view())
             self._send(200, json.dumps({"ok": True, "counts": alr.summary(al),
                                         "alerts": al}).encode())
             return
@@ -1855,7 +1932,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         r = APP.cmd(req.get("action"), sn=req.get("sn"), every=req.get("every"),
                     note=req.get("note") or "", kind=req.get("kind"),
                     level=req.get("level"), sec=req.get("sec"),
-                    rtc=req.get("rtc", "__missing__"), on=req.get("on"))
+                    rtc=req.get("rtc", "__missing__"), on=req.get("on"),
+                    n=req.get("n"), rotate=req.get("rotate"))
         self._send(200, json.dumps(r).encode())
 
 

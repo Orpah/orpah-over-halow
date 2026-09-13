@@ -163,6 +163,33 @@
   <p class="hint" id="spoofMsg" data-i18n="spoof_idle">按「注入伪造上报」把攻击报文真的扔进空口 —— 防线：格式 → SN 校验位（Damm32/mod97）→ 时间窗/nonce → 吊销表 → 设备公钥验签。</p>
 </section>
 
+<!-- ============ 限频（§5.8 各环节限频） ============ -->
+<section class="card" id="rlsec">
+  <h3 data-i18n="rl_title">限频（§5.8）</h3>
+  <div class="id-grid">
+    <div class="id-row"><span data-i18n="rl_state">状态</span><b id="rlState">-</b></div>
+    <div class="id-row"><span data-i18n="rl_params">参数</span><b id="rlParams">-</b></div>
+    <div class="id-row"><span data-i18n="rl_allowed">已放行</span><b id="rlAllowed">-</b></div>
+    <div class="id-row"><span data-i18n="rl_dropped">已丢弃</span><b id="rlDropped" class="ok">-</b></div>
+  </div>
+  <div class="config-row id-ctl">
+    <button class="btn" id="btnRlFlood" data-i18n="rl_btn_flood">刷量（同一 SN）</button>
+    <button class="btn" id="btnRlRotate" data-i18n="rl_btn_rotate">刷量（轮换 SN）</button>
+    <button class="btn" id="btnRlReset" data-i18n="rl_btn_reset">清零计数</button>
+  </div>
+  <p class="hint" id="rlMsg" data-i18n="rl_idle">按「刷量」真的连发报文（走真链路）—— 同一 SN 连发命中 per-SN 防线；轮换 SN 则 per-SN 抓不住、由 per-Router 兜住。</p>
+  <div class="pub-head" data-i18n="rl_recent_head">最近被丢弃的（最新在前）</div>
+  <table>
+    <thead><tr>
+      <th data-i18n="th_time">时间</th><th data-i18n="rl_th_mtype">报文</th>
+      <th data-i18n="th_sn">序列号</th><th data-i18n="rl_th_src">来源</th>
+      <th data-i18n="rl_th_which">哪条防线</th><th data-i18n="rl_th_retry">可再试（秒）</th>
+    </tr></thead>
+    <tbody id="rlRecent"></tbody>
+  </table>
+  <p class="hint" data-i18n="rl_hint">两条防线（per-SN + per-Router）都过才放行，且发生在验签之前（省的是 ECDSA 的 CPU）。边界照实说：per-SN 的 key 取自报文里尚未验签的 sn，所以轮换 SN 就能绕过它，剩下靠 per-Router（源地址）兜；发现走失（ORPAH-FOUND）不受限（漏一条等于一个人没被找到）；全体一起被刷时两条防线都会到顶，那时只能靠上游/接入侧，限频不是“防住了”。刷量条数按服务端参数自动取（同一 SN 取 3 倍桶容量、轮换取 per-Router 桶容量 + 20）—— 仿真空口的吞吐有限，条数再大只会等更久，不改变结论。</p>
+</section>
+
 <!-- ============ 发现记录（走失命中） ============ -->
 <section class="card" id="foundsec">
   <h3 data-i18n="found_title">发现记录（走失命中）</h3>
@@ -196,6 +223,7 @@
         <option value="found" data-i18n="evt_type_found">found</option>
         <option value="id_report" data-i18n="evt_type_id_report">id_report</option>
         <option value="id_reject" data-i18n="evt_type_id_reject">id_reject</option>
+        <option value="ratelimit" data-i18n="evt_type_ratelimit">ratelimit</option>
         <option value="case_mark" data-i18n="evt_type_case_mark">case_mark</option>
         <option value="case_found" data-i18n="evt_type_case_found">case_found</option>
         <option value="case_close" data-i18n="evt_type_case_close">case_close</option>
