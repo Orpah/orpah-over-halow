@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 10:22:34
-- git HEAD：`66a3c4c`
+- 时间：2026-09-13 10:41:14
+- git HEAD：`77fd941`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（15/15 套件通过）
 
@@ -10,7 +10,7 @@
 | 套件 | 脚本 | 结果 | 耗时 | 说明 |
 |---|---|---|---|---|
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
-| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.1s | 通过 |
+| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.2s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
@@ -20,10 +20,10 @@
 | 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.1s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
 | 能量轴（免电池客户端） | `test_energy.py` | ✅ PASS | 0.0s | 通过 |
-| 抓包解析 / 双源对照 | `test_capture.py` | ✅ PASS | 0.1s | 通过 |
+| 抓包解析 / 双源对照 | `test_capture.py` | ✅ PASS | 0.2s | 通过 |
 | 设备时钟漂移（长基线） | `demo_clock.py` | ✅ PASS | 0.1s | 通过 |
 | 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
-| 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
+| 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.1s | 通过 |
 
 ## 关键输出
 
@@ -38,7 +38,7 @@
       OK   truth_at：空输入 → 空表（页面显示“不适用”，不编 0）
     全部通过
 
-### 密钥生命周期 — PASS（0.1s）
+### 密钥生命周期 — PASS（0.2s）
 
     == 1. 签发（幂等） ==
     == 2. 验签（第 1 代） ==
@@ -107,7 +107,7 @@
     [server] [id 3] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=- accepted=False
-    Ran 29 tests in 0.508s
+    Ran 29 tests in 0.511s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -141,7 +141,7 @@
       OK   钳在 [0, store]（不出现负电量、不超容量）
     能量轴测试全部通过
 
-### 抓包解析 / 双源对照 — PASS（0.1s）
+### 抓包解析 / 双源对照 — PASS（0.2s）
 
     == 1. pcap 往返（写→读） ==
     == 2. 格式错误必须吵（不静默降级） ==
@@ -172,12 +172,12 @@
       OK   replay.html 走 frameGaps（报文流判定单一源）
       OK   track.html 三幕演示走 consensus()（判定单一实现，不另传阈值）
 
-### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.2s）
+### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.1s）
 
-    PASS  字典 zh/en key 集合一致（814 / 814）
+    PASS  字典 zh/en key 集合一致（812 / 812）
     PASS  每个 key 恰好 2 次（zh + en）
     PASS  字典非空且含中文与英文条目（翻译真的两套）
-    PASS  扫描 14 个页面/脚本，引用 784 个 key（含动态前缀家族 12 个）
+    PASS  扫描 14 个页面/脚本，引用 782 个 key（含动态前缀家族 12 个）
     PASS  页面引用的 key 全部在字典里
     PASS  node 语法检查通过
 

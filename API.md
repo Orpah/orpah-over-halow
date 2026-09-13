@@ -570,7 +570,14 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 
 ---
 
-## 9. `/api/keys`（密钥库：生成→分发→轮换→吊销→退役）
+## 9. `/api/keys`（密钥库：生成→分发→**撤销**）
+
+> **⚠ 规范口径：本系统不做密钥轮换（2026-09-13 用户定；以《Orpah ID 协议规范》§6.3.1 v1.19 为准）**：
+> 设备侧只持 **1 把 ECDSA P-256 私钥 + 1 把 32 字节 HMAC 降级钥**，一代终身，“不存在第 2 代”。
+> 理由：① **对使用者无强制约束力**（觉得不好用 → 抛弃客户端或**物理屏蔽（包锡纸）**即可）；
+> ② **免电池取能终端做不了轮换**（轮换 = 高能耗 + 必须在线完成一次事务；取能设备承诺不了“换钥那一刻我有电”）。
+> → 下表的 `rotate` / `retire` 属**非规范试验代码**（为对照与单测而留），**页面已不提供入口**，
+> 新代码**不得基于它加功能**（见 `ROADMAP.md` §一 P1、`AGENTS.md`）。
 
 密钥生命周期逻辑在**协议层** `orpah_id.KeyStore`（纯内存、不依赖数据库，`server.py --keystore-file`
 也用它）；**持久化**在 `keystore.KeyStoreDB`（SQLite，与清册同库 `orpah.db`，写穿透）；
@@ -604,9 +611,9 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 | action | 字段 | 说明 |
 |---|---|---|
 | `issue` | `sn`, `model?`, `firmware?` | 签发新一代（`gen = 最大代次+1`）；**已有 active 时幂等** → `note_code=already_active` 并回既有 `kid` |
-| `rotate` | `sn` | 旧 active → `grace`（`now+grace_sec`），新钥 → `active`；回 `kid`/`prev_kid`/`grace_until` |
+| `rotate` | `sn` | ⚠ **非规范/试验**：旧 active → `grace`（`now+grace_sec`），新钥 → `active`；回 `kid`/`prev_kid`/`grace_until`。**规范不做轮换，页面不提供入口** |
 | `adopt` | `sn` | 让**演示终端**改用当前 `active` 代（演示「设备侧完成更新」）：把 `id_dev` 置空后按 active 代重建，**下一次上报周期起**用新代签名（不是即时改签名）；非终端 SN → `note_code=not_demo_sn` |
-| `retire` | `sn`, `kid?` | 退役某代（**当「让宽限期立即到期」的按钮**）；不带 `kid` 则退所有非 active 代 |
+| `retire` | `sn`, `kid?` | ⚠ **非规范/试验**：退役某代（原本当「让宽限期立即到期」的按钮）；不带 `kid` 则退所有非 active 代 |
 | `revoke` | `sn`, `reason?` | **整机作废**：所有代立即不可验签（不可逆*） |
 | `unrevoke` | `sn` | 撤销的逆操作（*仅演示；代次一律转 `retired`，要恢复需重新 `issue`） |
 
@@ -620,13 +627,15 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 - **`revoked_sn` 挡在签发前**：已作废的设备不能 `issue`/`rotate` 复活（撤销不可逆），
   必须 `unrevoke` → 再 `issue`。协议层 `_issue` 也有同名护栏（双保险）。
 
-### 生命周期与「轮换不断链」
+### 生命周期（**规范路径 = 只在两端：签发 → 撤销**）
 
 ```
-register/issue ──> active ──rotate──> grace ──宽限到期(sweep)──> retired
-                     │                  └── retire(提前退役)
-                     └── revoke（整机：所有代 → revoked，立即不可验签，不可逆*）
+issue ──> active ──revoke──> 整机不可验签（不可逆*）
+              └──（⚠ 非规范试验分支）rotate → grace → sweep → retired；页面不提供入口
 ```
+
+- 正常设备**一代终身**：`issue` 一次，直到报废或 `revoke`。若代次表里出现第二代，只可能来自
+  “**撤销后重新签发**”（重绑定）或试验性的 `rotate`，**不是**轮换机制。
 
 - **不改报文格式**：报文头**不加 `kid`**，验签时按代次倒序**逐代试签**（活跃 + 宽限代通常只有
   1~2 个，代价可忽略）→ 老报文/老设备无需任何改动。命中哪代会在结果里回 `kid`/`gen`，

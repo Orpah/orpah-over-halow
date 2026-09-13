@@ -101,10 +101,10 @@
 <section class="card">
   <h3 data-i18n="keys_sec3">说明</h3>
   <ul class="hint">
-    <li data-i18n="keys_note_rotate">轮换不断链：轮换后旧钥进入宽限期，期内新旧钥都能验签，端侧不必与服务器同时换钥；宽限结束旧钥退役、不再受理。</li>
+    <li data-i18n="keys_note_norotate">**本系统不做密钥轮换**（规范 §6.3.1）：设备出厂只带 **1 把 ECDSA P-256 私钥 + 1 把 32 字节 HMAC 降级钥**，一代终身。理由：这不是强制系统 —— 觉得不好用，抛弃客户端或**物理屏蔽（包锡纸）**即可；而且**免电池终端做不了轮换**（轮换 = 高能耗 + 必须在线完成一次事务，取能设备承诺不了“换钥那一刻我有电”）。所以本页**不提供轮换入口**；若代次表里出现第二代，只可能来自“**撤销后重新签发**”（重新绑定），不是轮换。</li>
     <li data-i18n="keys_note_revoke">作废是设备级的：整机立即不可验签（失窃/报废场景），且不可逆 —— 要恢复须先「撤销恢复」再重新签发。</li>
     <li data-i18n="keys_note_priv">本页只管服务器侧该持有的东西（ES256 公钥 + 降级 HS256 对称密钥），私钥不入库；真实设备私钥永不出安全元件。</li>
-    <li data-i18n="keys_note_demo">「终端更新到当前代」会真的让演示终端改用新钥 —— 配合下面的代次表，可以完整看到「轮换 → 旧钥仍可用 → 退役 → 被拒 → 更新 → 恢复」。</li>
+    <li data-i18n="keys_note_demo">「终端更新到当前代」会真的让演示终端改用当前活跃钥 —— 只在“撤销后重新签发”这类重新绑定后用得上（正常设备一代终身，用不到）。</li>
   </ul>
 </section>
 
@@ -252,9 +252,10 @@ function render(v) {
     if (!hasActive && !rev.at) {
       html += `<button class="btn sm" data-act="issue">${esc(T("keys_btn_issue"))}</button>`;
     }
-    if (hasActive) {
-      html += `<button class="btn sm" data-act="rotate">${esc(T("keys_btn_rotate"))}</button>`;
-    }
+    /* **不给轮换入口**（2026-09-13 用户定，以规范 §6.3.1（v1.19）为准：本系统**不做密钥轮换**）：
+       设备只持 1 把 ECDSA P-256 私钥 + 1 把 32 字节 HMAC 降级钥，**一代终身**。
+       后端 `POST /api/keys` 的 rotate/retire 仍在（单测/对照要用），但**属非规范试验代码**、
+       不是设备模型 —— 页面不再暴露，免得把“轮换”当成系统能力（见 `API.md` §9 标注 / `ROADMAP.md` §一 P1）。 */
     /* 「终端更新到当前代」只对演示终端有意义（其它 SN 后端会回 not_demo_sn） */
     if (hasActive && isDemo) {
       html += `<button class="btn sm" data-act="adopt">${esc(T("keys_btn_adopt"))}</button>`;
@@ -287,12 +288,8 @@ function render(v) {
       if (isDemo && demo.gen === k.gen) {
         bits.push(`<span class="demo-tag">${esc(T("keys_demo_here"))}</span>`);
       }
-      let s = `<div class="gen">${bits.join(" ")}`;
-      if (k.state === "grace") {
-        s += ` <button class="btn sm" data-act="retire" data-kid="${esc(k.kid)}">` +
-             `${esc(T("keys_btn_retire"))}</button>`;
-      }
-      return s + `</div>`;
+      /* 不提供「退役」入口（同上：不做轮换）；状态列仍如实显示 retired（可能来自撤销恢复后的收敛） */
+      return `<div class="gen">${bits.join(" ")}</div>`;
     }).join("");
     tdR.innerHTML = rows
       ? `<div class="genrows">${rows}</div>`
