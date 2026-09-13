@@ -126,11 +126,11 @@
     <button class="btn primary" id="btnRun" data-i18n="tk_run">开始</button>
   </div>
   <table class="anchors">
-    <thead><tr><th>#</th><th>x (m)</th><th>y (m)</th><th data-i18n="tk_lie">谎报倍数</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th>x (m)</th><th>y (m)</th><th data-i18n="tk_devmul">测距偏差倍数</th><th></th></tr></thead>
     <tbody id="anchorBody"></tbody>
   </table>
   <p class="hint" data-i18n="tk_anchor_hint">测点坐标即路由器/无人机的悬停位置；客户端在其覆盖范围内移动，每个测点持续测 RSSI。</p>
-  <p class="hint" data-i18n="tk_lie_hint">「谎报倍数」= 把这台路由器的测距乘以该倍数（1 = 正常；4 = 谎报“目标在我这儿更远”）—— 这正是冒充/改装一台路由器最容易做的事。橙方块=在谎报的测点，橙叉=剔除它之后的定位。填 1 台：看定位被带偏多少、可信度那栏怎么把它剔掉；填 2 台：如实报“观测冲突”。</p>
+  <p class="hint" data-i18n="tk_devmul_hint">「测距偏差倍数」= 把这台路由器测得的距离乘以该倍数（1 = 正常；4 = 测得“比真值远 4 倍”；0.2 = 测得“近 5 倍”），用来**演示“某台观测与其余台不一致”时会发生什么**（**不是**在给这台定责：现实里偏差成因很多 —— 遮挡/多径、天线损坏或接头松、元件性能下降、标定漂移，也不排除被改装/冒充）。而且本模型的 RSSI↔距离参数（A/n 对数路径损耗）只假定**空旷无遮挡**，未建遮挡/多径。橙方块 = 被注入偏差的测点，橙叉 = 把它作为离群点剔除后的定位（**离群 ≠ 有错**：只说明它跟其余台对不上，需人工复核）。</p>
 </section>
 
 <section class="card" id="cardStations" style="display:none">
@@ -189,7 +189,7 @@
     <div><span class="k" data-i18n="tk_lab_used">参与定位：</span><span id="stUsed">-</span></div>
     <div><span class="k" data-i18n="tk_lab_advice">建议补站位：</span><span id="stAdvice">-</span></div>
   </div>
-  <p class="hint" data-i18n="tk_trust_hint">可信度 = 多观测**互相印证**的结果（孤证不立）：交叉校验通过 / 单一来源（无冗余，未交叉校验）/ 观测冲突。它与「精度」（椭圆、搜索半径）是**两件事** —— 圈很小也可能是被篡改的单台算出来的。</p>
+  <p class="hint" data-i18n="tk_trust_hint">可信度 = 多观测**互相印证**的结果（孤证不立）：交叉校验通过 / 单一来源（无冗余，未交叉校验）/ 观测冲突。它与「精度」（椭圆、搜索半径）是**两件事** —— 圈很小也可能来自单台偏差大的观测。它**只能判“对不上”，不能判原因**（遮挡/多径、天线、元件、标定、被改装/冒充都可能），所以只当线索、需人工复核。</p>
   <p class="hint" id="hint3" data-i18n="tk_hint3">蓝方块=测点、绿线=真实轨迹、红线=估计轨迹、绿叉=真实位置、红叉=定位估计。</p>
 </section>
 
@@ -230,9 +230,9 @@ function readAnchors() {
   for (const tr of document.querySelectorAll("#anchorBody tr")) {
     const x = parseFloat(tr.querySelector(".x").value);
     const y = parseFloat(tr.querySelector(".y").value);
-    const lieEl = tr.querySelector(".lie");
-    const lie = lieEl ? parseFloat(lieEl.value) : 1;
-    if (!isNaN(x) && !isNaN(y)) out.push({ x, y, lie: (isNaN(lie) || lie <= 0) ? 1 : lie });
+    const devEl = tr.querySelector(".dev");
+    const dev = devEl ? parseFloat(devEl.value) : 1;
+    if (!isNaN(x) && !isNaN(y)) out.push({ x, y, dev: (isNaN(dev) || dev <= 0) ? 1 : dev });
   }
   return out;
 }
@@ -243,11 +243,11 @@ function addRow(x = 30, y = 0) {
     `<td>${idx}</td>` +
     `<td><input class="x" type="number" step="1" value="${x}"></td>` +
     `<td><input class="y" type="number" step="1" value="${y}"></td>` +
-    `<td><input class="lie" type="number" step="0.1" min="0" value="1" title="${T("tk_lie")}"></td>` +
+    `<td><input class="dev" type="number" step="0.1" min="0" value="1" title="${T("tk_devmul")}"></td>` +
     `<td><button class="btn del" title="${T("btn_del")}">×</button></td>`;
   tr.querySelector(".del").onclick = () => { tr.remove(); renumber(); refreshRouters(); };
-  /* 改坐标/倍数时立即重测（不移动）：不然暂停时改了数字看不到任何反应 */
-  [".x", ".y", ".lie"].forEach(sel => {
+  /* 改坐标/偏差倍数时立即重测（不移动）：不然暂停时改了数字看不到任何反应 */
+  [".x", ".y", ".dev"].forEach(sel => {
     tr.querySelector(sel).oninput = () => { if (!timer) measureOnce(false); };
   });
   $("anchorBody").appendChild(tr);
@@ -307,11 +307,13 @@ function stepOnce() {
   measureOnce(true);
 }
 
-/* 一次「测量 → 定位 → 显示」（**不移动**）：改测点坐标/谎报倍数时也能立刻看到效果。
-   谎报倍数是**演示**：把这台的测距乘以倍数（1 = 正常；4 = 谎报“目标更远”）——
-   等价于冒充/改装这台路由器改 RSSI。定位仍按“全信”算（= 天真做法），
-   再用 pos.js 的 consensus() 判定，于是能**并排**看到“被带偏的位置”与“剔除后的位置”。 */
-let estFixedCur = null;      // 剔除作弊台后的估计（没剔除 = null）
+/* 一次「测量 → 定位 → 显示」（**不移动**）：改测点坐标/偏离倍数时也能立刻看到效果。
+   偏离倍数是**演示**：把这台的测得距离乘以倍数（1 = 正常；4 = 测得“远 4 倍”；0.2 = 测得“近 5 倍”）。
+   现实里这种偏差的成因**不止一种**（遮挡/多径、天线损坏、元件性能下降、标定漂移，也包括被改装/冒充）；
+   而本模型的 A/n 参数**只适用于空旷无遮挡**，所以“剔除”只意味着“它跟其余台对不上、先别用它”，
+   不等于认定原因。定位仍按“全信”算（= 天真做法），再用 pos.js 的 consensus() 判定，
+   于是能**并排**看到“被带偏的位置”与“剔除后的位置”。 */
+let estFixedCur = null;      // 剔除“与其余不一致”那台后的估计（没剔除 = null）
 function measureOnce(record = true) {
   const anchors = readAnchors();
   const A = plA(), n = plN();
@@ -321,7 +323,7 @@ function measureOnce(record = true) {
     const rssi = rssiFromDist(Math.hypot(a.x - client.x, a.y - client.y), A, n)
                + (Math.random() * 2 - 1) * noise;
     return { s: { x: a.x, y: a.y, sid: "#" + (i + 1) }, rssi,
-             dist: distFromRssi(rssi, A, n) * (a.lie || 1) };
+             dist: distFromRssi(rssi, A, n) * (a.dev || 1) };
   });
   const dists = obsSim.map(o => o.dist);
   const est = trilaterate(anchors, dists, estHist.length ? estHist[estHist.length - 1] : null);
@@ -436,7 +438,7 @@ function draw() {
   const anchors = readAnchors();
   anchors.forEach(a => {
     const sx = cx + a.x * SCALE, sy = cy - a.y * SCALE;
-    ctx.fillStyle = (a.lie !== 1) ? "#d29922" : "#58a6ff";   // 在谎报的测点标橙，一眼看出谁在撒
+    ctx.fillStyle = (a.dev !== 1) ? "#d29922" : "#58a6ff";   // 被注入偏差的测点标橙（演示用；现实里偏差成因不止一种）
     ctx.fillRect(sx - 4, sy - 4, 8, 8);
     ctx.fillStyle = "#c9d1d9"; ctx.font = "11px monospace";
     ctx.fillText(`${a.x},${a.y}`, sx + 7, sy - 7);
@@ -444,7 +446,7 @@ function draw() {
 
   if ($("showTrue").checked) polyline(ctx, trueHist, "rgba(63,185,80,.55)");
   polyline(ctx, estHist, "rgba(248,81,73,.8)");
-  /* 剔除作弊台后的估计（橙叉）：与“全信”的红叉**并排**，一眼看出被带偏多少 */
+  /* 剔除“与其余不一致”那台后的估计（橙叉）：与“全信”的红叉**并排**，一眼看出被带偏多少 */
   if (estFixedCur) cross(ctx, cx + estFixedCur.x * SCALE, cy - estFixedCur.y * SCALE, "#d29922");
 
   const lx = trueHist.length, le = estHist.length;
@@ -453,9 +455,11 @@ function draw() {
 }
 
 /* ---- 定位可信度（多观测互相印证；判据走 pos.js 的 consensus()，与回放页同一份）----
-   与“精度”（椭圆/搜索半径）**分开显示**：圈小不等于可信 —— 单台被篡改也能算出很小的圈。
+   与“精度”（椭圆/搜索半径）**分开显示**：圈小不等于可信 —— 单台观测偏了也能算出很小的圈。
    孤证不立（SPEC §8 原则 P-1）：1~2 台无冗余 → 只能如实标“单一来源”；≥3 台才谈交叉校验；
-   **4 台才能指认**哪台在撒谎（3 台只能报“观测冲突、判不出是谁”）。 */
+   **4 台才能定到哪一台**不一致（3 台只能报“观测冲突、定不了是哪台”）。
+   **只能判“不一致”，不能判原因**：遮挡/多径、天线损坏、元件性能下降、标定漂移，
+   以及被改装/冒充都可能造成“对不上”—— 只当**线索**，不当结论，要人工复核。 */
 function trustText(c) {
   const n = (c && c.obs) ? c.obs.length : 0;
   if (!c || !n || c.trust === "none") return T("tk_trust_none");
@@ -475,7 +479,7 @@ function trustText(c) {
 }
 function setTrust(c) {
   let txt = trustText(c);
-  /* 残差偏大 → 附带**事实**（不是定罪）：多台同时撒谎时 z 定不了案（n−k≥3 才能定位），
+  /* 残差偏大 → 附带**事实**（不是定罪）：多台同时偏大时 z 定不了案（n−k≥3 才能定位），
      但拟合残差会明显变大（阀值按实测标定，见 pos.js CONS_S0_LOOSE）。 */
   if (c && c.loose) txt += " · " + T("tk_trust_loose").replace("{v}", c.sigma0.toFixed(1));
   const cls = (c && c.trust === "verified") ? "trust v-ok"

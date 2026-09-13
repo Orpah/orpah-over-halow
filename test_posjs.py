@@ -9,7 +9,7 @@
 
 覆盖：RSSI↔距离往返、三边定位复原、WLS（含远端差站权重）、95% 椭圆、观测归集（不看未来）、
 卡尔曼因果性、轨迹抖动、**误差 CDF/分位数/真值插值**（回放页那张误差 CDF 就靠它们）、
-**多观测一致性判定 `consensus`（「孤证不立」）**：一致→verified、谎报→剔除、无冗余→如实降级、
+**多观测一致性判定 `consensus`（「孤证不立」）**：一致→verified、单台偏差大→剔除、无冗余→如实降级、
 互相矛盾→conflict、**移动目标不做补偿就会把诚实观测当成离群（假警报）**。
 
 运行：C:\\Python313\\python.exe test_posjs.py     （需要 node 在 PATH 上）
@@ -281,7 +281,8 @@ ck("报文流：单帧不给 delta（不能凭空造一条间隔）",
 /* ---- 多观测一致性判定 consensus（「孤证不立」：位置可信度不依赖单台路由器）----
    场景：站位 S1..S4，目标静止在 (12,9) 或沿 +x 以 1.2 m/s 行走；观测由真值距离经
    「距离→RSSI→距离」往返生成（与页面同一条链路，不手工塞 dist）。
-   谎报 = 某台把测距按倍数改小（等价于它把 RSSI 报高 —— 被改装/被冒充的路由器能做的正是这件）。 */
+   偏差 = 某台把测得的距离按倍数改大/改小（现实里成因不止一种：遮挡/多径、天线、元件、标定，
+   也不排除被改装/冒充 —— 本用例只用它做**“某台与其余台对不上”**的可复现输入，不预设原因）。 */
 const A0 = -40, N0 = 2.5, TR = { x: 12, y: 9 };
 const ST = [{ sid: "S1", x: 0, y: 0 }, { sid: "S2", x: 30, y: 0 },
             { sid: "S3", x: 0, y: 26 }, { sid: "S4", x: 30, y: 26 }];
@@ -304,30 +305,30 @@ ck("consensus：verified 时估计回真值 (12,9)",
 ck("consensus：无速度/无时刻 → moved=false（如实标“未做运动补偿”）", c3.moved === false);
 
 const c3l = P.consensus(spoil(mk(TR, ids3), "S2", 0.25), {});
-ck("consensus：★3 台里 1 台谎报 → 测得出“不一致”，但**判不出是谁**（排除一台只剩 2 台无冗余）→ conflict",
+ck("consensus：★3 台里 1 台偏大 → 测得出“不一致”，但**定不了是哪台**（排除一台只剩 2 台无冗余）→ conflict",
    c3l.trust === "conflict" && c3l.reason === "conflict_unresolved",
    JSON.stringify([c3l.trust, c3l.reason, c3l.dropped]));
 
 const c4l = P.consensus(spoil(mk(TR, ids4), "S3", 4.0), {});
-ck("consensus：4 台里 1 台谎报（×4，谎报“更远”）→ 排出它后其余 3 台自洽 → verified + dropped=[S3]",
+ck("consensus：4 台里 1 台偏大（×4，测得“更远”）→ 排除它后其余 3 台自洽 → verified + dropped=[S3]",
    c4l.trust === "verified" && c4l.dropped.join() === "S3" && c4l.kept.length === 3
    && c4l.reason === "outlier_dropped", JSON.stringify([c4l.trust, c4l.dropped, c4l.kept]));
-ck("consensus：剔除后估计回到真值附近（没被谎报那台带偏）",
+ck("consensus：剔除后估计回到真值附近（没被那台偏大的带跑）",
    Math.hypot(c4l.est.x - TR.x, c4l.est.y - TR.y) < 1, JSON.stringify(c4l.est));
 ck("consensus：小偏差（与测距噪声同量级，0.9 倍）→ **不报**（原理上不可分辨，如实漏检）",
    P.consensus(spoil(mk(TR, ids4), "S3", 0.9), {}).trust === "verified"
    && P.consensus(spoil(mk(TR, ids4), "S3", 0.9), {}).dropped.length === 0);
 
-/* ★回归锁（2026-09-13 实测踩过）：**谎报"我在更远处"（×4）必须也抓得住**。
-   把 σ 锚在**它自报的**距离上时，谎报更远会把自己的 σ 一起放大（z = 4|f−1|/f 封顶 4.0）
-   → 整条路线上 0/120 全没发现，还照样报"交叉校验通过"。σ 锚在**推出的**距离上才两边对称。 */
-const farLiar = P.consensus(spoil(mk(TR, ids4), "S1", 4.0), {});
-ck("consensus：★谎报“更远”（×4）也抓得住（σ 必须锚在推出距离上）",
-   farLiar.trust === "verified" && farLiar.dropped.join() === "S1",
-   JSON.stringify([farLiar.trust, farLiar.dropped, (farLiar.zs || []).map(z => z && z.toFixed(1))]));
-ck("consensus：★谎报“更近”（×0.25）**数学上不可分辨** → 如实不报（与噪声同一结论，不调阈值凑检出）",
+/* ★回归锁（2026-09-13 实测踩过）：**“偏得更远”（×4）必须也抓得住**。
+   把 σ 锚在**它自报的**距离上时，偏远那一侧会把自己的 σ 一起放大（z = 4|f−1|/f 封顶 4.0）
+   → 整条路线 0/120 全没发现，还照样报“交叉校验通过”。σ 锚在**推出的**距离上才两边对称。 */
+const farDev = P.consensus(spoil(mk(TR, ids4), "S1", 4.0), {});
+ck("consensus：★“偏得更远”（×4）也抓得住（σ 必须锚在推出距离上）",
+   farDev.trust === "verified" && farDev.dropped.join() === "S1",
+   JSON.stringify([farDev.trust, farDev.dropped, (farDev.zs || []).map(z => z && z.toFixed(1))]));
+ck("consensus：★“偏得更近”（×0.25）**数学上不可分辨** → 如实不报（与噪声同一结论，不调阈值凑检出）",
    P.consensus(spoil(mk(TR, ids4), "S4", 0.25), {}).dropped.length === 0);
-ck("consensus：偏差在 ±75% 以内（×0.5 → z=2）**不报** —— 与 25% 测距噪声原理上不可分（如实）",
+ck("consensus：小偏差（×0.5 → z=2）**不报** —— 与 25% 测距噪声原理上不可分（如实漏检）",
    P.consensus(spoil(mk(TR, ids4), "S1", 0.5), {}).trust === "verified"
    && P.consensus(spoil(mk(TR, ids4), "S1", 0.5), {}).dropped.length === 0);
 
@@ -352,25 +353,25 @@ for (let gx = -25; gx <= 30; gx += 5) {
     }
   }
 }
-ck("consensus：★诚实的 " + honest + " 个样本里**一台也不许被冤枉**（零误报）",
+ck("consensus：★诚实的 " + honest + " 个样本里**一台也不许被误剔除**（零误报）",
    falseAcc === 0, "误剔除 " + falseAcc + " 例");
 ck("consensus：★诚实样本里**也不许误报“残差偏大”**（loose 阀 1.8 是按实测诚实上界定的）",
    looseHonest === 0, "误报 " + looseHonest + " 例");
 
-/* ★诚实的**能力边界**（不是“抓得住”）：4 台里 2 台同时谎报 → n−k=2<3，信息论上定不了是谁
+/* ★诚实的**能力边界**（不是“抓得住”）：4 台里 2 台同时偏大 → n−k=2<3，信息论上定不了是哪台
    （SPEC §8 P-1）；但拟合残差 σ0 会明显变大（实测跨噪声中位 ≈2.1，诚实 ≤0.84）→
-   页面只能如实说“残差偏大、定不了是谁”，不能指认。 */
-const twoLies = ids4.map((sid, i) => {
+   页面只能如实说“残差偏大、定不了是哪台”，不能指到具体一台。 */
+const twoDev = ids4.map((sid, i) => {
   const o = mk(TR, ids4)[i];
   return (i === 1 || i === 3) ? { ...o, dist: o.dist * 4 } : o;
 });
-const c2l = P.consensus(twoLies, {});
-ck("consensus：★2 台同时谎报 → **定不了是谁**（只能报残差偏大）—— n−k≥3 才够",
+const c2l = P.consensus(twoDev, {});
+ck("consensus：★2 台同时偏大 → **定不了是哪台**（只能报残差偏大）—— n−k≥3 才够",
    c2l.dropped.length === 0 && c2l.loose === true,
    JSON.stringify([c2l.trust, c2l.dropped, c2l.sigma0]));
 
 const c2 = P.consensus(mk(TR, ["S1", "S2"]), {});
-ck("consensus：2 台 → single（无冗余：任一台说谎都看不出来）",
+ck("consensus：2 台 → single（无冗余：任一台偏了都看不出来）",
    c2.trust === "single" && c2.reason === "no_redundancy" && c2.dropped.length === 0
    && isFinite(c2.est.x), JSON.stringify([c2.trust, c2.reason]));
 ck("consensus：1 台 → none(single_obs)；0 台 → none(no_obs)",
