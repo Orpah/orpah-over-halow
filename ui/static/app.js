@@ -906,6 +906,13 @@ if ($("btnRlFlood")) {
 
 applyI18n();               // 本文件在 </body> 前加载，DOM 已就绪，直接应用
 connect();
+/* refresh() 由两处触发：1s 轮询 + SSE 每来一条上报（onReport 末尾拉一次即时刷新）
+   → 峰值约 2.5 次/秒。**故意没加防重入**（`refreshBusy`）：实测 `/api/status`
+   中位 4.2 ms、最大 5.5 ms（本机 25 次），而 `ui_server.status()` 只读内存快照
+   （**不做 IoTDB 查询**），离 1 s 间隔有 200 倍余量 —— 加标志只会带来“被跳过的那一刷新
+   要不要补”的新问题（漏刷新 = 页面数字停住不更新，比多几次请求更难发现）。
+   ⇒ **将来若给 status() 加了 IO/慢查询，必须在这里补防重入**（忙时置 pending、忙完补一次），
+   否则请求会堆积且旧响应可能后到（数字瞬时回退）。 */
 setInterval(refresh, 1000);
 refresh();
 

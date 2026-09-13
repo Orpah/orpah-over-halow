@@ -114,6 +114,17 @@ for (const [label, txt] of forms) {
 const swapped = P.baseParse(JSON.stringify({ type: "Point", coordinates: [31.2, 121.5] }));
 ck("★GeoJSON 顺序按 [经度, 纬度] 读（反了会得到 lat=121.5 → 越界报错，而不是默默错）",
    !swapped.ok && swapped.err === "base_off_globe", JSON.stringify(swapped));
+/* 畸形的 GeoJSON 不能炸：首要素没有 geometry / features 为空 → 一律归到“认不出字段”这个
+   可见错误（**不是** 抛异常、也**不是**默默用默认值）—— 这也是 review 提到的那一处。 */
+const noGeom = P.baseParse(JSON.stringify({ type: "FeatureCollection",
+  features: [{ type: "Feature", properties: { lat: 31.2, lng: 121.5 } }] }));
+ck("FeatureCollection 首要素无 geometry → 可见错误（不抛、不静默用默认值）",
+   !noGeom.ok && noGeom.err === "base_need_point", JSON.stringify(noGeom));
+const emptyFc = P.baseParse(JSON.stringify({ type: "FeatureCollection", features: [] }));
+ck("FeatureCollection 空 features → 同样是可见错误",
+   !emptyFc.ok && emptyFc.err === "base_need_point", JSON.stringify(emptyFc));
+ck("float 数组/对象里夹着非数字也不炸（不抛，给错误码）",
+   !P.baseParse(JSON.stringify({ lat: 31, lng: [1, 2] })).ok);
 
 /* ================= 2 · 校验与错误码（不静默回落） ================= */
 const bads = [

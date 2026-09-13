@@ -52,7 +52,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | 告警（长未上报 / 案件超时 / 处置超时 / 验签失败率 / 降级上报 / 设备时钟 / **能力声明不一致** / **RSSI 突变** / **校验位连败** / 电量 / 限频丢弃） | `alerts.py` | `test_alerts.py`、`test_levels.py` |
 | **告警通知（出站 Webhook + 页面弹窗）** | `notify.py` + `ui_server._alert_watch` | `test_notify.py` |
 | **限频（§5.8，三层）**：Server 侧 per-SN + per-Router（验签之前，限 CPU）；Router 侧转发按 SN / 探针按源 MAC（限带宽）；**设备侧自愿自限频**（`ORPAH_SELF_*`：延后而非丢弃，不占满空口/不撞上游桶；**不是防线**，被改的设备不做） | `ratelimit.py`（`RateLimiter` + `DeviceLimiter` 复用同一令牌桶）+ `client.ClientHost._gate` | `test_ratelimit.py`、`test_selflimit.py`、`demo_ratelimit.py` |
-| **地图单一源 + 离线回落 + 基点导入/导出**：底图源列表与条款、本地坐标↔经纬度换算、瓦片取不到时切本地网格底图；基点支持导入/导出 JSON（含 GeoJSON Point，**注意 [经度,纬度]**）、范围校验与**可见错误码**（不静默回落）、存本机浏览器、来源三态显示 | `ui/static/map.js` | `test_mapjs.py`（54 项 node + 14 项守卫） |
+| **地图单一源 + 离线回落 + 基点导入/导出**：底图源列表与条款、本地坐标↔经纬度换算、瓦片取不到时切本地网格底图；基点支持导入/导出 JSON（含 GeoJSON Point，**注意 [经度,纬度]**）、范围校验与**可见错误码**（不静默回落）、存本机浏览器、来源三态显示 | `ui/static/map.js` | `test_mapjs.py`（57 项 node + 页面/口径守卫 10 项） |
 | 指标面板（验签失败率·算法分布 / 平均 RSSI / 处置时长） | `metrics.py` | `test_metrics.py` |
 | 定位：多路由器观测 → 三边/WLS + 95% 椭圆 + 卡尔曼平滑 + 回放 + **误差 CDF（仅模拟环境有真值）** + **补站位建议（几何不行时给可执行坐标）** + **报文流时间轴（序号缺口=丢包证据）** | `motion.py` / `stations.py` / `ui/static/pos.js` | `test_motion.py`、`test_posjs.py`（61 条 + 2 条页面守卫，套件自己报数） |
 | 时钟可信：①无 RTC 设备 `ts=0` → 服务器接收时刻（唯一入口）②设备时钟**偏移/漂移估计**（只估计不改数据；长基线才给漂移，原因可见：基线不足/噪声）③**设备自报能力位 `cap.rtc`**（三态；已签声明防篡改；无 RTC ⇒ 一律服务器时刻且不喂估计器；声明有 RTC 却给不出可用时间 → `id_cap_mismatch` 告警） | `orpah_proto`（`effective_ts`/`cap_of`/`rtc_of`） / `clock.py`（`ClockTracker`） | `test_clock.py`（88 条）+ `test_server.py`（28 条）+ `test_alerts.py` + `demo_clock.py` + 首页「上报控制」能力下拉/ts 置 0 |
@@ -91,6 +91,7 @@ POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/�
 |---|---|---|
 | `ui/static/pos.js` | 定位纯函数：RSSI↔距离、三边、WLS、椭圆、质量（GDOP/残差）、观测归集、卡尔曼、**报文流判定（缺口/回退/帧间隔）** | `track.html`、`replay.html` |
 | `ui/static/map.js` | 底图源列表与条款、本地坐标→经纬度、离线回落、**基点导入/导出/记忆**（单一源） | `track.html`、`replay.html` |
+| `ui/static/app.js` | 首页逻辑：拓扑/计数/报文流/告警渲染（**转义口径见下**） | `index.html` |
 | `ui/static/ui_i18n.js` | **文案字典**（zh/en，本项目自持一份，2026-09-12 从共享一份拆出） | orpah 各页（见 `test_i18n.py`） |
 | `ui/static/style.css` | 样式与配色变量（告警红 / 上行蓝 / ID 橙 / 发现灰，色弱校验过） | orpah 各页 |
 
