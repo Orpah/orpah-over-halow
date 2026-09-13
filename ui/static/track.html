@@ -342,7 +342,8 @@ function measureOnce(record = true) {
   });
   const dists = obsSim.map(o => o.dist);
   const est = trilaterate(anchors, dists, estHist.length ? estHist[estHist.length - 1] : null);
-  const cons = consensus(obsSim, {});   // 判据与回放页共用 pos.js，不另写阈值
+  const cons = consensus(obsSim, consOpts(null));   // 判据与回放页共用 pos.js，不另写阈值
+  // （模拟模式的观测都是“此刻”且没有 ts → 不需要也不应做运动补偿）
   setTrust(cons);
   estFixedCur = (cons && cons.dropped.length && cons.est && cons.est.ok)
     ? { x: cons.est.x, y: cons.est.y } : null;
@@ -558,40 +559,32 @@ function draw() {
   if (le) cross(ctx, cx + estHist[le - 1].x * SCALE, cy - estHist[le - 1].y * SCALE, "#f85149");
 }
 
-/* ---- 定位可信度（多观测互相印证；判据走 pos.js 的 consensus()，与回放页同一份）----
+/* ---- 定位可信度（多观测互相印证；判据与文案都走 pos.js，与回放页同一份）----
    与“精度”（椭圆/搜索半径）**分开显示**：圈小不等于可信 —— 单台观测偏了也能算出很小的圈。
    孤证不立（SPEC §8 原则 P-1）：1~2 台无冗余 → 只能如实标“单一来源”；≥3 台才谈交叉校验；
    **4 台才能定到哪一台**不一致（3 台只能报“观测冲突、定不了是哪台”）。
    **只能判“不一致”，不能判原因**：遮挡/多径、天线损坏、元件性能下降、标定漂移，
-   以及被改装/冒充都可能造成“对不上”—— 只当**线索**，不当结论，要人工复核。 */
-function trustText(c) {
-  const n = (c && c.obs) ? c.obs.length : 0;
-  if (!c || !n || c.trust === "none") return T("tk_trust_none");
-  if (c.trust === "verified") {
-    if (c.dropped && c.dropped.length) {
-      return T("tk_trust_ok_dropped")
-        .replace("{d}", c.dropped.join(",")).replace("{n}", c.kept.length);
-    }
-    return T("tk_trust_ok").replace("{n}", c.kept.length);
-  }
-  if (c.trust === "single") return T("tk_trust_single").replace("{n}", n);
-  let s = T("tk_trust_conflict").replace("{n}", n);
-  if (c.suspects && c.suspects.length) {
-    s += " · " + T("tk_trust_suspect").replace("{s}", c.suspects.join(","));
-  }
-  return s;
-}
+   以及被改装/冒充都可能造成“对不上”—— 只当**线索**，不当结论，要人工复核。
+   **措辞不在这里写**：`pos.js` 的 `trustText(c, T)` 是两页共用的唯一一份（份在两处必漂移）。 */
 function setTrust(c) {
-  let txt = trustText(c);
+  let txt = trustText(c, T);
   /* 残差偏大 → 附带**事实**（不是定罪）：多台同时偏大时 z 定不了案（n−k≥3 才能定位），
      但拟合残差会明显变大（阀值按实测标定，见 pos.js CONS_S0_LOOSE）。 */
   if (c && c.loose) txt += " · " + T("tk_trust_loose").replace("{v}", c.sigma0.toFixed(1));
+  /* 观测各有各的时刻却没给速度（本页没有滤波器状态）→ 如实标“未做运动补偿”：
+     不标的话，正常走动就可能被当成“观测矛盾”（假警报最害人）。 */
+  if (c && !c.moved && obsSpreadMs(c.obs) > 5000) txt += " · " + T("tk_trust_nomove");
   const cls = (c && c.trust === "verified") ? "trust v-ok"
             : (c && c.trust === "conflict") ? "trust v-bad" : "trust";
   document.querySelectorAll(".trust").forEach(el => { el.textContent = txt; el.className = cls; });
   const s0 = document.querySelectorAll(".s0");
   const s0v = (c && c.sigma0 !== null && c.sigma0 !== undefined) ? c.sigma0.toFixed(2) : "-";
   s0.forEach(el => { el.textContent = s0v; });
+}
+/* 观测时刻的跨度（毫秒；时刻未知的观测不计）—— 用来判断“是否需要运动补偿” */
+function obsSpreadMs(obs) {
+  const ts = (obs || []).map(o => o.ts).filter(t => t !== null && t !== undefined && isFinite(t));
+  return ts.length < 2 ? 0 : Math.max(...ts) - Math.min(...ts);
 }
 
 function updateStat(est) {
@@ -899,7 +892,11 @@ function renderStations() {
   if (!tbody) return;
   const { obs, est, estLin, wls } = computeLoc();
   const q = qualityOf(obs, est);
-  setTrust(consensus(obs, {}));   // 可信度与精度分开显示（见 setTrust 注释）
+  /* 判定走 pos.js 的 consensus() + consOpts()（与回放页同一口径）。
+     本页（真实模式）手里没有滤波器状态 → **给不出速度**，如实走“不补偿”路径：
+     consensus 会回 `moved=false`，各观测时刻跨度大于 5s 时页面标「未做运动补偿」
+     （不能默默当成已补偿 —— 那样正常走动会被当成“观测矛盾”）。 */
+  setTrust(consensus(obs, consOpts(Date.now())));
   const bySid = {};
   obs.forEach(o => { bySid[o.s.sid] = o; });
   const sig = stations.map(s => s.sid).join("|");

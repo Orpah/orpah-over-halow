@@ -162,9 +162,13 @@
     <div class="cell"><span class="k" data-i18n="rp_lab_smooth">平滑估计</span><span class="v v-ok" id="rpSmLoc">-</span></div>
     <div class="cell"><span class="k" data-i18n="rp_lab_rad_s">平滑搜索半径</span><span class="v" id="rpSmRad">-</span></div>
     <div class="cell"><span class="k" data-i18n="rp_lab_jitter">轨迹抖动</span><span class="v" id="rpJit">-</span></div>
+    <div class="cell"><span class="k" data-i18n="rp_lab_trust">定位可信度</span><span class="v" id="rpTrust">-</span></div>
+    <div class="cell"><span class="k" data-i18n="rp_lab_s0">观测拟合度 σ0</span><span class="v" id="rpS0">-</span></div>
     <div class="cell"><span class="k" data-i18n="rp_lab_obs">当时 RSSI</span><span class="v" id="rpObs">-</span></div>
     <div class="cell"><span class="k" data-i18n="rp_lab_last">最近事件</span><span class="v" id="rpLast">-</span></div>
   </div>
+  <p class="hint" id="rpTrustWin"></p>
+  <p class="hint" data-i18n="rp_trust_hint">可信度 = 多观测互相印证的结果（孤证不立），与「精度」（残差/椭圆/搜索半径）是两件事 —— 圈很小也可能来自单台偏差大的观测。它只能判「对不上」、不能判原因（遮挡/多径、天线、元件、标定、被改装/冒充都可能），只当线索、需人工复核。回放与实时页共用同一份 pos.js 的 consensus()。</p>
 </section>
 
 <!-- ============ 1b · 定位误差 CDF（**仅模拟环境**有地面真值） ============ -->
@@ -571,6 +575,16 @@ function render() {
   $("rpLast").textContent = ev
     ? clockOf(ev.t) + " " + evtLabel(ev.etype) + (ev.sn ? " " + ev.sn : "") : "-";
 
+  /* 可信度（与精度分开显示）：判据与文案都走 pos.js（single source）。
+     运动补偿用**因果**的滤波速度（只取 t <= 光标的那一帧）—— 否则同一时刻的
+     不同观测时刻会被当成“同一瞬间”的量（走动就会被误判成观测矛盾）。 */
+  const cons = obs.length >= 2 ? consensus(obs, consOptsAt(S.t)) : null;
+  $("rpTrust").textContent = cons ? trustText(cons, T) : T("tk_trust_none");
+  $("rpTrust").className = "v " + (cons && cons.trust === "verified" ? "v-ok"
+                                  : cons && cons.trust === "conflict" ? "v-bad" : "");
+  $("rpS0").textContent = (cons && cons.sigma0 !== null && cons.sigma0 !== undefined)
+    ? cons.sigma0.toFixed(2) : "-";
+
   /* 平滑（可选）：光标时刻的平滑位置 + 平滑后的搜索半径（来自滤波后协方差 P）+ 抖动对比 */
   const smv = smoothAt(S.t);
   const smEll = (smv && smv.pt.cov) ? ellipseOf(smv.pt.cov) : null;
@@ -631,12 +645,63 @@ function precomputeFrames() {
     if (obs.length < 2) continue;
     const lin = trilaterate(obs.map(x => ({ x: x.s.x, y: x.s.y })), obs.map(x => x.dist), null);
     const w = lin ? wlsLocate(obs, lin) : null;
-    if (w && w.ok) frames.push({ t, x: w.x, y: w.y, cov: w.cov });
+    /* obs 一并存下来：整窗可信度统计要用**同一批**观测（重新取一次会抽两遍样本、又慢又可能不一致） */
+    if (w && w.ok) frames.push({ t, x: w.x, y: w.y, cov: w.cov, obs });
   }
   S.frames = frames;
   S.sm = kalmanTrack(frames);
   S.jitRaw = pathJitter(frames);
   S.jitSm = pathJitter(S.sm);
+  measureTrustWin();
+}
+
+/* 整窗可信度：逐帧跑**同一份** consensus（数量级：千帧 × (n+1) 次小 WLS → 毫秒~秒级）。
+   运动补偿用因果滤波速度 `S.sm[i]`（与 render() 同一口径）。
+   为什么值得算：精度指标（残差/椭圆）回答“这些观测彼此合得多紧”，可信度回答
+   “它们是不是**互相印证**的”—— 回放能扫全窗，正好把后者也摆上桌（不是只报一个 RMS）。 */
+function measureTrustWin() {
+  const tally = { verified: 0, single: 0, conflict: 0, none: 0 };
+  const s0 = [];
+  let drop = 0, loose = 0;
+  S.frames.forEach((f, i) => {
+    const sm = S.sm[i] || null;
+    const c = consensus(f.obs, consOpts(f.t, sm && sm.vx, sm && sm.vy));
+    tally[c.trust] = (tally[c.trust] || 0) + 1;
+    if (c.dropped.length) drop++;
+    if (c.loose) loose++;
+    if (c.sigma0 !== null && isFinite(c.sigma0)) s0.push(c.sigma0);
+  });
+  s0.sort((a, b) => a - b);
+  S.trustStat = { n: S.frames.length, ...tally, drop, loose,
+                  s0med: s0.length ? s0[s0.length >> 1] : null };
+  renderTrustWin();
+}
+
+/* 整窗统计的文案（百分比按**帧数**算；无冗余/冲突那两类是“事实计数”，不是精度指标） */
+function renderTrustWin() {
+  const el = $("rpTrustWin");
+  if (!el) return;
+  const s = S.trustStat;
+  if (!s || !s.n) { el.textContent = ""; return; }
+  const pct = (v) => (100 * v / s.n).toFixed(0) + "%";
+  el.textContent = T("rp_trust_win")
+    .replace("{n}", s.n)
+    .replace("{ok}", pct(s.verified))
+    .replace("{one}", pct(s.single))
+    .replace("{bad}", pct(s.conflict))
+    .replace("{drop}", s.drop)
+    .replace("{loose}", s.loose)
+    .replace("{s0}", s.s0med === null ? "-" : s.s0med.toFixed(2));
+}
+
+/* 光标时刻的**因果**滤波帧（不管平滑显示开关；判定要用它的速度做运动补偿） */
+function smFrameAt(t) {
+  for (let i = S.sm.length - 1; i >= 0; i--) if (S.sm[i].t <= t) return S.sm[i];
+  return null;
+}
+function consOptsAt(t) {
+  const sm = smFrameAt(t);
+  return consOpts(t, sm && sm.vx, sm && sm.vy);
 }
 
 /* 光标时刻的平滑结果（只取 t <= 光标的最后一帧） + 已回放到的平滑轨迹 */

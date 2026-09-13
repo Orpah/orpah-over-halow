@@ -634,23 +634,25 @@ function latestAt(samples, t) {
 
 function obsOfStation(s, samples, t) {
   if (s.rssi !== null && s.rssi !== undefined) {
-    return { rssi: s.rssi, n: 1, src: "bind" };
+    return { rssi: s.rssi, n: 1, src: "bind", t: null };   // 绑定：语义就是“当前值”，时刻未知
   }
   if (s.t0 !== null && s.t0 !== undefined && s.t0 <= t) {
     const t1 = (s.t1 === null || s.t1 === undefined) ? Infinity : s.t1;
-    const vals = samples
-      .filter(p => p.t >= s.t0 && p.t < t1 && p.t <= t
-                   && typeof p.rssi === "number")
-      .map(p => p.rssi).sort((a, b) => a - b);
-    if (vals.length) {
+    const sel = samples.filter(p => p.t >= s.t0 && p.t < t1 && p.t <= t
+                                   && typeof p.rssi === "number");
+    if (sel.length) {
+      const vals = sel.map(p => p.rssi).sort((a, b) => a - b);
       const m = vals.length >> 1;
       const med = vals.length % 2 ? vals[m] : (vals[m - 1] + vals[m]) / 2;
-      return { rssi: med, n: vals.length, src: "window" };
+      /* 本观测的**代表时刻**：窗内样本时刻的中位（运动补偿需要它；
+         不然一条跨越几十秒的窗口会被当成“同一瞬间”的测量）。 */
+      const ts = sel.map(p => p.t).sort((a, b) => a - b);
+      return { rssi: med, n: sel.length, src: "window", t: ts[ts.length >> 1] };
     }
     return null;                      // 窗已开但窗内还没有样本
   }
   const last = latestAt(samples, t);
-  if (last) return { rssi: last.rssi, n: last.n, src: "router" };
+  if (last) return { rssi: last.rssi, n: last.n, src: "router", t: t - last.age };
   return null;
 }
 
@@ -679,9 +681,48 @@ function obsAt(stations, samples, t, A, n) {
   for (const s of stations) {
     const o = obsOfStation(s, of(s.sid) || [], t);
     if (o) out.push({ s, rssi: o.rssi, n: o.n, src: o.src,
+                      ts: (o.t === undefined ? null : o.t),   // 本观测自己的时刻（未知 = null）
                       dist: distFromRssi(o.rssi, A, n) });
   }
   return out;
+}
+
+/* ---------------- 判定选项（两页共用同一口径） ----------------
+   `consensus()` 要的是“把各观测折算到参考时刻”，而折算要三样东西：参考时刻 `tref`、
+   目标速度 `vel`、以及各观测**各自的时刻**（已在 `obs[i].ts`）。三样少一样就不是真补偿。
+   为什么把拼装也放这里（而不是两页各写一行）：
+   · **漏传 vel** → 正常走动会被当成“观测互相矛盾”（假警报最害人）；
+   · **漏传 tref / ts** → 同上，只是更隐蔽。
+   → 单一源，两页都走 `consOpts()`；给不出速度（如实时页没有滤波器状态）就如实不补偿，
+     `consensus()` 会回 `moved=false`，页面据此标「未做运动补偿」，不准静默当成已补偿。 */
+function consOpts(tref, vx, vy) {
+  const ok = isFinite(vx) && isFinite(vy) && (vx !== 0 || vy !== 0);
+  return { tref: (tref === undefined ? null : tref),
+           vel: ok ? { vx: vx, vy: vy } : null };
+}
+
+/* ---------------- 判定结果的**文案**（两页共用同一套词） ----------------
+   为什么连文案也放这里：判据是 `consensus()`，但“把结果说成哪句话”如果在两个页面各写一份，
+   迟早漂移（本仓最忌讳的那种不一致：同一时刻两页给出不同可信度措辞）。
+   `T` = 页面的翻译函数（`ui_i18n.js` 的 `T`）→ `pos.js` 不依赖具体字典实现，单测可传桩函数。
+   **只有判据能判“不一致”，不能判原因**（遮挡/多径、天线、元件、标定、被改装/冒充都可能），
+   所以措辞限定在“一致 / 单一来源 / 冲突 / 剔除离群”，并且带“仅线索”口径 —— 不许归因。 */
+function trustText(c, T) {
+  const n = (c && c.obs) ? c.obs.length : 0;
+  if (!c || !n || c.trust === "none") return T("tk_trust_none");
+  if (c.trust === "verified") {
+    if (c.dropped && c.dropped.length) {
+      return T("tk_trust_ok_dropped")
+        .replace("{d}", c.dropped.join(",")).replace("{n}", c.kept.length);
+    }
+    return T("tk_trust_ok").replace("{n}", c.kept.length);
+  }
+  if (c.trust === "single") return T("tk_trust_single").replace("{n}", n);
+  let s = T("tk_trust_conflict").replace("{n}", n);
+  if (c.suspects && c.suspects.length) {
+    s += " · " + T("tk_trust_suspect").replace("{s}", c.suspects.join(","));
+  }
+  return s;
 }
 
 /* ---------------- 时序平滑（恒速卡尔曼） ----------------

@@ -37,7 +37,8 @@ const EXPORT = ["rssiFromDist", "distFromRssi", "trilaterate", "wlsLocate", "ell
                 "resGrade", "latestAt", "obsOfStation", "obsAt", "kalmanTrack",
                 "pathJitter", "obsSegments", "segIndexAt", "nextValidAt",
                 "truthAt", "errorsOf", "quantileOf", "cdfOf",
-                "gdopOf", "suggestStation", "samplesFor", "frameGaps", "consensus"];
+                "gdopOf", "suggestStation", "samplesFor", "frameGaps", "consensus",
+                "trustText", "consOpts"];
 const src = fs.readFileSync(process.argv[2], "utf8")
           + "\nmodule.exports = {" + EXPORT.join(",") + "};\n";
 const m = { exports: {} };
@@ -402,6 +403,42 @@ ck("consensus：纯函数（同一输入两次调用逐位相同）",
    === JSON.stringify(cYes));
 
 console.log("");
+/* ---- consOpts：判定选项的**单一源**（漏传速度 → 正常走动被当成“观测矛盾”） ---- */
+ck("consOpts：给不出速度（缺省/NaN）→ vel=null（如实不补偿，不假装补过）",
+   P.consOpts(1000).vel === null && P.consOpts(1000, NaN, NaN).vel === null);
+ck("consOpts：速度为 0 → 也是 null（静止不需要补偿）", P.consOpts(1000, 0, 0).vel === null);
+ck("consOpts：给了速度 → vel 与 tref 一起给（少一样都不是真补偿）",
+   P.consOpts(1000, 1.2, -0.3).vel.vx === 1.2 && P.consOpts(1000, 1.2, -0.3).tref === 1000);
+
+/* ---- trustText：可信度**文案**的单一源（两页共用；T 由页面传进来，故可桩测） ---- */
+const TD = { tk_trust_none: "不可判定", tk_trust_ok: "通过({n})", tk_trust_ok_dropped: "剔除{d}后{n}台",
+             tk_trust_single: "单一({n})", tk_trust_conflict: "冲突({n})", tk_trust_suspect: "最不一致:{s}" };
+const Tstub = (k) => (TD[k] === undefined ? "?" + k : TD[k]);
+const consOf = (o) => Object.assign({ trust: "verified", obs: [1, 2, 3],
+                                      kept: ["A", "B", "C"], dropped: [], suspects: [] }, o);
+ck("trustText：verified → 通过({台数})", P.trustText(consOf({}), Tstub) === "通过(3)");
+ck("trustText：verified+剔除 → 剔的是哪台、剩几台都写清楚",
+   P.trustText(consOf({ dropped: ["S3"], kept: ["S1", "S2", "S3"] }), Tstub) === "剔除S3后3台");
+ck("trustText：single → 单一来源({台数})", P.trustText(consOf({ trust: "single" }), Tstub) === "单一(3)");
+ck("trustText：conflict → 冲突 + 与其余最不一致的清单（**线索**口径，不写成结论）",
+   P.trustText(consOf({ trust: "conflict", suspects: ["S2", "S4"] }), Tstub) === "冲突(3) · 最不一致:S2,S4");
+ck("trustText：none / 空 → 不可判定（观测不足就不硬给结论）",
+   P.trustText(consOf({ trust: "none" }), Tstub) === "不可判定"
+   && P.trustText(null, Tstub) === "不可判定");
+
+/* ---- 观测**自己的时刻**：判定要按各观测各自时刻折算（否则走动会被当成冲突） ---- */
+const stR = { sid: "S1", x: 0, y: 0, rssi: null, t0: null, t1: null };
+const smpTs = [{ t: 1000, rssi: -50 }, { t: 3000, rssi: -60 }, { t: 5000, rssi: -55 }];
+ck("obsOfStation：路由器序列 → 带回**自己那条**的时刻（t − age）",
+   P.obsOfStation(stR, smpTs, 7000).t === 5000);
+ck("obsOfStation：绑定 → 时刻未知（null）：宁可说不知道，也不假装知道",
+   P.obsOfStation({ sid: "S1", x: 0, y: 0, rssi: -40 }, smpTs, 7000).t === null);
+ck("obsOfStation：悬停窗口 → 代表时刻 = 窗内样本时刻的**中位**",
+   P.obsOfStation({ sid: "S1", x: 0, y: 0, rssi: null, t0: 0, t1: 9000 }, smpTs, 7000).t === 3000);
+ck("obsAt：把观测时刻带出来（回放/实时两页才能做运动补偿）",
+   P.obsAt([stR], () => smpTs, 7000, -40, 2.5)[0].ts === 5000);
+
+console.log("");
 if (fails.length) {
   console.log("定位内核：失败 " + fails.length + " 项：" + fails.join("；"));
   process.exit(1);
@@ -440,17 +477,33 @@ def page_guard():
         print("  FAIL replay.html 里在页面侧自算 seq 差值（应改用 pos.js 的 frameGaps）")
         return 1
     print("  OK   replay.html 走 frameGaps（报文流判定单一源）")
-    # 三幕演示（量化）：判定必须**复用** pos.js 的 consensus()，不许在页面里另传阈值/门限
+    # 三幕演示（量化）与真实模式：判定必须**复用** pos.js 的 consensus()，不许在页面里另传阈值/门限
     # （演示里一旦自己写一套 z 阈值，就会出现"演示的"与"测的"两套口径 —— 本仓最忌讳的那种漂移）
     with open(os.path.join(HERE, "ui", "static", "track.html"), encoding="utf-8") as f:
         tk = f.read()
     for needle, why in (("function runActs", "缺三幕演示（runActs）"),
                         ("function actRun", "缺 actRun（逐幕统计）"),
-                        ("consensus(obsSim, {})", "判定没走 consensus(obsSim, {}) —— 不许另传阈值")):
+                        ("consensus(obsSim, consOpts(", "模拟模式的判定没走 consensus(obsSim, consOpts(…))"),
+                        ("consensus(obs, consOpts(", "真实模式的判定没走 consensus(obs, consOpts(…))")):
         if needle not in tk:
             print(f"  FAIL track.html：{why}")
             return 1
-    print("  OK   track.html 三幕演示走 consensus()（判定单一实现，不另传阈值）")
+    if "z:" in tk:
+        print("  FAIL track.html 给 consensus 另传了阈值（不许：阈值只在 pos.js 里）")
+        return 1
+    print("  OK   track.html 判定走 consensus() + consOpts()（单一实现，不另传阈值）")
+    # 判定**文案**也必须单一源：两页都用 pos.js 的 trustText()，谁都不许再写一份
+    # （2026-09-13 补：回放页此前根本没有可信度呈现，就是因为文案/判据没有共用入口）
+    for page, needle in (("track.html", "trustText(c, T)"), ("replay.html", "trustText(cons, T)")):
+        with open(os.path.join(HERE, "ui", "static", page), encoding="utf-8") as f:
+            src = f.read()
+        if needle not in src:
+            print(f"  FAIL {page} 没有走 pos.js 的 trustText()（可信度文案必须单一源）")
+            return 1
+        if "function trustText" in src:
+            print(f"  FAIL {page} 自己写了一份 trustText（必须共用 pos.js 那一份）")
+            return 1
+    print("  OK   两页共用 pos.js 的 trustText()（可信度文案单一源）")
     return 0
 
 
