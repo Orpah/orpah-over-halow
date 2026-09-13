@@ -169,6 +169,8 @@
     <div class="cell"><span class="k" data-i18n="rp_lab_last">最近事件</span><span class="v" id="rpLast">-</span></div>
   </div>
   <p class="hint" id="rpTrustWin"></p>
+  <p class="hint" id="rpBiasWin"></p>
+  <p class="hint" data-i18n="rp_bias_hint">持续偏差扫描：逐帧算「实测/预测」比值，再看各台的中位比值是否长期偏离 1 —— 单帧对“偏得更小”是不可分辨的（误差上限就是它自报的距离），但持续偏差在多帧上会留痕迹。三条边界必须记住：① 阈值 30 是按实测零假设分布定的（诚实台 800 帧上界 ≈18.5，60 帧 7.4），帧数越少越不灵；② 它比的是「这台 vs 其余台」，全体一起偏（如环境标定整体偏了）它看不出来；③ 比值偏离不等于这台有问题 —— 该台落在其余台几何之外时，留一法的预测本身就有系统外推偏差（本演示 S1 实测中位 0.90）。所以它只能当线索，不当结论，必须靠别的独立来源核实。</p>
   <p class="hint" data-i18n="rp_trust_hint">可信度 = 多观测互相印证的结果（孤证不立），与「精度」（残差/椭圆/搜索半径）是两件事 —— 圈很小也可能来自单台偏差大的观测。它只能判「对不上」、不能判原因（遮挡/多径、天线、元件、标定、被改装/冒充都可能），只当线索、需人工复核。回放与实时页共用同一份 pos.js 的 consensus()。</p>
 </section>
 
@@ -708,12 +710,14 @@ function precomputeFrames() {
 function measureTrustWin() {
   const tally = { verified: 0, single: 0, conflict: 0, none: 0 };
   const s0 = [];
+  const ratioRows = [];          // 逐帧「实测/预测」比值 → 给多帧持续偏差扫描
   let drop = 0, loose = 0;
   S.frames.forEach((f, i) => {
     const sm = S.sm[i] || null;
     const c = consensus(f.obs, consOpts(f.t, sm && sm.vx, sm && sm.vy));
     f.trust = c.trust;                      // 记在帧上：轨迹/进度条/导出都用它
     f.s0 = c.sigma0;                        // 拟合残差（导出附上，便于事后核“哪段拟合偏松”）
+    ratioRows.push(f.obs.map((o, k) => ({ sid: o.s.sid, ratio: (c.ratios || [])[k] })));
     tally[c.trust] = (tally[c.trust] || 0) + 1;
     if (c.dropped.length) drop++;
     if (c.loose) loose++;
@@ -722,7 +726,72 @@ function measureTrustWin() {
   s0.sort((a, b) => a - b);
   S.trustStat = { n: S.frames.length, ...tally, drop, loose,
                   s0med: s0.length ? s0[s0.length >> 1] : null };
+  /* 多帧持续偏差扫描：单帧对“偏得更小”不可分辨（z 有硬上界，见 pos.js），
+     但**持续**偏差会在多帧上留痕迹。阈值与帧数上界都是实测定的一（见 pos.js BIAS_Z）。
+     两步：① 全网扫；② 有 flagged 就取最狠那台，**剔除它后重扫** ——
+     否则“被它拖累的台”也会一起越过阈值（实测：注入一台 ×0.25 → 真凶 z=588，
+     另两台被拖到 47/32 也越线），光看第一遍会误以为“好几台都在偏”。 */
+  S.bias = biasScan(ratioRows);
+  S.biasSkip = null;
+  const worst = (S.bias || []).find(r => r.flagged);
+  if (worst) {
+    const second = biasScan(scanRowsSkip(worst.sid));
+    S.biasSkip = { sid: worst.sid,
+                   hit: second.filter(r => r.flagged),
+                   zmax: second.filter(r => r.z !== null).reduce((a, r) => Math.max(a, r.z), 0) };
+  }
   renderTrustWin();
+  renderBiasWin();
+}
+
+/* 重扫一遍：把某台从每帧的观测里剔掉（与单帧判定的“剔掉它后其余台是否自洽”同一套思路）。
+   注意：这会重新跑一遍全窗共识（只在真有 flagged 时跑），帧数很大时是有代价的 ——
+   但这一步正是“到底是不是它”的关键，不能省。 */
+function scanRowsSkip(skipSid) {
+  const rows = [];
+  S.frames.forEach((f, i) => {
+    const obs = f.obs.filter(o => o.s.sid !== skipSid);
+    if (obs.length < 2) return;
+    const sm = S.sm[i] || null;
+    const c = consensus(obs, consOpts(f.t, sm && sm.vx, sm && sm.vy));
+    rows.push(obs.map((o, k) => ({ sid: o.s.sid, ratio: (c.ratios || [])[k] })));
+  });
+  return rows;
+}
+
+/* 持续偏差扫描的文案。**只说“持续地对不上”，不说原因，也不指认某台在干什么**：
+   成因可能是标定漂移/天线/元件衰减/环境与模型不符……以及（其中一种）被改装/冒充。
+   必须同时写明它**看不出来**的情况：全体台一起偏（环境标定整体偏了）→ 它不是“抓作弊”。 */
+function renderBiasWin() {
+  const el = $("rpBiasWin");
+  if (!el) return;
+  const scan = S.bias || [];
+  const n = scan.length ? scan[0].n : 0;
+  if (!n) { el.textContent = ""; return; }
+  const hit = scan.filter(r => r.flagged);
+  const best = scan.filter(r => r.z !== null).sort((a, b) => b.z - a.z)[0];
+  let body;
+  if (!hit.length) {
+    body = T("rp_bias_none").replace("{z}", best ? best.z.toFixed(1) : "-");
+  } else if (S.biasSkip && !S.biasSkip.hit.length) {
+    /* 剔除最狠那台后其余台回到 1 附近 → 最像是“就它持续偏”（仍只是线索）。
+       注意：第一遍会把**被它拖累的台**一起标出去，不能说成“好几台都在偏”。 */
+    const drag = hit.slice(1).map(r => r.sid);
+    body = T("rp_bias_hit_clean").replace("{s}", hit[0].sid)
+      .replace("{med}", hit[0].med.toFixed(2)).replace("{z}", hit[0].z.toFixed(0))
+      .replace("{z2}", S.biasSkip.zmax.toFixed(1))
+      .replace("{drag}", drag.length ? drag.join(",") : T("rp_bias_drag_none"));
+  } else {
+    /* 剔除后仍有台偏（或多台同时偏/几何标定问题）→ 如实说“定不了是哪台” */
+    const still = S.biasSkip ? S.biasSkip.hit.map(r => r.sid).join(",") : "?";
+    body = T("rp_bias_hit_multi").replace("{s}", hit.map(r => r.sid).join(","))
+      .replace("{z}", hit[0].z.toFixed(0))
+      .replace("{s2}", S.biasSkip ? S.biasSkip.sid : "?")
+      .replace("{z2}", S.biasSkip ? S.biasSkip.zmax.toFixed(1) : "-")
+      .replace("{rest}", still);
+  }
+  el.textContent = T("rp_bias_head").replace("{n}", n).replace("{zmin}", BIAS_Z)
+    + " · " + body;
 }
 
 /* 整窗统计的文案（百分比按**帧数**算；无冗余/冲突那两类是“事实计数”，不是精度指标） */

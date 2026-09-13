@@ -38,7 +38,7 @@ const EXPORT = ["rssiFromDist", "distFromRssi", "trilaterate", "wlsLocate", "ell
                 "pathJitter", "obsSegments", "segIndexAt", "nextValidAt",
                 "truthAt", "errorsOf", "quantileOf", "cdfOf",
                 "gdopOf", "suggestStation", "samplesFor", "frameGaps", "consensus",
-                "trustText", "consOpts"];
+                "trustText", "consOpts", "biasScan"];
 const src = fs.readFileSync(process.argv[2], "utf8")
           + "\nmodule.exports = {" + EXPORT.join(",") + "};\n";
 const m = { exports: {} };
@@ -438,6 +438,45 @@ ck("obsOfStation：悬停窗口 → 代表时刻 = 窗内样本时刻的**中位
 ck("obsAt：把观测时刻带出来（回放/实时两页才能做运动补偿）",
    P.obsAt([stR], () => smpTs, 7000, -40, 2.5)[0].ts === 5000);
 
+/* ---- biasScan：多帧持续偏差扫描（拓“单帧不可分辨”的那一侧，见 pos.js 注释） ----
+   阀值 30 是按**实测零假设分布**定的（4 台站位 + 匀速靶标 + ±2 dBm 噪声，每档 40 组种子：
+   诚实上界 60 帧 7.4 / 800 帧 18.5 / 2000 帧 22.2；×0.5、×0.25 从 ~100 帧就可靠，×0.75 要 ≳300 帧）。
+   这里规模小得多，但锁的是**同一个性质**：诚实不许报警、持续偏差要报警、帧不够就如实不说。 */
+const rndB = (a, b) => { const x = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453; return (x - Math.floor(x)) * 2 - 1; };
+const biasRows = (n, f, sid) => {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push([{ sid: sid || "S1", ratio: (1 + rndB(i, 7) * 0.12) * (f || 1) }]);
+  return out;
+};
+const oneOf = (r, sid) => r.find(x => x.sid === (sid || "S1"));
+let worstZ = 0;
+for (let seed = 0; seed < 120; seed++) {
+  const rr = [];
+  for (let i = 0; i < 800; i++) rr.push([{ sid: "S1", ratio: 1 + rndB(i, seed) * 0.12 }]);
+  const s = oneOf(P.biasScan(rr));
+  if (s.z !== null) worstZ = Math.max(worstZ, s.z);
+}
+ck("biasScan：诚实比值（±12% 噪声，800 帧，120 组种子）→ 零报警（阀 30 不误报）",
+   worstZ < 30, "最大 z " + worstZ.toFixed(1));
+ck("biasScan：持续 ×0.5（800 帧）→ flagged",
+   oneOf(P.biasScan(biasRows(800, 0.5))).flagged === true,
+   JSON.stringify(oneOf(P.biasScan(biasRows(800, 0.5))).med));
+ck("biasScan：持续 ×0.25（800 帧）→ flagged",
+   oneOf(P.biasScan(biasRows(800, 0.25))).flagged === true);
+ck("biasScan：帧太少（20 帧）→ tooFew 且不报（宁可说“帧不够”）",
+   oneOf(P.biasScan(biasRows(20, 0.25))).tooFew === true
+   && oneOf(P.biasScan(biasRows(20, 0.25))).flagged === false);
+const flatRows = [];
+for (let i = 0; i < 500; i++) flatRows.push([{ sid: "S1", ratio: 1 }]);
+ck("biasScan：比值恒为 1（噪声 0）→ z=null、不报（不拿 0 当分母造巨大 z）",
+   oneOf(P.biasScan(flatRows)).z === null && oneOf(P.biasScan(flatRows)).flagged === false);
+ck("biasScan：帧数过多（9000）→ 均匀抽稀到 ≤2000（阀值才稳）",
+   oneOf(P.biasScan(biasRows(9000, 1))).n <= 2000);
+ck("biasScan：脏数据（null/NaN/0/负/缺 sid）跳过且不炸",
+   P.biasScan([[{ sid: "S1", ratio: null }, { ratio: 1.2 }, { sid: "S1", ratio: NaN },
+                { sid: "S1", ratio: 0 }, { sid: "S2", ratio: 1.1 }]]).length === 1
+   && P.biasScan([]).length === 0 && P.biasScan(undefined).length === 0);
+
 console.log("");
 if (fails.length) {
   console.log("定位内核：失败 " + fails.length + " 项：" + fails.join("；"));
@@ -526,6 +565,16 @@ def page_guard():
             print(f"  FAIL replay.html：{why}")
             return 1
     print("  OK   replay.html 导出带可信度（CSV 列 + GPX 扩展/小结 + GeoJSON trusts）")
+    # 持续偏差扫描（多帧）也必须在页面上真的跑（单帧对“偏得更小”不可分辨，这项是那一侧的补充），
+    # 且必须是**两步**：第一遍全网扫会把“被它拖累的台”一起标出去（实测：注入一台 ×0.25 →
+    # 真凶 z=588，另两台被拖到 47/32 也越线）→ 必须剔掉最狠那台再扫一遍，才能说清“是不是它”。
+    if "biasScan(" not in rp2 or 'id="rpBiasWin"' not in rp2:
+        print("  FAIL replay.html：没有跑多帧持续偏差扫描（biasScan + rpBiasWin）")
+        return 1
+    if "scanRowsSkip(" not in rp2 or "S.biasSkip" not in rp2:
+        print("  FAIL replay.html：持续偏差扫描没有“剔掉最狠那台后重扫”（分不清真凶与被拖累的台）")
+        return 1
+    print("  OK   replay.html 跑多帧持续偏差扫描（biasScan + 剔除最狠者后重扫）")
     return 0
 
 

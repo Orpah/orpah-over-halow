@@ -424,6 +424,9 @@ function consensus(obs, opts) {
     const arr = idx.map(i => shifted[i]);
     return wlsLocate(arr, trilaterate(arr.map(x => x.s), arr.map(x => x.dist), null));
   };
+  /* 各台的留一法统计（z 与 ratio）**只算一次**：判定、页面诊断、多帧持续偏差扫描都复用这一份。
+     必须在 pack 之前声明：早退路径（观测不够/解不出）也会调 pack，那时还没算。 */
+  let zAll = null, ratiosAll = null;
   const pack = (trust, reason, est, idx, dropped, suspects) => {
     const r = est && est.ok ? resOf(est, idx) : [];
     const s0 = (est && est.ok && isFinite(est.sigma0)) ? est.sigma0 : null;
@@ -432,6 +435,9 @@ function consensus(obs, opts) {
              rms: est && est.ok ? est.rms : null,
              maxRes: r.length ? Math.max(...r.map(Math.abs)) : null,
              zs: (est && est.ok) ? (zAll || []) : null,   // 各台的 z（诊断用，页面可显示）
+             /* 各台的「实测/预测」比值（与 z 同一份预测）：留着给**多帧持续偏差扫描**用 ——
+                单帧对“偏得更小”是不可分辨的，但持续偏差在多帧上会累计出统计痕迹。 */
+             ratios: ratiosAll,
              sigma0: s0,                                  // 拟合残差（诊断/展示；页面直接显示）
              loose: s0 !== null && s0 >= CONS_S0_LOOSE,   // 残差偏大：只陈述事实，不指认谁
              moved, zMin };
@@ -445,9 +451,10 @@ function consensus(obs, opts) {
   if (!est0 || !est0.ok) {
     return pack("none", (est0 && est0.reason) || "no_solution", est0, [], [], []);
   }
-  /* 留一法：用**其余台**解出位置，再看这一台的实测距离"应该是多少"。
-     σ 锚在**推出的**距离上（不是它自报的）—— 理由见函数头注释的两道墙。 */
-  const zOf = (i, subset) => {
+  /* 留一法：用**其余台**解出位置，再看这一台的实测距离“应该是多少”。
+     σ 锚在**推出的**距离上（不是它自报的）—— 理由见函数头注释的两道墙。
+     返回 `{z, ratio}`（ratio = 实测/预测，供多帧持续偏差扫描用）；比不出来就回 null。 */
+  const looStat = (i, subset) => {
     const rest = (subset || all).filter(j => j !== i);
     if (rest.length < 2) return null;
     const arr = rest.map(j => shifted[j]);
@@ -478,7 +485,12 @@ function consensus(obs, opts) {
       sp = Math.sqrt(Math.max(0, ux * ux * e.cov.a + 2 * ux * uy * e.cov.b + uy * uy * e.cov.c));
     }
     const infl = (e.sigma0 && isFinite(e.sigma0)) ? Math.max(1, e.sigma0) : 1;
-    return Math.abs(shifted[i].dist - dpred) / (infl * Math.sqrt(sig * sig + sp * sp));
+    return { z: Math.abs(shifted[i].dist - dpred) / (infl * Math.sqrt(sig * sig + sp * sp)),
+             ratio: dpred > 0 ? shifted[i].dist / dpred : null };   // 实测/预测：多帧扫描用
+  };
+  const zOf = (i, subset) => {
+    const s = looStat(i, subset);
+    return s === null ? null : s.z;
   };
   const consistent = (idx) => {
     if (idx.length < CONS_MIN) return null;
@@ -492,7 +504,9 @@ function consensus(obs, opts) {
     /* 至少要**两处**真的比过：比不出来 ≠ 矛盾，但也不能把“没验过”当成“验过了” */
     return ok && ev >= 2;
   };
-  const zAll = all.map(i => zOf(i, all));
+  const loo = all.map(i => looStat(i, all));
+  zAll = loo.map(s => (s === null ? null : s.z));
+  ratiosAll = loo.map(s => (s === null ? null : s.ratio));
   const suspects = all.filter(i => zAll[i] !== null && zAll[i] >= zMin);
 
   if (n === 2) {                              // 2 台：解得出，但**无冗余** —— 任一台偏了都看不出来
@@ -723,6 +737,65 @@ function trustText(c, T) {
     s += " · " + T("tk_trust_suspect").replace("{s}", c.suspects.join(","));
   }
   return s;
+}
+
+/* ---------------- 多帧（时序）持续偏差扫描 ----------------
+   为什么需要它：`consensus()` 的单帧留一法对**“偏得更小”那一侧**在数学上不可分辨 ——
+   “它报的距离偏小 k 倍”的误差上限就是它自己报的距离，z 有硬上界（实测最大 ≈3.8，与诚实尾部重合）
+   → ×0.25/×0.1 实测 864/864 全漏（见 consensus 头注释）。而**持续**的偏差会留下统计痕迹：
+   逐帧的「实测/预测」比值在诚实台上围绕 1 散开（中位数趋 1），
+   持续偏 k 倍的台，中位比值趋 k —— 帧数一多就分得开。
+
+   入参 `rows`：逐帧一组 `{sid, ratio}`（ratio 来自 `consensus().ratios`，**同一份预测**，不另算）。
+   出参：`[{sid, n, med, mad, se, z}]`，`z = |med − 1| / se`，其中
+   `se = 1.253 × MAD / √n`（中位数的渐近标准误；用 MAD 而不是标准差 → 不被个别离群帧带跑）。
+
+   **它只说“持续地对不上”，不说原因，也不替代单帧判定**：
+   · 阈值按**实测零假设分布**定（`bias_calib*.js` 那套模拟：4 台站位 + 匀速靶标 + ±2 dBm 噪声，
+     每档 40 组种子）：诚实台 z 的上界 —— **60 帧 7.4 / 100 帧 5.8 / 300 帧 6.7 / 800 帧 18.5 /
+     2000 帧 22.2**（**随帧数缓慢上涨**：比值序列**时间相关**（预测误差在时间上相关），
+     所以 `MAD/√n` 低估了不确定度 —— 但上涨是次线性的，2000 帧以内上界 ≤ 22）
+     → **阈值取 30**（留 ~1.35× 余量）；超过 2000 帧就**均匀抽稀**到 2000（否则上界会继续爬）。
+   · 检出下限（实测，同条件、取最坏种子）：**×0.5 / ×0.25 从 ~100 帧起就可靠**
+     （z 最小 31.8 / 93.6）；**×0.75 要 ≳300 帧**（最小 31.4）；60 帧连 ×0.75 都分不开（最小 5.3）。
+     即：**帧数越多越灵，帧少时如实不报**（页面要把“用了多少帧”写出来）。
+   · **全体台一起偏（如环境标定整体偏了）它看不出来** —— 它比的是“这台 vs 其余台”，
+     所以全局性偏差得靠实测标定（F-11）；这句话必须如实写在页面上。 */
+const BIAS_MIN_N = 30;        // 太少帧不谈“持续”（中位数标准误还太大）
+const BIAS_MAX_N = 2000;      // 超过就均匀抽稀（实测上界在 2000 帧以内 ≤ 22，阈值才稳）
+const BIAS_Z = 30;            // 判“持续偏”的阈值（实测诚实上界 ≈22，见上）
+function biasScan(rows, opts) {
+  const o = opts || {};
+  const minN = o.minN === undefined ? BIAS_MIN_N : o.minN;
+  const maxN = o.maxN === undefined ? BIAS_MAX_N : o.maxN;
+  const zMin = o.z === undefined ? BIAS_Z : o.z;
+  const src = rows || [];
+  const step = maxN > 0 ? Math.max(1, Math.ceil(src.length / maxN)) : 1;
+  const bySid = {};
+  src.forEach((row, i) => {
+    if (step > 1 && i % step !== 0) return;      // 均匀抽稀（保序，不挑帧）
+    (row || []).forEach(cell => {
+      if (!cell || cell.sid === undefined || cell.sid === null) return;
+      const r = cell.ratio;
+      if (r === null || r === undefined || !isFinite(r) || r <= 0) return;
+      (bySid[cell.sid] = bySid[cell.sid] || []).push(r);
+    });
+  });
+  const out = [];
+  Object.keys(bySid).forEach(sid => {
+    const v = bySid[sid].slice().sort((a, b) => a - b);
+    const n = v.length;
+    const med = median(v);
+    const mad = median(v.map(x => Math.abs(x - med))) || 0;
+    /* MAD = 0（例如噪声设成 0 → 比值恒为 1）→ 不给 z：那种情况下“分不开”是事实，
+       不能拿 0 当分母造出一个巨大的 z（实测踩过：抽稀到 5 个样本时诚实台 z 冲到 107）。 */
+    const se = (n && mad > 0) ? 1.253 * mad / Math.sqrt(n) : null;
+    const z = se ? Math.abs(med - 1) / se : null;
+    out.push({ sid: sid, n: n, med: med, mad: mad, se: se, z: z,
+               tooFew: n < minN, flagged: z !== null && n >= minN && z >= zMin });
+  });
+  out.sort((a, b) => (b.z === null ? -1 : b.z) - (a.z === null ? -1 : a.z));
+  return out;
 }
 
 /* ---------------- 时序平滑（恒速卡尔曼） ----------------

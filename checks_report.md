@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 11:01:11
-- git HEAD：`cba02ed`
+- 时间：2026-09-13 11:16:21
+- git HEAD：`1f7dd2d`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（15/15 套件通过）
 
@@ -9,8 +9,8 @@
 
 | 套件 | 脚本 | 结果 | 耗时 | 说明 |
 |---|---|---|---|---|
-| 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
-| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.1s | 通过 |
+| 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.2s | 通过 |
+| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.2s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
@@ -23,11 +23,11 @@
 | 抓包解析 / 双源对照 | `test_capture.py` | ✅ PASS | 0.1s | 通过 |
 | 设备时钟漂移（长基线） | `demo_clock.py` | ✅ PASS | 0.1s | 通过 |
 | 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
-| 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.1s | 通过 |
+| 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
 
 ## 关键输出
 
-### 运动/定位数据源 — PASS（0.1s）
+### 运动/定位数据源 — PASS（0.2s）
 
     == 1. 构造与几何 ==
     == 2. pos 确定性与周期性 ==
@@ -38,7 +38,7 @@
       OK   truth_at：空输入 → 空表（页面显示“不适用”，不编 0）
     全部通过
 
-### 密钥生命周期 — PASS（0.1s）
+### 密钥生命周期 — PASS（0.2s）
 
     == 1. 签发（幂等） ==
     == 2. 验签（第 1 代） ==
@@ -107,7 +107,7 @@
     [server] [id 3] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=- accepted=False
-    Ran 29 tests in 0.477s
+    Ran 29 tests in 0.462s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -169,15 +169,15 @@
       OK   WLS：标准入参（{s,dist}）在精确距离下复原 (5,5)（证明读的是 o.s.x/o.s.y）
       OK   椭圆：特征值→半轴（√(5.991·4) / √(5.991·1)，长短轴比 2）
       OK   椭圆：退化协方差（近乎共线）→ degenerate=true（半径仍可给，形状不可信）
-      OK   replay.html 可信度着色共用 TRUST_COLOR/TRUST_STYLE（颜色+线型单一源）
       OK   replay.html 导出带可信度（CSV 列 + GPX 扩展/小结 + GeoJSON trusts）
+      OK   replay.html 跑多帧持续偏差扫描（biasScan + 剔除最狠者后重扫）
 
-### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.1s）
+### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.2s）
 
-    PASS  字典 zh/en key 集合一致（818 / 818）
+    PASS  字典 zh/en key 集合一致（824 / 824）
     PASS  每个 key 恰好 2 次（zh + en）
     PASS  字典非空且含中文与英文条目（翻译真的两套）
-    PASS  扫描 14 个页面/脚本，引用 788 个 key（含动态前缀家族 12 个）
+    PASS  扫描 14 个页面/脚本，引用 794 个 key（含动态前缀家族 12 个）
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
