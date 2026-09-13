@@ -131,6 +131,21 @@
   </table>
   <p class="hint" data-i18n="tk_anchor_hint">测点坐标即路由器/无人机的悬停位置；客户端在其覆盖范围内移动，每个测点持续测 RSSI。</p>
   <p class="hint" data-i18n="tk_devmul_hint">「测距偏差倍数」= 把这台路由器测得的距离乘以该倍数（1 = 正常；4 = 测得“比真值远 4 倍”；0.2 = 测得“近 5 倍”），用来**演示“某台观测与其余台不一致”时会发生什么**（**不是**在给这台定责：现实里偏差成因很多 —— 遮挡/多径、天线损坏或接头松、元件性能下降、标定漂移，也不排除被改装/冒充）。而且本模型的 RSSI↔距离参数（A/n 对数路径损耗）只假定**空旷无遮挡**，未建遮挡/多径。橙方块 = 被注入偏差的测点，橙叉 = 把它作为离群点剔除后的定位（**离群 ≠ 有错**：只说明它跟其余台对不上，需人工复核）。</p>
+  <div class="row">
+    <button class="btn" id="btnActs" data-i18n="tk_act_btn">跑三幕演示（量化）</button>
+    <span class="hint" id="actMsg"></span>
+  </div>
+  <table class="anchors" id="actTable" style="display:none">
+    <thead><tr>
+      <th data-i18n="tk_act_col_act">幕</th>
+      <th data-i18n="tk_act_col_naive">天真定位（全信）</th>
+      <th data-i18n="tk_act_col_trust">一致性判定</th>
+      <th data-i18n="tk_act_col_s0">观测拟合度 σ0</th>
+      <th data-i18n="tk_act_col_fixed">订正后（剔除离群）</th>
+    </tr></thead>
+    <tbody id="actBody"></tbody>
+  </table>
+  <p class="hint" data-i18n="tk_act_hint">三幕都在**同一位置**上重复测多次取平均与最大（位置不动、只重取噪声，所以数字有拖尾）。幕③ 看的是 **σ0 那一列** —— 2 台同时偏大时定不了是哪台（**信息论边界**：n−k≥3 才够，4−2=2 不够），只能看到拟合明显偏松（σ0 远超幕①），且**阈值 1.8 可能压线不告警** → 所以既不硬指一台、也不做订正。偏差成因不唯一、模型只适用空旷无遮挡（见上）。</p>
 </section>
 
 <section class="card" id="cardStations" style="display:none">
@@ -346,6 +361,95 @@ function measureOnce(record = true) {
     ? `( ${estFixedCur.x.toFixed(1)}, ${estFixedCur.y.toFixed(1)} )` : "-";
   $("stFixedErr").textContent = estFixedCur
     ? `${Math.hypot(estFixedCur.x - client.x, estFixedCur.y - client.y).toFixed(1)} m` : "-";
+  /* 返回本轮结果：供三幕演示统计用（同一份实现，不另算一遍定位） */
+  return { est, cons, estFixed: estFixedCur };
+}
+
+/* ---- 三幕演示：量化「被带偏 X 米 → 订正 Y 米」----
+   三幕都在**同一位置**上重复测 `ACT_K` 次（位置不动，只重取噪声）：否则每幕的几何与噪声实现
+   都不同，数字没法比，也就无从说“被带偏多少”。
+   诚实说明：幕③（2 台同时偏大）属**信息论边界**（n−k≥3 才能定到哪台，4−2=2 不够）
+   → 只如实报「拟合偏松」，不硬指一台、也不做订正（列里直接写“不做订正”）。 */
+const ACT_K = 20;
+function actDevs(saved, pairs) {
+  return saved.map((d, i) => {
+    const hit = pairs.find(p => p[0] === i);
+    return hit ? hit[1] : 1;
+  });
+}
+function actRun(devs) {
+  document.querySelectorAll("#anchorBody tr").forEach((tr, i) => {
+    tr.querySelector(".dev").value = String(devs[i] === undefined ? 1 : devs[i]);
+  });
+  const agg = { n: 0, naiveSum: 0, naiveMax: 0, fixSum: 0, fixMax: 0, fixN: 0, s0Sum: 0, byKey: {} };
+  for (let k = 0; k < ACT_K; k++) {
+    const r = measureOnce(false);
+    agg.n++;
+    if (!r.est) continue;
+    const e = Math.hypot(r.est.x - client.x, r.est.y - client.y);
+    agg.naiveSum += e;
+    agg.naiveMax = Math.max(agg.naiveMax, e);
+    if (r.cons.sigma0 !== null && r.cons.sigma0 !== undefined) agg.s0Sum += r.cons.sigma0;
+    if (r.estFixed) {
+      const fe = Math.hypot(r.estFixed.x - client.x, r.estFixed.y - client.y);
+      agg.fixSum += fe; agg.fixMax = Math.max(agg.fixMax, fe); agg.fixN++;
+    }
+    const key = r.cons.trust + "|" + r.cons.dropped.join(",");   // 同一种判定结果合并计数
+    const slot = agg.byKey[key] || (agg.byKey[key] = { n: 0, cons: r.cons });
+    slot.n++;
+  }
+  return agg;
+}
+/* 「一致性判定」那一格：用**得数最多的那种结果** + 它占多少次（措辞复用 trustText，单一源） */
+function actTrustCell(agg) {
+  const keys = Object.keys(agg.byKey);
+  if (!keys.length) return "-";
+  keys.sort((a, b) => agg.byKey[b].n - agg.byKey[a].n);
+  const top = agg.byKey[keys[0]];
+  return trustText(top.cons) + " · " + top.n + "/" + agg.n;
+}
+const fmt1 = (v) => (isFinite(v) ? v.toFixed(1) : "-");
+function runActs() {
+  if (timer) { clearInterval(timer); timer = null; $("btnRun").textContent = T("tk_run"); }
+  const rows = document.querySelectorAll("#anchorBody tr");
+  const msg = $("actMsg");
+  if (rows.length < 3) { msg.textContent = T("tk_act_need3"); return; }
+  const saved = readAnchors().map(a => a.dev);
+  const acts = [
+    { name: T("tk_act_1"), devs: saved.map(() => 1) },
+    { name: T("tk_act_2"), devs: actDevs(saved, [[1, 4]]) },
+    { name: T("tk_act_3"), devs: rows.length >= 4 ? actDevs(saved, [[1, 4], [3, 4]]) : null },
+  ];
+  $("actTable").style.display = "table";
+  $("actBody").innerHTML = "";
+  msg.textContent = T("tk_act_running").replace("{k}", ACT_K);
+  let oneDev = null;
+  acts.forEach((a, ai) => {
+    const tr = document.createElement("tr");
+    let naive = T("tk_act_need4"), trust = "-", s0 = "-", fixed = T("tk_act_need4");
+    if (a.devs) {
+      const agg = actRun(a.devs);
+      naive = T("tk_act_fmt").replace("{avg}", fmt1(agg.naiveSum / agg.n))
+                             .replace("{max}", fmt1(agg.naiveMax));
+      trust = actTrustCell(agg);
+      s0 = (agg.s0Sum / agg.n).toFixed(2);
+      fixed = agg.fixN
+        ? T("tk_act_fixed_fmt").replace("{avg}", fmt1(agg.fixSum / agg.fixN))
+            .replace("{max}", fmt1(agg.fixMax))
+            .replace("{k}", agg.fixN).replace("{n}", agg.n)
+        : T("tk_act_bound");
+      if (ai === 1) oneDev = { naive: agg.naiveSum / agg.n, fixed: agg.fixN ? agg.fixSum / agg.fixN : null };
+    }
+    tr.innerHTML = `<td>${a.name}</td><td class="mono">${naive}</td><td>${trust}</td>`
+                 + `<td class="mono">${s0}</td><td class="mono">${fixed}</td>`;
+    $("actBody").appendChild(tr);
+  });
+  /* 还原注入前的倍数并重测一次（表里数字仍是刚才三幕的结果，不被覆盖） */
+  rows.forEach((tr, i) => { tr.querySelector(".dev").value = String(saved[i] === undefined ? 1 : saved[i]); });
+  measureOnce(false);
+  msg.textContent = (oneDev && oneDev.fixed !== null)
+    ? T("tk_act_sum").replace("{x}", fmt1(oneDev.naive)).replace("{y}", fmt1(oneDev.fixed))
+    : "";
 }
 
 /* ---- 地图（Leaflet）----
@@ -523,6 +627,7 @@ $("btnAdd").onclick = () => {
   addRow(Math.round(30 * Math.cos(ang)), Math.round(30 * Math.sin(ang)));
   refreshRouters();
 };
+$("btnActs").onclick = runActs;   // 三幕演示（量化）
 $("pathType").onchange = () => { client = { x: 0, y: 0 }; heading = 0; trueHist.length = 0; estHist.length = 0; draw(); };
 
 /* 视图/瓦片/基点切换 */

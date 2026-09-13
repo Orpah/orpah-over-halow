@@ -440,6 +440,17 @@ def page_guard():
         print("  FAIL replay.html 里在页面侧自算 seq 差值（应改用 pos.js 的 frameGaps）")
         return 1
     print("  OK   replay.html 走 frameGaps（报文流判定单一源）")
+    # 三幕演示（量化）：判定必须**复用** pos.js 的 consensus()，不许在页面里另传阈值/门限
+    # （演示里一旦自己写一套 z 阈值，就会出现"演示的"与"测的"两套口径 —— 本仓最忌讳的那种漂移）
+    with open(os.path.join(HERE, "ui", "static", "track.html"), encoding="utf-8") as f:
+        tk = f.read()
+    for needle, why in (("function runActs", "缺三幕演示（runActs）"),
+                        ("function actRun", "缺 actRun（逐幕统计）"),
+                        ("consensus(obsSim, {})", "判定没走 consensus(obsSim, {}) —— 不许另传阈值")):
+        if needle not in tk:
+            print(f"  FAIL track.html：{why}")
+            return 1
+    print("  OK   track.html 三幕演示走 consensus()（判定单一实现，不另传阈值）")
     return 0
 
 
