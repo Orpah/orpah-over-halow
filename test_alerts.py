@@ -61,9 +61,13 @@ def kinds(alerts):
     return [a["kind"] for a in alerts]
 
 
-def check(name, cond):
-    print(("PASS  " if cond else "FAIL  ") + name)
-    if not cond:
+def check(name, cond, detail=None):
+    """`detail` 只在**失败**时打印（把实测值/样本一起打出来，省得再跑一遍去猜）——
+    与 `test_energy.ck()` 同约定。"""
+    if cond:
+        print("PASS  " + name)
+    else:
+        print("FAIL  " + name + ("  " + str(detail) if detail is not None else ""))
         FAILS.append(name)
 
 
@@ -481,9 +485,9 @@ a = alr.evaluate(regis(), case_mgr(), deque(
 check("降级：被拒的记录不算降级上报（§8.3 只看已签接受的）", kinds(a) == [])
 
 
-# ---- 规则 9：RSSI 突变（2026-09-13）-----------------------------------------
-# 阈值按**实测零假设分布**定（见 alerts.py 模块头那句「阈值怎么定的」）：
-# 只在 0.5~15 s 的相邻样本间比，默认 25 dB（诚实上界 12 dB @10s 的 2 倍余量）。
+# ---- 规则 9：RSSI 突变（2026-09-13 加，2026-09-14 按设计常态重标定）----------------
+# 阈值与窗口都按**实测零假设分布**定（见 alerts.py 模块头「RSSI 突变阈值与窗口怎么定的」）：
+# 窗口 = 0.5~450 s（= 1.5 × 最长合法上报间隔），阈值仍 **25 dB**。
 # 下面这些用例把「不许误报」与「该报要报」两头都锁住。
 def rssi(sn, rssi, ts):
     return {"sn": sn, "rssi": rssi, "ts": ts}
@@ -497,27 +501,50 @@ def jumps(series, now=None):
 
 
 # ★ 回归锁：诚实序列零误报。诚实序列 = 演示行走模型里设备自报的 rssi
-#   （`motion.Walk.nearest`，含 ±2 dBm 确定性噪声），四种上报间隔 × 2 h，**逐对样本**
-#   各评估一次（等价于“把每个时刻都当成现在”）。
+#   （`motion.Walk.nearest`，含 ±2 dBm 确定性噪声）。
+#   ★ 站位取 **`ui_server.DEMO_STATIONS` 单一源**（不再在测试里抄一份坐标）——
+#   实测口径跟演示场景绑在一起，几何改了这条锁就会变红，逼人重新量。
 import motion                                    # noqa: E402
-_STATIONS = [("S1", 30.0, 0.0), ("S2", -15.0, 26.0),
-             ("S3", -15.0, -26.0), ("S4", -20.0, 0.0)]
+import ui_server                                 # noqa: E402
+_STATIONS = list(ui_server.OrpahApp.DEMO_STATIONS)   # [(名字, x, y), …]
 _walk = motion.Walk()
 _T0MS = 1_789_000_000_000
 _false = []
 _pairs = 0
-for _every in (1, 2, 5, 10):
-    _ser = []
-    for _i in range(int(2 * 3600 / _every)):
-        _tms = _T0MS + _i * _every * 1000
+_peak = {}
+
+
+def _honest(every, hours):
+    """按 `every` 秒采样诚实序列（返回近 7 对以下的全部相邻对，外加该 dt 下的 max）。"""
+    global _pairs
+    ser = []
+    for _i in range(int(hours * 3600 / every)):
+        _tms = _T0MS + _i * every * 1000
         _sid, _r = _walk.nearest(_tms, _STATIONS)
-        _ser.append(rssi("A", _r, _tms / 1000.0))
-    _ser.reverse()                               # 最新在前
-    for _k in range(len(_ser) - 1):
+        ser.append(rssi("A", _r, _tms / 1000.0))
+    ser.reverse()                                # 最新在前
+    mx = 0.0
+    for _k in range(len(ser) - 1):
         _pairs += 1
-        if jumps(_ser[_k:_k + 2]):
-            _false.append((_every, _k))
-check("★ RSSI：诚实序列 %d 对样本（1/2/5/10s 间隔 × 2h）零误报" % _pairs, not _false)
+        mx = max(mx, abs(ser[_k]["rssi"] - ser[_k + 1]["rssi"]))
+        if jumps(ser[_k:_k + 2]):
+            _false.append((every, _k))
+    _peak[every] = mx
+
+
+# 密集采样（旧标定用的那四种）+ 设计常态 60 s + 窗口两端（0.5~450 s 内）
+for _every in (1, 2, 5, 10):
+    _honest(_every, 2)
+for _every in (15, 30, 60, 90, 300, 450):
+    _honest(_every, 168)                         # 一周：极端值统计要够长
+check("★ RSSI：诚实序列 %d 对样本（1/2/5/10s×2h + 15/30/60/90/300/450s×168h）零误报"
+      % _pairs, not _false, _false[:3])
+check("★ RSSI：实测诚实上界 %.0f dB ≤ 22 dB（离阈值 25 还有余量；大到接近就得重标）"
+      % max(_peak.values()), max(_peak.values()) <= 22, _peak)
+check("★ RSSI：新建模的 60 s 常态**真的在窗口里**（自己对自己不再“不可比”）",
+      alr.RSSI_PAIR_MIN_SEC <= 60 <= alr.RSSI_PAIR_MAX_SEC)
+check("★ RSSI：窗口按最长合法上报间隔定（450 = 1.5 × max_useful 300）",
+      alr.RSSI_PAIR_MAX_SEC == int(1.5 * enmod.MAX_USEFUL_INTERVAL_S) == 450)
 
 _a = jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 2)])
 check("RSSI：2 秒内跳 40 dB → rssi_jump warn，且带上一/当前/间隔三个数（页面能解释）",
@@ -528,8 +555,12 @@ check("RSSI：刚好等于阈值（25 dB）不报（严格大于才报）",
       jumps([rssi("A", -40, NOW), rssi("A", -65, NOW - 2)]) == [])
 check("RSSI：差一点点超阈（25.1→26）也照样报（没有额外的“凑整”门槛）",
       len(jumps([rssi("A", -40, NOW), rssi("A", -66, NOW - 2)])) == 1)
-check("RSSI：间隔 >15 s 不比 —— 分不清“突变”与“走了很远”（宁可不报）",
-      jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 16)]) == [])
+check("RSSI：间隔 >450 s 不比 —— 超过最长合法上报间隔的 1.5 倍（没法归因就不报）",
+      jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 451)]) == [])
+check("★ RSSI：**60 s 间隔（设计常态）要比** —— 2 s 演示周期的旧窗口曾把它挡在外面",
+      len(jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 60)])) == 1)
+check("★ RSSI：**降级上报（300 s）也要比**（最长合法间隔）",
+      len(jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 300)])) == 1)
 check("RSSI：间隔 <0.5 s 不比（同一瞬间的重复采样，噪声能随便跳）",
       jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 0.4)]) == [])
 check("RSSI：只有一条样本 → 不报（没有可比的“前一次”）",
