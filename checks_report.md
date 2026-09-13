@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 21:23:53
-- git HEAD：`4d67b6f`
+- 时间：2026-09-13 21:33:39
+- git HEAD：`234ebd3`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（31/31 套件通过）
 
@@ -10,21 +10,21 @@
 | 套件 | 脚本 | 结果 | 耗时 | 说明 |
 |---|---|---|---|---|
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
-| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.2s | 通过 |
+| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.1s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
 | 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.7s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 0.2s | 通过 |
 | 告警通知（边沿触发 / Webhook / 失败可见） | `test_notify.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
 | 时钟可信（ts=0 无 RTC） | `test_clock.py` | ✅ PASS | 0.5s | 通过 |
-| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.6s | 通过 |
+| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.5s | 通过 |
 | UI 服务器契约 | `test_server.py` | ✅ PASS | 0.7s | 通过 |
-| 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.1s | 通过 |
+| 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.0s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
 | 能量轴（免电池客户端） | `test_energy.py` | ✅ PASS | 0.0s | 通过 |
 | 抓包解析 / 双源对照 | `test_capture.py` | ✅ PASS | 0.1s | 通过 |
 | 设备时钟漂移（长基线） | `demo_clock.py` | ✅ PASS | 0.1s | 通过 |
-| 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.3s | 通过 |
+| 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
 | 地图共享件（map.js：基点/野外包 + maps.py） | `test_mapjs.py` | ✅ PASS | 0.2s | 通过 |
 | 首页转义口径（app.js：esc/alertText 单一出口） | `test_appjs.py` | ✅ PASS | 0.0s | 通过 |
 | 限频（§5.8 令牌桶 / 两条防线） | `test_ratelimit.py` | ✅ PASS | 0.1s | 通过 |
@@ -32,11 +32,11 @@
 | Router 下行路径（来源校验） | `test_router.py` | ✅ PASS | 0.1s | 通过 |
 | 下行真实性（F-14 B：签名/重放/时间窗） | `test_downlink.py` | ✅ PASS | 0.1s | 通过 |
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
-| UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 2.2s | 通过 |
+| UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 2.0s | 通过 |
 | 数据新鲜度（freshness.py + fresh.js） | `test_fresh.py` | ✅ PASS | 0.2s | 通过 |
 | L1 端到端 | `demo_l1.py` | ✅ PASS | 1.4s | 通过 |
-| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.2s | 通过 |
-| L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.3s | 通过 |
+| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.3s | 通过 |
+| L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.2s | 通过 |
 | L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.2s | 通过 |
 | 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.8s | 通过 |
 | 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 7.7s | 通过 |
@@ -54,7 +54,7 @@
       OK   truth_at�������� �� �ձ���ҳ����ʾ�������á������� 0��
     ȫ��ͨ��
 
-### 密钥生命周期 — PASS（0.2s）
+### 密钥生命周期 — PASS（0.1s）
 
     == 1. ǩ�����ݵȣ� ==
     == 2. ��ǩ���� 1 ���� ==
@@ -122,7 +122,7 @@
       OK   并发：4 写 × 50 条 + 2 读线程 → 无异常且一条不丢
     时钟可信测试全部通过
 
-### IoTDB 审计/时间窗 — PASS（0.6s）
+### IoTDB 审计/时间窗 — PASS（0.5s）
 
     == 1. actor �ֶ� ==
     == 2. query_events �ض� actor ==
@@ -141,10 +141,10 @@
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
-    Ran 34 tests in 0.499s
+    Ran 40 tests in 0.476s
     OK
 
-### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
+### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.0s）
 
     == 1. 黄金样本（校验位只算 ORG-UNIQUE，不含 CC）==
     == 2. SN 边界（格式：CC-ORG-UNIQUE[-CHECK]，Crockford Base32 去 I L O U）==
@@ -195,7 +195,7 @@
       [PASS] B：offset ≈ +0.2s（当前时刻的偏差：漂移 1h 累计 +0.72s − 截断 0.5s）
       [PASS] B：漂移估出 +200ppm（晶振级，短窗做不到）
 
-### 定位内核（pos.js，node 跑原文） — PASS（0.3s）
+### 定位内核（pos.js，node 跑原文） — PASS（0.2s）
 
       OK   RSSI→距离→RSSI 往返（A=-40 n=2.5, -70dBm）
       OK   三边定位（精确距离）复原 (5,5)
@@ -242,7 +242,7 @@
     [client] 注入 ORPAH-REQ-CONNECT sn=CN-WH01-9AF3C1D2
     [client] 注入 ORPAH-ID-REPORT sn=CN-X (109B)
     [client] 注入 ORPAH-ID-REPORT sn=CN-X (109B)
-    Ran 24 tests in 0.008s
+    Ran 24 tests in 0.007s
     OK
 
 ### Router 下行路径（来源校验） — PASS（0.1s）
@@ -274,7 +274,7 @@
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
-### UI 样式/窄屏守卫 — PASS（2.2s）
+### UI 样式/窄屏守卫 — PASS（2.0s）
 
     == style.css：页面不再被写死宽度、窄屏档位齐全 ==
     == 页面：内联宽度、viewport、共享件 ==
@@ -299,7 +299,7 @@
     === ORPAH L1 验收 ===
     结果: [PASS]
 
-### L2 消息流 — PASS（2.2s）
+### L2 消息流 — PASS（2.3s）
 
     --- 分支一：走失库未命中 sn=CN-WH01-9AF3C1D2 ---
     --- mark 走失 sn=CN-WH01-9AF3C1D2（Server 下发 LOST-TABLE）---
@@ -308,7 +308,7 @@
     分支一(未命中 NOT-TRACKED): PASS
     分支二(命中 TRACKED): PASS
 
-### L3 多 Router 漫游/去重 — PASS（4.3s）
+### L3 多 Router 漫游/去重 — PASS（4.2s）
 
     --- 阶段A：sn=CN-WH01-9AF3C1D2 在 R1 网络（2 条，未 mark）---
     --- 阶段B：sn=CN-WH01-9AF3C1D2 漫游到 R2 网络（seq 续 3）---
@@ -330,7 +330,7 @@
 
       无认证空口防 spoof 端到端演示
       被冒充设备 SN : CN-WH01-9AF3C1D2
-      攻击者 SN    : CN-WH01-Z96R5MDQKB-02（未登记 → 服务器不认识）
+      攻击者 SN    : CN-WH01-DKXDRN0N2W-32（未登记 → 服务器不认识）
       链路          : Client→STA→空口→AP→Router→UDP:19847→Server
       用例数        : 14（含 1 条合法对照）
     [server] 监听 127.0.0.1:19847 (UDP)，等待 ORPAH 报文…

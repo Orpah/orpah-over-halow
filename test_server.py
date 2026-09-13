@@ -426,5 +426,77 @@ class TestUiQueryArgs(unittest.TestCase):
                       "上传路径 finally 里的 settimeout(None) 防护被我删掉了")
 
 
+class TestUiHostBind(unittest.TestCase):
+    """`--host`（2026-09-13）：让手机/平板能在同网段打开，**只改 HTTP 监听地址**。
+
+    为什么这几条要锁住：
+      · 默认必须是回环 —— 这个页面**没有任何认证**，能访问端口的人就能驱动演示
+        （标记走失 / 注入报文 / 刷量），不该“不传参数就暴露到全网段”；
+      · `--host` 只许影响 HTTP：组件端口（模拟器 console/link/host、UDP server、Router）
+        仍在本机，否则一条参数就把整个内部链路也暴露了；
+      · IPv6 地址要**当场拒**（本链路每处 socket 都是 AF_INET）：给个“看着绑上了其实连不上”
+        比报错难查得多。
+    """
+
+    def setUp(self):
+        self.ui = __import__("ui_server")
+
+    def test_default_host_is_loopback(self):
+        args = self.ui.build_parser().parse_args([])
+        self.assertEqual(args.host, "127.0.0.1", "默认不许暴露到本机之外")
+        self.assertEqual(args.port, self.ui.HTTP_PORT)
+
+    def test_host_parses(self):
+        args = self.ui.build_parser().parse_args(["--host", "0.0.0.0", "--port", "9000"])
+        self.assertEqual(args.host, "0.0.0.0")
+        self.assertEqual(args.port, 9000)
+
+    def test_host_error_rejects_ipv6_and_blank(self):
+        self.assertIsNone(self.ui.host_error("127.0.0.1"))
+        self.assertIsNone(self.ui.host_error("0.0.0.0"))
+        for bad in ("::1", "fe80::1", "2001:db8::1"):
+            self.assertIn("IPv4", self.ui.host_error(bad) or "", bad)
+        self.assertIsNotNone(self.ui.host_error(""))
+        self.assertIsNotNone(self.ui.host_error(None))
+
+    def test_only_http_bind_uses_host(self):
+        """`args.host` 只用在 HTTP 那一段（组件端口不许跟着暴露）。
+
+        做法：`args.host` 只许出现在（a）**入口校验** `host_error(args.host)`，
+        或（b）`APP = OrpahApp(...)` **之后**的 HTTP 段 —— 组件（模拟器三处监听 / UDP server /
+        Router）在构造时就定好了，host 在装配前不该被用到。
+        """
+        import re as _re
+        with open(os.path.join(HERE, "ui_server.py"), encoding="utf-8") as f:
+            src = f.read()
+        app_at = src.index("APP = OrpahApp(")
+        hits = list(_re.finditer(r"args\.host", src))
+        self.assertTrue(hits, "没找到 args.host —— 这个参数不该被删掉")
+        bad = [h.group(0) + " @ " + src[src.rfind("\n", 0, h.start()) + 1:
+                                        src.find("\n", h.start())].strip()[:50]
+               for h in hits
+               if h.start() < app_at and "host_error(args.host)" not in src[h.start() - 12:h.start() + 12]]
+        self.assertFalse(bad, f"args.host 在组件装配之前被用了（组件端口必须仍只在本机）：{bad}")
+        self.assertLessEqual(len(hits), 6, f"args.host 用处变多了，逐个确认：{len(hits)} 处")
+        self.assertIn("Srv((args.host, args.port), Handler)", src)
+        # App 的构造不许吃 host（否则模拟器/UDP 也会跟着绑到 0.0.0.0）
+        m = _re.search(r"APP = OrpahApp\((.*?)\)", src, _re.S)
+        self.assertTrue(m and "host" not in m.group(1), m.group(1) if m else "没找到 APP 构造")
+
+    def test_lan_urls_exclude_loopback(self):
+        urls = self.ui.lan_urls(8901)
+        for u in urls:
+            self.assertTrue(u.startswith("http://") and u.endswith(":8901/"), u)
+            self.assertNotIn("127.0.0.1", u, "手机上打 127.0.0.1 是打它自己")
+            self.assertNotIn("0.0.0.0", u)
+
+    def test_exposure_warning_text(self):
+        """暴露时必须自己说出来：无认证 + 只在可信局域网 + 组件端口没跟着暴露。"""
+        with open(os.path.join(HERE, "ui_server.py"), encoding="utf-8") as f:
+            src = f.read()
+        for need in ("没有任何认证", "可信局域网", "组件端口", "防火墙"):
+            self.assertIn(need, src, f"暴露提示里少了「{need}」")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

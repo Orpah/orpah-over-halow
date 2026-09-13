@@ -266,6 +266,8 @@ Router 主动拉表已在 **L3b** 落地（见下）。
 ```bash
 python ui_server.py                  # 自动开浏览器 http://127.0.0.1:8901/（在本仓库根目录跑）
 # 或：python ui_server.py --every 1.5 --sn CN-WH01-9AF3C1D2
+# 想在手机/平板上看（布局已适配窄屏）：加上 --host 0.0.0.0，按启动时打印的局域网地址访问
+python ui_server.py --host 0.0.0.0
 ```
 - 内嵌 AP+STA 模拟器 + Router 桥 + Server，Client **自动周期上报**。
 - 页面：精简 3 节点拓扑（客户端 →(空口)→ 路由器 →(UDP)→ 服务器）+ ORPAH-REPORT
@@ -273,6 +275,13 @@ python ui_server.py                  # 自动开浏览器 http://127.0.0.1:8901/
   （单向上行：客户端发送/路由器接收增长）+ 暂停/改 sn/改间隔。
 - 文案走本项目自持字典 `ui/static/ui_i18n.js`（zh/en，`?lang=en` 可切英文预览）。
 - 页面数据链路：SSE 事件（点亮动画）+ `/api/status` 全量（计数/连接/表格真相）。
+- **`--host`（2026-09-13）只改 HTTP 监听地址**：默认 `127.0.0.1`（只本机可达）；
+  传 `0.0.0.0` 后同网段的手机/平板能打开，组件端口（模拟器 console/link/host、UDP server、
+  Router）**仍只在本机**。
+  ⚠ 这个页面**没有任何认证**：能访问端口的人就能驱动演示（标记走失、注入报文、刷量）。
+  只在可信局域网临时用，用完就关；Windows 首次监听会弹防火墙提示，要选「允许」（专用网络）。
+  ⚠ 只做 IPv4（本链路 Phase 1）：`--host` 给 IPv6 地址会**当场报错退出**，不给你
+  “看着绑上了其实连不上”的结果。
 
 ### 方式 2：命令行验收
 
@@ -284,8 +293,8 @@ python demo_l1.py --n 3        # 进程内建 AP+STA 模拟器 + Server/Router/C
 ### 方式 3：一键跑全部检查 + 出报告（推荐做回归时用）
 
 ```bash
-python run_checks.py            # 24 个离线套件（各模块自检 + 批量合规 + 抓包解析 + 时钟漂移 + 能量轴 + pos.js 内核 + 文案字典 + UI 窄屏守卫），约 5 秒
-python run_checks.py --e2e      # 再加 5 个端到端 demo（L1/L2/L3/L3b/防 spoof），1-3 分钟
+python run_checks.py            # 25 个离线套件（各模块自检 + 批量合规 + 抓包解析 + 时钟漂移 + 能量轴 + pos.js 内核 + 文案字典 + UI 窄屏/信息层级/数据新鲜度守卫），约 5 秒
+python run_checks.py --e2e      # 再加 6 个端到端 demo（L1/L2/L3/L3b/防 spoof/限频），约 25 秒
 ```
 - 报告写到 `checks_report.md`（含 git HEAD、每套件结果/耗时/关键输出、失败详情）。
 - ⚠ **报告是全量口径的**：不带 `--e2e` 跑会把 `checks_report.md` **整个覆盖**成只含离线套件的结果

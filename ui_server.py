@@ -12,8 +12,16 @@ ui_server.py — ORPAH-over-HaLow L1 demo Web UI（纯 PC，无硬件）
 - 启动 OrpahServer（UDP 19447）+ RouterBridge + ClientHost（周期自动上报）
 - 浏览器打开即看：三层拓扑 + ORPAH-REPORT 实时报文流 + 三端计数
 
-运行：python ui_server.py [--port 8901] [--every 2] [--sn CN-WH01-9AF3C1D2]
+运行：python ui_server.py [--port 8901] [--every 2] [--sn CN-WH01-9AF3C1D2] [--host 0.0.0.0]
 零第三方依赖（仅标准库）。启动后自动打开浏览器 http://127.0.0.1:8901/
+
+`--host`（2026-09-13）：**只改 HTTP 监听地址**，默认 `127.0.0.1`（只本机可达）。
+想让手机/平板在同网段打开看，传 `--host 0.0.0.0`；组件端口（模拟器 console/link/host、
+UDP server、Router）**仍然只在本机**，不随它暴露。
+⚠ **这个页面没有任何认证**（demo 性质）：谁能访问到端口，谁就能驱动演示（标记走失、
+下发/作废、注入攻击报文、刷量……）。所以**只在可信局域网、临时用**，用完就关。
+⚠ 本链路 Phase 1 只做 IPv4：`--host` 给 IPv6 地址（含 `:`）会直接报错退出，
+而不是让人误以为“绑上了”。
 """
 import argparse
 import json
@@ -2343,10 +2351,59 @@ class Srv(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
-def main():
-    global APP
+def lan_urls(port, host=""):
+    """列出本机可用的**局域网**访问地址（供手机/平板输入）。
+
+    只返回 IPv4（与 Phase 1 的地址族约定一致）且**排除回环**（手机上打 127.0.0.1
+    是打它自己）。取法两道，任一失败不影响启动：
+      · 默认路由法（UDP connect 不发包）→ 最可能是局域网那个地址；
+      · 主机名解析 → 兼顶多网卡/多地址的情况。
+    """
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))          # 不发包，只为让系统选出出口网卡
+            ips.append(s.getsockname()[0])
+        finally:
+            s.close()
+    except Exception:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None,
+                                       family=socket.AF_INET):
+            ips.append(info[4][0])
+    except Exception:
+        pass
+    out = []
+    for ip in ips:
+        if ip.startswith("127.") or ip == "0.0.0.0" or ip in out:
+            continue
+        out.append(ip)
+    return [f"http://{ip}:{port}/" for ip in out]
+
+
+def host_error(host):
+    """`--host` 合法性（只做 IPv4）。返回错误文本，None = 可以用。
+
+    为什么要在入口拦住 IPv6：本链路的每一处 socket 都显式建 `AF_INET`
+    （模拟器三处监听 / Router↔Server UDP / UI HTTP），给个 IPv6 地址的结果是
+    “看着绑上了、其实连不上”——不如当场报错退出。
+    """
+    if host is None or not str(host).strip():
+        return "--host 不能为空（默认 127.0.0.1）"
+    if ":" in str(host):
+        return f"--host 只支持 IPv4（本链路 Phase 1 未做 IPv6）：{host}"
+    return None
+
+
+def build_parser():
+    """命令行参数（单抽一个函数：单测要拿它验证默认值与新加的 --host）。"""
     ap = argparse.ArgumentParser(description="ORPAH-over-HaLow L1 demo Web UI")
     ap.add_argument("--port", type=int, default=HTTP_PORT)
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="HTTP 监听地址（默认 127.0.0.1 只本机；0.0.0.0 = 同网段可用，"
+                         "但页面**无认证**，只在可信局域网临时用）")
     ap.add_argument("--every", type=float, default=2.0, help="自动上报间隔秒")
     ap.add_argument("--sn", default="CN-WH01-9AF3C1D2",
                     help="终端序列号（Orpah ID：CC-ORG-UNIQUE[-CHECK]）")
@@ -2354,18 +2411,43 @@ def main():
     ap.add_argument("--no-walk", action="store_true",
                     help="关闭「移动的人」演示数据（回到恒定 RSSI + 不写路由器观测）")
     ap.add_argument("--no-browser", action="store_true")
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    global APP
+    args = build_parser().parse_args()
+    err = host_error(args.host)
+    if err:
+        print(f"[ui] {err}")
+        return 2
 
     APP = OrpahApp(every=args.every, sn=args.sn, rssi=args.rssi,
                    walk=not args.no_walk)
     if not APP.start():
         return 1
 
-    httpd = Srv(("127.0.0.1", args.port), Handler)
-    print(f"[ui] ORPAH L1 demo UI: http://127.0.0.1:{args.port}/  (Ctrl-C 退出)")
+    httpd = Srv((args.host, args.port), Handler)
+    local = f"http://127.0.0.1:{args.port}/"
+    print(f"[ui] ORPAH L1 demo UI: {local}  (Ctrl-C 退出)")
+    if args.host not in ("127.0.0.1", "localhost"):
+        # 暴露到局域网时必须**主动说出来**（默认只本机；这是用户显式选的，
+        # 但“谁都能驱动这个 demo”不是小事，不能只靠文档）。
+        print("=" * 66)
+        print("[ui] ⚠ HTTP 已监听 %s:%d —— 同网段的设备都能打开这个页面。"
+              % (args.host, args.port))
+        print("[ui] ⚠ 本页面没有任何认证：能访问端口的人就能标记走失、注入报文、刷量。"
+              "\n     只在可信局域网临时用，用完就关掉。")
+        print("[ui] 组件端口（模拟器/ UDP server / Router）仍只在本机，不随它暴露。")
+        urls = lan_urls(args.port, args.host)
+        if urls:
+            print("[ui] 手机/平板（同网段）可试：" + "  ".join(urls))
+        else:
+            print("[ui] 没识别出局域网 IPv4 地址 —— 用 `ipconfig` 自己看一下再手输。")
+        print("[ui] Windows 首次监听可能弹防火墙提示：要选「允许」（专用网络）。")
+        print("=" * 66)
     if not args.no_browser:
-        threading.Timer(0.6, lambda: webbrowser.open(
-            f"http://127.0.0.1:{args.port}/")).start()
+        threading.Timer(0.6, lambda: webbrowser.open(local)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
