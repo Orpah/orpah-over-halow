@@ -52,6 +52,7 @@ SUITES = [
     ("抓包解析 / 双源对照", "test_capture.py", []),
     ("设备时钟漂移（长基线）", "demo_clock.py", []),
     ("定位内核（pos.js，node 跑原文）", "test_posjs.py", []),
+    ("地图共享件（map.js：基点导入/换算/存储）", "test_mapjs.py", []),
     ("限频（§5.8 令牌桶 / 两条防线）", "test_ratelimit.py", []),
     ("设备侧自限频（§5.8 设备那一环，自愿）", "test_selflimit.py", []),
     ("Router 下行路径（来源校验）", "test_router.py", []),

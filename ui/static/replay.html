@@ -131,8 +131,15 @@
       <input id="baseLat" type="number" step="any" value="40.0777583"></label>
     <label><span data-i18n="tk_base_lng">基点经度</span>
       <input id="baseLng" type="number" step="any" value="117.2688556"></label>
+    <!-- 基点导入/导出：逻辑全在 map.js（单一源） -->
+    <button class="btn" id="btnBaseImport" data-i18n="base_import">导入基点…</button>
+    <button class="btn" id="btnBaseExport" data-i18n="base_export">导出基点</button>
+    <button class="btn" id="btnBaseReset" data-i18n="base_reset">复位为演示值</button>
+    <input type="file" id="baseFile" accept=".json,application/json" hidden>
     <span class="hint" data-i18n="tk_map_hint">本地坐标 (0,0) 对应的真实经纬度；地图视图按此锚点 + 米/度换算。地图瓦片需联网。</span>
   </div>
+  <p class="hint" data-i18n="base_hint">基点是把本地格网（x 向东、y 向北，米）锚到经纬度的那一个标定输入：只接受 WGS84 十进制度，不做坐标系转换（GCJ-02/BD-09 会被原样当 WGS84 用 → 实际可能偏几百米）。导入/导出用同一个 JSON 格式（可原样再导回来），基点存在本机浏览器里、不会上传服务端。基点错 = 整条轨迹平移：纬度差 0.001 度就约 110 米。</p>
+  <p class="hint" id="baseNote2"></p>
   <div class="row">
     <label><span data-i18n="rp_exp">导出轨迹</span>
       <select id="expSrc">
@@ -1422,6 +1429,10 @@ function resetMap() {
   refreshTileNote();
   if (mapActive()) applyView();
 }
+/* 基点导入/导出/复位（逻辑全在 map.js）：导入与复位等于换原点 → 与手改输入框一样重建地图。
+   开页时先套用存储里的基点（**在建地图之前**，否则地图会先按默认值定位一次）。 */
+baseApplyStored();
+baseInit(resetMap);
 /* 宽度变化（窗口缩放、时钟文字变长变短、字体加载）就重画：
    否则像素缓冲宽度会滞后于显示宽度 → 颜色位置错位 */
 if (window.ResizeObserver) {

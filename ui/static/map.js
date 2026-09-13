@@ -71,6 +71,201 @@ function refreshTileNote() {
 }
 function baseLat() { return parseFloat($("baseLat").value); }
 function baseLng() { return parseFloat($("baseLng").value); }
+
+/* ---- 基点（本地米制坐标 ↔ WGS84）：导入 / 导出 / 记忆（2026-09-13，ROADMAP §二）----
+
+   基点是什么：本地格网（x 向东、y 向北，米）锚到经纬度的那**一个**标定输入。
+   页面上的默认值只是**演示场景**（山东某地）；真机部署必须换成现场测的基点。
+
+   **为什么要有“导入”**：现场拿到基点的形式不是让你手抄数字 —— 常见是别人给的一个
+   JSON/GeoJSON 点位、或上一次导出的那份。手抄 7 位小数极易错，而**基点错 = 整条轨迹平移**
+   （不是缩小，也不是"看起来还行"）：错 0.001° 纬度 ≈ 110 m。
+
+   **单一源**：默认值、校验、存储、换算全在这里 —— 两页只放输入框与两个按钮，
+   不各写一份换算（否则同一条轨迹会在两页落在不同位置）。
+
+   **只接受 WGS84 十进制度，不做坐标系转换**：GCJ-02（国内地图偏移坐标）/BD-09/Web 墨卡托
+   会被**原样当成 WGS84** → 位置偏几百米。这里**不猜**、不"智能纠正"（那会变成静默错误），
+   而是在提示里写明这一条，让使用者自己确认来源。 */
+const BASE_DEFAULT = { lat: 40.0777583, lng: 117.2688556 };
+const BASE_KEY = "orpah.base.v1";
+let baseImported = null;          // 导入的基点：{lat,lng,name,note,when}；null = 用输入框里的
+
+/* 从**各种常见写法**里取 {lat,lng}：本项目的导出格式、`latitude/longitude`、
+   `lat0/lng0`、`origin:{lat,lng}`、`base:{lat,lng}`、GeoJSON Point（`coordinates=[lng,lat]`）。
+   返回 null = 一个都认不出来（**不猜**）。 */
+function basePick(o) {
+  if (!o || typeof o !== "object") return null;
+  const num = (v) => (typeof v === "number" && isFinite(v)) ? v
+    : (typeof v === "string" && v.trim() !== "" && isFinite(Number(v)) ? Number(v) : null);
+  const pair = (a, b) => {
+    const la = num(a), ln = num(b);
+    return (la === null || ln === null) ? null : { lat: la, lng: ln };
+  };
+  let p = pair(o.lat, o.lng) || pair(o.latitude, o.longitude)
+       || pair(o.lat0, o.lng0) || pair(o.baseLat, o.baseLng);
+  if (p) return p;
+  for (const k of ["origin", "base", "center", "point"]) {
+    if (o[k] && typeof o[k] === "object") { p = basePick(o[k]); if (p) return p; }
+  }
+  if (Array.isArray(o.coordinates) && o.coordinates.length >= 2) {
+    // GeoJSON 顺序是 [经度, 纬度] —— 弄反了会落到地球另一边（下面校验也拦不住，故在提示里写明）
+    return pair(o.coordinates[1], o.coordinates[0]);
+  }
+  return null;
+}
+/* 取值范围校验。错误码而不是中文句子（页面按 i18n 译，保持双语一致）：
+   `base_need_json`(文本解析不出对象) / `base_need_point`(认不出 lat/lng) /
+   `base_bad_num`(NaN/∞) / `base_off_globe`(超出 ±90/±180)。 */
+function baseCheck(b) {
+  if (b === null || b === undefined) return { ok: false, err: "base_need_point" };
+  const bad = (v) => !(typeof v === "number" && isFinite(v));
+  if (bad(b.lat) || bad(b.lng)) return { ok: false, err: "base_bad_num" };
+  if (b.lat < -90 || b.lat > 90 || b.lng < -180 || b.lng > 180) {
+    return { ok: false, err: "base_off_globe", lat: b.lat, lng: b.lng };
+  }
+  return { ok: true, base: { lat: b.lat, lng: b.lng } };
+}
+/* 解析导入文本 → {ok, base, err, name, note}。**先解析、再校验、再落盘**，
+   出错一律**可见**（返回错误码）—— 不静默回落成默认值（那会让人以为导入成功了）。 */
+function baseParse(text) {
+  let raw;
+  try { raw = JSON.parse(String(text == null ? "" : text)); }
+  catch (e) { return { ok: false, err: "base_bad_json", detail: String(e.message || e) }; }
+  // 也接受 GeoJSON Feature / FeatureCollection 的第一个点（现场常从地图工具导出这种）
+  if (raw && raw.type === "Feature" && raw.geometry) raw = raw.geometry;
+  if (raw && raw.type === "FeatureCollection" && Array.isArray(raw.features)
+      && raw.features.length && raw.features[0].geometry) raw = raw.features[0].geometry;
+  const p = basePick(raw);
+  const chk = baseCheck(p);
+  if (!chk.ok) return { ok: false, err: chk.err, lat: chk.lat, lng: chk.lng };
+  return { ok: true, base: chk.base,
+           name: (raw && typeof raw.name === "string") ? raw.name : "",
+           note: (raw && typeof raw.note === "string") ? raw.note : "" };
+}
+function baseStoreRead() {
+  try {
+    const s = window.localStorage.getItem(BASE_KEY);
+    if (!s) return null;
+    const o = JSON.parse(s);
+    const chk = baseCheck(basePick(o));
+    return chk.ok ? chk.base : null;      // 存储里坏掉就当没有（但也别把它当默认值用）
+  } catch (e) { return null; }
+}
+function baseStoreWrite(b) {
+  try {
+    window.localStorage.setItem(BASE_KEY,
+      JSON.stringify({ orpah_base: 1, lat: b.lat, lng: b.lng,
+                       name: b.name || "", note: b.note || "", when: b.when || "" }));
+    return true;
+  } catch (e) { return false; }           // 隐私模式/配额满：**不抛**，如实返回 false
+}
+function baseStoreClear() {
+  try { window.localStorage.removeItem(BASE_KEY); return true; } catch (e) { return false; }
+}
+/* 页面上“当前基点”的来源（用于显示，避免误读成“默认值就是现场值”）：
+   `imported`（导入并存下来的）/ `manual`（手改过输入框）/ `default`（演示默认值）。 */
+function baseSource() {
+  const lat = baseLat(), lng = baseLng();
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  if (baseImported && near(lat, baseImported.lat) && near(lng, baseImported.lng)) return "imported";
+  if (near(lat, BASE_DEFAULT.lat) && near(lng, BASE_DEFAULT.lng)) return "default";
+  return "manual";
+}
+/* 开页时把存下来的基点写进输入框（**在创建地图之前**调，否则地图会先按默认值定位）。 */
+function baseApplyStored() {
+  const b = baseStoreRead();
+  if (!b) return null;
+  baseImported = b;
+  if ($("baseLat")) $("baseLat").value = String(b.lat);
+  if ($("baseLng")) $("baseLng").value = String(b.lng);
+  return b;
+}
+/* 导入：解析 → 校验 → 写输入框 → 落存储。返回 `baseParse` 的结果 + `stored`。 */
+function baseImport(text) {
+  const r = baseParse(text);
+  if (!r.ok) return r;
+  const b = { lat: r.base.lat, lng: r.base.lng, name: r.name, note: r.note,
+              when: new Date().toISOString() };
+  baseImported = b;
+  if ($("baseLat")) $("baseLat").value = String(b.lat);
+  if ($("baseLng")) $("baseLng").value = String(b.lng);
+  r.stored = baseStoreWrite(b);
+  return r;
+}
+/* 导出当前基点（与导入同格式，可原样再导回来 —— 有往返用例）。 */
+function baseExportText() {
+  const b = { orpah_base: 1, lat: baseLat(), lng: baseLng(),
+              name: (baseImported && baseImported.name) || "",
+              note: (baseImported && baseImported.note) || "",
+              when: new Date().toISOString(),
+              source: baseSource() };
+  return JSON.stringify(b, null, 2);
+}
+/* 页面接线：文件选择 / 导出 / 复位 + 状态行。`onChange` 由各页给（重算地图用）。
+   元素 id 两页统一：`baseFile` / `btnBaseExport` / `btnBaseReset` / `baseNote2`。 */
+function baseInit(onChange) {
+  const f = $("baseFile");
+  const open = $("btnBaseImport");
+  if (open && f) open.onclick = () => f.click();   // 文件框隐藏，按钮代点（同站位导入的做法）
+  if (f) {
+    f.onchange = () => {
+      const file = f.files && f.files[0];
+      if (!file) return;
+      const rd = new FileReader();
+      rd.onload = () => {
+        const r = baseImport(String(rd.result || ""));
+        baseShowNote(r.ok
+          ? T("base_import_ok").replace("{f}", file.name)
+            .replace("{lat}", r.base.lat).replace("{lng}", r.base.lng)
+          : T("base_import_fail").replace("{f}", file.name).replace("{why}", baseErrText(r)));
+        if (r.ok && onChange) onChange();
+      };
+      rd.onerror = () => baseShowNote(T("base_import_fail")
+        .replace("{f}", file.name).replace("{why}", T("base_err_read")));
+      rd.readAsText(file);
+    };
+  }
+  const ex = $("btnBaseExport");
+  if (ex) {
+    ex.onclick = () => {
+      const txt = baseExportText();
+      const name = "orpah-base-" + baseLat() + "-" + baseLng() + ".json";
+      const url = URL.createObjectURL(new Blob([txt], { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      baseShowNote(T("base_export_ok").replace("{f}", name));
+    };
+  }
+  const rs = $("btnBaseReset");
+  if (rs) {
+    rs.onclick = () => {
+      baseStoreClear();
+      baseImported = null;
+      if ($("baseLat")) $("baseLat").value = String(BASE_DEFAULT.lat);
+      if ($("baseLng")) $("baseLng").value = String(BASE_DEFAULT.lng);
+      baseShowNote(T("base_reset_ok"));
+      if (onChange) onChange();
+    };
+  }
+  baseShowNote(T("base_src_" + baseSource()));
+}
+/* 错误码 → 可读文案（**不隐藏原因**：导入失败必须说清是哪一步） */
+function baseErrText(r) {
+  const key = r && r.err ? r.err : "base_need_point";
+  let s = T(key);
+  if (r && r.detail) s += "（" + r.detail + "）";
+  if (r && r.err === "base_off_globe" && r.lat !== undefined) {
+    s += " lat=" + r.lat + " lng=" + r.lng;
+  }
+  return s;
+}
+function baseShowNote(msg) {
+  const el = $("baseNote2");
+  if (el) el.textContent = msg;
+}
 /* 本地坐标（米，x 向东 / y 向北）→ [纬度, 经度]。
    基点由「基点纬度/经度」输入决定；米/度换算按基点纬度取经度缩放。 */
 function toLatLng(x, y) {

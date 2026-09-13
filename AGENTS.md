@@ -409,6 +409,21 @@
     比例尺 + 提示（含「重试底图」）。判据 = **连续 4 张失败且成功数为 0**（个别 404 不误判）；
     自定义源空 URL 直接判离线。演示离线不用拔网线：把自定义瓦片 URL 填成不可达地址。
     PMTiles 区域包（A 方案）未做，做法/合规约束见 ROADMAP §二。
+  - **基点（本地坐标↔经纬度）导入/导出（2026-09-13）**：`ui/static/map.js` 里的
+    `BASE_DEFAULT` / `baseParse` / `baseImport` / `baseExportText` / `baseSource` / `baseInit`。
+    - **单一源**：默认值只写一处（两页 `value=` 只是**离线兜底**，`test_mapjs.py` 守卫两者同值）；
+      解析/校验/换算/存储/按钮接线全在 `map.js`，两页只放元素（`baseFile`/`btnBaseImport`/`btnBaseExport`/
+      `btnBaseReset`/`baseNote2`）。开页必须先 `baseApplyStored()` **再**建地图（否则地图先按默认值定一次位）。
+    - **导入失败必须可见、绝不静默回落**：非法 JSON / 认不出字段 / NaN·空串·∞ / 超出 ±90·±180
+      各给错误码，页面译成可读文案（带 detail 与实际值）；失败时**不改**当前基点。
+    - **GeoJSON 顺序是 `[经度, 纬度]`**（写反会落到地球另一边，范围校验拦不住）→
+      `test_mapjs.py` 用“lat=121.5 应越界报错”专门锁这条。
+    - **口径如实**：只接受 **WGS84 十进制度**、**不做坐标系转换**（GCJ-02/BD-09 被原样当 WGS84 →
+      可能偏几百米）；换算是**等距圆柱近似**（米/度按基点纬度取 cos）→ 基点要在场地附近（几公里内）；
+      纬度方向是纯平移，经度方向另有一个与 x 有关的极小比例项（0.1° 基点差 @500 m 约 0.4 m）。
+      存储是 **localStorage（本机、不上传）**，来源三态（default/manual/imported）显示出来，
+      免得把演示默认值当成现场值 —— 这几条都有 i18n 口径守卫。
+    - 验收：`test_mapjs.py`（`map.js` 原文 54 项 + 页面守卫 8 项 + 口径守卫 6 项）。
   - 回放地图开图时按「站位 + 轨迹」`fitBounds` **自动框景**：演示场景只有 ~60 m，
     默认 zoom 下几乎看不见（实测 zoom 19 才舒服）。
 - **`host/sim.py` 新增「host 数据口」**（`--host <port>` / `Core(host_port=)`，缺省不启用）：
