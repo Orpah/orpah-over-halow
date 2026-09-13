@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 20:38:49
-- git HEAD：`4c73172`
+- 时间：2026-09-13 20:48:50
+- git HEAD：`2cfbae8`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（30/30 套件通过）
 
@@ -33,10 +33,10 @@
 | 下行真实性（F-14 B：签名/重放/时间窗） | `test_downlink.py` | ✅ PASS | 0.1s | 通过 |
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
 | UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 0.0s | 通过 |
-| L1 端到端 | `demo_l1.py` | ✅ PASS | 1.4s | 通过 |
-| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.2s | 通过 |
-| L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.2s | 通过 |
-| L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.2s | 通过 |
+| L1 端到端 | `demo_l1.py` | ✅ PASS | 1.3s | 通过 |
+| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.3s | 通过 |
+| L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 3.7s | 通过 |
+| L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.1s | 通过 |
 | 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.8s | 通过 |
 | 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 7.6s | 通过 |
 
@@ -140,7 +140,7 @@
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
-    Ran 34 tests in 0.489s
+    Ran 34 tests in 0.466s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -269,7 +269,7 @@
     PASS  字典 zh/en key 集合一致（1018 / 1018）
     PASS  每个 key 恰好 2 次（zh + en）
     PASS  字典非空且含中文与英文条目（翻译真的两套）
-    PASS  扫描 16 个页面/脚本，引用 956 个 key（含动态前缀家族 14 个）
+    PASS  扫描 17 个页面/脚本，引用 919 个 key（含动态前缀家族 14 个）
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
@@ -277,15 +277,16 @@
 
     == style.css：页面不再被写死宽度、窄屏档位齐全 ==
     == 页面：内联宽度、viewport、共享件 ==
-      OK   每页都加载共享 style.css + ui_i18n.js
+    == 头部导航：单一源（nav.js）+ 没有孤岛页面 ==
+      OK   style.css 给当前页做了样式（.nav-link.cur）
     UI 样式守卫：全部通过
 
-### L1 端到端 — PASS（1.4s）
+### L1 端到端 — PASS（1.3s）
 
     === ORPAH L1 验收 ===
     结果: [PASS]
 
-### L2 消息流 — PASS（2.2s）
+### L2 消息流 — PASS（2.3s）
 
     --- 分支一：走失库未命中 sn=CN-WH01-9AF3C1D2 ---
     --- mark 走失 sn=CN-WH01-9AF3C1D2（Server 下发 LOST-TABLE）---
@@ -294,7 +295,7 @@
     分支一(未命中 NOT-TRACKED): PASS
     分支二(命中 TRACKED): PASS
 
-### L3 多 Router 漫游/去重 — PASS（4.2s）
+### L3 多 Router 漫游/去重 — PASS（3.7s）
 
     --- 阶段A：sn=CN-WH01-9AF3C1D2 在 R1 网络（2 条，未 mark）---
     --- 阶段B：sn=CN-WH01-9AF3C1D2 漫游到 R2 网络（seq 续 3）---
@@ -303,7 +304,7 @@
     --- 阶段E：去重测试（重发已接受的 seq=4）---
     --- 阶段F：SN 校验（非法 sn → FORMAT-ERR）---
 
-### L3b 主动拉表 — PASS（1.2s）
+### L3b 主动拉表 — PASS（1.1s）
 
     --- 模拟 Router 重启（清空本地缓存 + 未同步）---
     --- Server untrack sn=CN-WH01-9AF3C1D2（变更推送，Router 无需再拉）---
@@ -316,7 +317,7 @@
 
       无认证空口防 spoof 端到端演示
       被冒充设备 SN : CN-WH01-9AF3C1D2
-      攻击者 SN    : CN-WH01-909X3BC7NE-20（未登记 → 服务器不认识）
+      攻击者 SN    : CN-WH01-0K9E18F221-72（未登记 → 服务器不认识）
       链路          : Client→STA→空口→AP→Router→UDP:19847→Server
       用例数        : 14（含 1 条合法对照）
     [server] 监听 127.0.0.1:19847 (UDP)，等待 ORPAH 报文…

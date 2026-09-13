@@ -1198,15 +1198,6 @@ if ($("alertBadge")) {
   refreshAlerts();
 }
 
-/* ---------- 顶部「工具」下拉菜单 ---------- */
-const toolsBtn = $("toolsBtn");
-if (toolsBtn) {
-  toolsBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    $("toolsMenu").classList.toggle("open");
-  });
-  document.addEventListener("click", () => $("toolsMenu").classList.remove("open"));
-  $("toolsMenu").querySelectorAll(".menu-list a").forEach(a => {
-    a.addEventListener("click", () => $("toolsMenu").classList.remove("open"));
-  });
-}
+/* ---------- 顶部「工具」下拉菜单 ----------
+   已由 `nav.js`（头部导航单一源）接管：这里不再接线（两处接线 = 点一下开又关）。
+   菜单元素名叫 `navToolsBtn`/`navToolsMenu`。 */

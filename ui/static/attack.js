@@ -234,5 +234,6 @@ $("atReset").onclick = async () => {
   msg(T("at_reset_done"));
 };
 
+navInit();          // 头部导航（单一源 nav.js）
 OrpahI18n.apply();
 loop();

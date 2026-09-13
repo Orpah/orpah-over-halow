@@ -60,10 +60,13 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | **能量轴（免电池客户端）**：三参数储能模型（采集 / 储能 / 上报代价）→ 由能量决定**间隔与降级**；降级**下限 L1**（永不 L3，§8.3 里 L3 不能确认人在场）；电量写进**已签**上报的 `battery_mv`，服务端从（级别+电量）**推导成因**；“没电了”从沉默里**分流**出来（`no_report_energy` warn vs `no_report` crit） | `energy.py` + `alerts.py` + `server.py`/`ui_server.py` | `test_energy.py`（51 条）+ `test_alerts.py` + 首页「能量轴」卡片（含扫描表） |
 | 存储：SQLite（元数据）+ IoTDB（时序/事件） | `registry`/`cases`/`keystore`/`stations` + `tsdb.py` | `test_tsdb_audit.py` |
 
-## 页面一览（`ui/static/`，11 页）
+## 页面一览（`ui/static/`，12 页）
 
-全部页面共用 `ui/static/ui_i18n.js`（zh/en 双语，**本项目自持一份**；右上角按钮切换，`?lang=en` 可直开）。
-自检：`python test_i18n.py`（zh/en 一一对应 + 每个 key 恰好 2 次 + 页面引用的 key 无缺失）。
+全部页面共用 `ui/static/ui_i18n.js`（zh/en 双语，**本项目自持一份**；右上角按钮切换，`?lang=en` 可直开）
+与 `ui/static/nav.js`（**头部导航单一源**：品牌 / 主导航 / 工具页下拉 / 语言按钮 / 当前页高亮 ——
+页面里只放 `<div id="nav" data-sub="本页副标题键">`，以前每页手写一份则“工具页只有首页能进、新增页面漏改就点了回不来”）。
+自检：`python test_i18n.py`（zh/en 一一对应 + 每个 key 恰好 2 次 + 页面引用的 key 无缺失）、
+`python test_uicss.py`（每页都接共享导航 + 每个页面都在 `nav.js` 里登记 = 无孤岛页面）。
 
 | 页面 | 作用 | 主要接口 | 存储 |
 |---|---|---|---|
@@ -93,6 +96,7 @@ POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/�
 | `ui/static/map.js` | 底图源列表与条款、本地坐标→经纬度、离线回落、**基点导入/导出/记忆**、**野外包选择/状态行**（单一源） | `track.html`、`replay.html` |
 | `maps.py` | 野外包（本地 XYZ 瓦片目录）的服务端逻辑：`/api/maps` 列包 + `/maps/…` 瓦片解析（路径穿越的唯一防线）；`ui/static/maps/` **不入库** | `ui_server.py`、`test_mapjs.py` |
 | `ui/static/app.js` | 首页逻辑：拓扑/计数/报文流/告警渲染（**转义口径见下**） | `index.html` |
+| `ui/static/nav.js` | **头部导航单一源**：品牌 + 主导航 + 工具页下拉 + 语言按钮 + 当前页高亮（`aria-current`）；每个页面必须在它的 `MAIN/TOOLS` 里登记 | orpah 各页（见 `test_uicss.py`） |
 | `ui/static/ui_i18n.js` | **文案字典**（zh/en，本项目自持一份，2026-09-12 从共享一份拆出） | orpah 各页（见 `test_i18n.py`） |
 | `ui/static/style.css` | 样式与配色变量（告警红 / 上行蓝 / ID 橙 / 发现灰，色弱校验过）+ **窄屏档位（900px）**：谁的宽谁自己滚、控件 40px 可点、字号下限 12px | orpah 各页 |
 
@@ -350,7 +354,7 @@ orpah-over-halow/                      # 本项目（ORPAH 业务全链路；纯
 ├── motion.py           # 【定位】演示用「移动的人」+ 路径损耗/噪声（A/n **唯一源** → /api/config）
 ├── tsdb.py             # 【存储】IoTDB 接入（设备流/各路由器观测/事件；未就绪优雅降级）
 ├── ui_server.py        # 【UI】Web 服务：内嵌整条链路 + HTTP/SSE（方式 1）→ http://127.0.0.1:8901/
-├── ui/static/          # 【UI】11 个页面 + pos.js / map.js / app.js / ui_i18n.js / style.css / vendor/leaflet
+├── ui/static/          # 【UI】12 个页面 + pos.js / map.js / nav.js / app.js / ui_i18n.js / style.css / vendor/leaflet
 ├── demo_l1.py          # 【验收】L1 数据通路（内嵌 2 模拟器，命令行）
 ├── demo_l2.py          # 【验收】L2 全消息流（双向 + 走失两分支）
 ├── demo_l3.py          # 【验收】L3 多 Router 漫游/去重 + SN 校验（2×Router）

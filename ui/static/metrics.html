@@ -42,12 +42,8 @@
 </head>
 <body>
 <header>
-  <div class="brand"><a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a> <span class="brand-name" data-i18n="nav_metrics">指标面板</span>
-    <span class="sub" data-i18n="mt_sub">签名校验 / 算法分布 / RSSI / 走失处置时长</span>
-    <a class="btn back" href="rssi.html" data-i18n="nav_rssi">RSSI 定位算法</a>
-    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
-  </div>
-  <div class="tools">
+  <div id="nav" data-sub="mt_sub"></div>
+  <div class="tools" id="hdrTools">
     <span class="badge" id="mtState">--</span>
     <button class="btn" id="btnRefresh" data-i18n="mt_refresh">刷新</button>
   </div>
@@ -97,6 +93,7 @@
 </div>
 
 <script src="ui_i18n.js"></script>
+<script src="nav.js?v=20260913a"></script>
 <script>
 const T = (k) => OrpahI18n.t(k);
 const $ = (id) => document.getElementById(id);
@@ -208,6 +205,7 @@ const qp = new URLSearchParams(location.search);
 if (qp.get("minutes")) $("minutes").value = qp.get("minutes");
 if (qp.get("sn")) $("sn").value = qp.get("sn");
 
+navInit();          // 头部导航（单一源 nav.js）—— 本页以前没有语言按钮，现在统一有了
 OrpahI18n.apply();
 if (OrpahI18n.bootLangBtn) OrpahI18n.bootLangBtn();
 fetch("/api/status").then(r => r.json()).then(s => {

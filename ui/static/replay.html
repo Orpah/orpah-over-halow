@@ -56,15 +56,7 @@
 </head>
 <body>
 <header>
-  <div class="brand">
-    <a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a>
-    <span class="brand-name" data-i18n="nav_replay">回放</span>
-    <span class="sub" data-i18n="rp_sub">事后按时间段复盘：定位轨迹 + 业务事件 + 安全事件</span>
-    <a class="btn back" href="track.html" data-i18n="nav_track">定位与轨迹</a>
-    <a class="btn back" href="keys.html" data-i18n="nav_keys">密钥管理</a>
-    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
-    <button class="btn" id="langBtn" title="中文 / English"></button>
-  </div>
+  <div id="nav" data-sub="rp_sub"></div>
 </header>
 
 <!-- ============ 0 · 数据源与时间段（数据来自 IoTDB 时间窗，重启不丢） ============ -->
@@ -229,6 +221,7 @@
 </section>
 
 <script src="ui_i18n.js"></script>
+<script src="nav.js?v=20260913a"></script>
 <script src="vendor/leaflet/leaflet.js?v=1.9.4"></script>
 <script src="map.js"></script>
 <script src="pos.js"></script>
@@ -1517,6 +1510,7 @@ async function loadConfig() {
   $("rpFrom").value = dateTimeOf(now - 30 * 60000);
   buildTileOptions();          // 必须早于任何 ensureMap：它决定本语言的默认瓦片源
   await loadPacks();           // 野外包列表（早于首次建房：否则选了野外包会先用空 URL 落成网格）
+  navInit();                   // 头部导航（单一源 nav.js）
   OrpahI18n.apply();
   await loadConfig();          // 早于首次 loadReplay：它决定距离换算
   await loadSnList();

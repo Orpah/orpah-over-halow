@@ -40,15 +40,7 @@
 </head>
 <body>
 <header>
-  <div class="brand">
-    <a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a>
-    <span class="brand-name" data-i18n="nav_attack">攻击流量</span>
-    <span class="sub" data-i18n="at_sub">防 spoof（空口无认证）：攻击报文真的注入空口，看服务器哪道防线拦下</span>
-    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
-    <a class="btn back" href="keys.html" data-i18n="nav_keys">密钥管理</a>
-    <a class="btn back" href="replay.html" data-i18n="nav_replay">回放</a>
-    <button class="btn" id="langBtn" title="中文 / English"></button>
-  </div>
+  <div id="nav" data-sub="at_sub"></div>
 </header>
 
 <!-- ============ 0 · 概览 ============ -->
@@ -120,6 +112,7 @@
 </section>
 
 <script src="ui_i18n.js"></script>
+<script src="nav.js?v=20260913a"></script>
 <script src="attack.js"></script>
 </body>
 </html>

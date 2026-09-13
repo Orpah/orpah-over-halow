@@ -30,12 +30,7 @@
 </head>
 <body>
 <header>
-  <div class="brand"><a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a> <span class="brand-name" data-i18n="cs_brand">SN 校验码工具</span>
-    <span class="sub" data-i18n="cs_sub">Orpah ID · CHECK 校验位计算（CC=CN，校验位只算 ORG-UNIQUE）</span>
-    <a class="btn back" href="damm32.html" data-i18n="nav_damm32">Damm32 构造</a>
-    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
-    <button class="btn" id="langBtn" title="中文 / English"></button>
-  </div>
+  <div id="nav" data-sub="cs_sub"></div>
 </header>
 
 <section class="card">
@@ -66,6 +61,7 @@
 </section>
 
 <script src="ui_i18n.js"></script>
+<script src="nav.js?v=20260913a"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -198,6 +194,7 @@ document.getElementById("ccInput").addEventListener("keydown", (e) => {
 });
 
 document.getElementById("algoNote").textContent = ALGO_NOTE.damm32;
+navInit();          // 头部导航（单一源 nav.js）
 OrpahI18n.apply();
 fillCcList();
 refresh();

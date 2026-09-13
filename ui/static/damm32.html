@@ -47,12 +47,7 @@
 </head>
 <body>
 <header>
-  <div class="brand"><a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a> <span class="brand-name" data-i18n="d32_brand">Damm32 构造 / 验证</span>
-    <span class="sub" data-i18n="d32_sub">ORPAH ID · 序列号校验码（Crockford Base32）</span>
-    <a class="btn back" href="checksum.html" data-i18n="nav_checksum">校验码工具</a>
-    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
-    <button class="btn" id="langBtn" title="中文 / English"></button>
-  </div>
+  <div id="nav" data-sub="d32_sub"></div>
 </header>
 
 <section class="card">
@@ -99,6 +94,7 @@
 </section>
 
 <script src="ui_i18n.js"></script>
+<script src="nav.js?v=20260913a"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -221,6 +217,7 @@ document.getElementById("ccInput").addEventListener("keydown", (e) => {
     document.getElementById("orgUnique").focus();
   }
 });
+navInit();          // 头部导航（单一源 nav.js）
 OrpahI18n.apply();
 fillCcList();
 loadTable();

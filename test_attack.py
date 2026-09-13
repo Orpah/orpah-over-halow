@@ -236,10 +236,19 @@ ids = sorted(set(re.findall(r'\$\(\s*"([^"]+)"\s*\)', js)))
 missing = [i for i in ids if ('id="%s"' % i) not in html]
 ck("attack.js 用到的元素 id 在 attack.html 里都存在（%d 个）" % len(ids),
    not missing, missing)
-ck("attack.html 有返回主页/密钥页的入口与语言按钮",
-   'href="index.html"' in html and 'id="langBtn"' in html)
-ck("首页导航与卡片都能到 attack.html",
-   idx.count('href="attack.html"') >= 2, idx.count('href="attack.html"'))
+# 导航自从 2026-09-13 起是**单一源**（`nav.js` 生成每个页面的品牌/主链接/工具页/语言按钮）：
+# 以前这里断言的是「attack.html 里手写了回主页/密钥页的链接」「index.html 里有指向它的链接」——
+# 那正是要消灭的"每页手写一份"（工具页只有首页能进、新增页面漏改就是点了回不来）。
+# 现在断言改成：本页接上了共享导航（容器 + 脚本 + 调用），且它已在 `nav.js` 里登记
+# （登记 = 每个页都能到达它、它也能回任何页）。
+nav = read("nav.js")
+ck("attack.html 接上了共享导航（#nav + nav.js）",
+   'id="nav"' in html and "nav.js" in html)
+ck("attack.js 调 navInit()（本页逻辑不在 app.js 里，同约定）", "navInit(" in js)
+ck("nav.js 里登记了 attack.html（则每个页都能到它、它也能回任何页）",
+   'href: "attack.html"' in nav)
+ck("全站导航只有一个源：页面里没有手写的 nav_* 链接",
+   not re.search(r'data-i18n="nav_', html))
 ck("面板把三条口径写在页面上（被拒≠防住了 / xport 边界 / 未等到结果）",
    all(k in html for k in ("at_hint_notproof", "at_hint_xport", "at_hint_ratelimit")))
 ck("面板说明了攻击流量与正常上报流是两条流", "at_hint_sep" in html)

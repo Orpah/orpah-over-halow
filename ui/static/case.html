@@ -97,13 +97,8 @@
 </head>
 <body>
 <header>
-  <div class="brand">
-    <a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a>
-    <span class="brand-name" data-i18n="nav_case">走失案件</span>
-    <span class="sub" data-i18n="case_sub">Orpah ID · 以人为单位：立案 → 发现 → 找回/撤销 → 结案</span>
-    <a class="btn back" href="registry.html" data-i18n="nav_registry">设备清册</a>
-    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
-    <button class="btn" id="langBtn" title="中文 / English"></button>
+  <div id="nav" data-sub="case_sub"></div>
+  <div class="tools" id="hdrTools">
     <span id="actorBox" class="actor-box"></span>
   </div>
 </header>
@@ -159,6 +154,7 @@
 </section>
 
 <script src="ui_i18n.js"></script>
+<script src="nav.js?v=20260913a"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -478,6 +474,7 @@ $("cStatus").onchange = () => render();
 $("cOnlyUnhandled").onchange = () => render();
 $("personQ").oninput = () => renderPersonResults();
 
+navInit();          // 头部导航（单一源 nav.js）—— 在 i18n 之前调，它自己会用 T() 填好
 OrpahI18n.apply();
 schedule();
 </script>

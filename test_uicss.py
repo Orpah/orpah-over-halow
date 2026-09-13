@@ -39,6 +39,7 @@ for _s in (sys.stdout, sys.stderr):
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "ui", "static")
 CSS = os.path.join(STATIC, "style.css")
+NAV = os.path.join(STATIC, "nav.js")
 
 FAILS = []
 
@@ -124,9 +125,49 @@ def check_pages():
     check("每页都加载共享 style.css + ui_i18n.js", not no_shared, no_shared)
 
 
+def check_nav():
+    """头部导航单一源（nav.js）的守卫。
+
+    踩过的：导航以前**每页手写一份** → 有的页到不了（工具页只有首页能进）、
+    同一链接在不同页顺序/文案不一致、新增页面漏改某页就是「点了回不来」。
+    """
+    print("== 头部导航：单一源（nav.js）+ 没有孤岛页面 ==")
+    nav = open(NAV, encoding="utf-8").read()
+    pages = sorted(glob.glob(os.path.join(STATIC, "*.html")))
+    no_nav, no_script, no_init, hand_written = [], [], [], []
+    for p in pages:
+        name = os.path.basename(p)
+        html = open(p, encoding="utf-8").read()
+        if 'id="nav"' not in html:
+            no_nav.append(name)
+        if "nav.js" not in html:
+            no_script.append(name)
+        if "navInit(" not in html and not name.startswith("attack"):
+            # attack 页的调用在 attack.js 里（页面逻辑不在 app.js，同约定）
+            no_init.append(name)
+        # 手写导航链接：data-i18n="nav_*" 出现在页面里 → 又变成两份了
+        if re.search(r'data-i18n="nav_', html):
+            hand_written.append(name)
+    check("每页都有导航容器 <div id=\"nav\">", not no_nav, no_nav)
+    check("每页都加载 nav.js", not no_script, no_script)
+    check("每页都调 navInit()（attack 页在 attack.js 里）", not no_init, no_init)
+    check("页面里没有手写的导航链接（导航只能来自 nav.js）", not hand_written, hand_written)
+
+    # 孤岛页面：每个 html 都必须在 nav.js 里登记（否则从界面上到不了）
+    listed = set(re.findall(r'href:\s*"([A-Za-z0-9_]+\.html)"', nav))
+    have = {os.path.basename(p) for p in pages}
+    missing = sorted(have - listed)
+    extra = sorted(listed - have)
+    check("每个页面都在 nav.js 里登记了（无孤岛页面）", not missing, missing)
+    check("nav.js 里没有指向不存在页面的链接", not extra, extra)
+    check("nav.js 标出当前页（aria-current=page）", 'aria-current="page"' in nav)
+    check("style.css 给当前页做了样式（.nav-link.cur）", ".nav-link.cur" in open(CSS, encoding="utf-8").read())
+
+
 def main():
     check_css()
     check_pages()
+    check_nav()
     if FAILS:
         print(f"UI 样式守卫：有问题（{len(FAILS)} 处）")
         return 1

@@ -34,12 +34,7 @@
 </head>
 <body>
 <header>
-  <div class="brand"><a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a> <span class="brand-name" data-i18n="nav_rssi">RSSI 定位算法</span>
-    <span class="sub" data-i18n="rs_sub">Orpah ID · RSSI → 距离 → 2/3/多点定位（无人机悬停取 RSSI）</span>
-    <a class="btn back" href="sig.html" data-i18n="nav_sig">签名工具</a>
-    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
-    <button class="btn" id="langBtn" title="中文 / English"></button>
-  </div>
+  <div id="nav" data-sub="rs_sub"></div>
 </header>
 
 <section class="card">
@@ -80,6 +75,7 @@
 </section>
 
 <script src="ui_i18n.js"></script>
+<script src="nav.js?v=20260913a"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -281,6 +277,7 @@ $("btnSim").onclick = simulate;
 $("btnLocate").onclick = locate;
 
 /* 默认演示：3 个测点绕真实位置 (0,0) 悬停 + 仿真 + 定位 */
+navInit();          // 头部导航（单一源 nav.js）
 OrpahI18n.apply();
 addRow(30, 0);
 addRow(-15, 26);

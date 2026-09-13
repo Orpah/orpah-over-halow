@@ -57,14 +57,8 @@
 </head>
 <body>
 <header>
-  <div class="brand">
-    <a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a>
-    <span class="brand-name" data-i18n="nav_keys">密钥管理</span>
-    <span class="sub" data-i18n="keys_sub">Orpah ID · 生成 → 分发 → 轮换 → 吊销 → 退役</span>
-    <a class="btn back" href="registry.html" data-i18n="nav_registry">设备清册</a>
-    <a class="btn back" href="sig.html" data-i18n="nav_sig">签名工具</a>
-    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
-    <button class="btn" id="langBtn" title="中文 / English"></button>
+  <div id="nav" data-sub="keys_sub"></div>
+  <div class="tools" id="hdrTools">
     <span id="actorBox" class="actor-box"></span>
   </div>
 </header>
@@ -109,6 +103,7 @@
 </section>
 
 <script src="ui_i18n.js"></script>
+<script src="nav.js?v=20260913a"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -346,6 +341,7 @@ async function refresh() {
 }
 
 bindOnce();
+navInit();          // 头部导航（单一源 nav.js）
 OrpahI18n.apply();
 refresh();
 setInterval(refresh, 3000);

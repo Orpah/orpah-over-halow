@@ -43,13 +43,7 @@
 </head>
 <body>
 <header>
-  <div class="brand"><a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a> <span class="brand-name" data-i18n="nav_track">定位与轨迹</span>
-    <span class="sub" data-i18n="tk_sub">Orpah ID · 多路由器持续测 RSSI → 实时定位 + 运动轨迹</span>
-    <a class="btn back" href="replay.html" data-i18n="nav_replay">回放</a>
-    <a class="btn back" href="rssi.html" data-i18n="nav_rssi">RSSI 定位算法</a>
-    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
-    <button class="btn" id="langBtn" title="中文 / English"></button>
-  </div>
+  <div id="nav" data-sub="tk_sub"></div>
 </header>
 
 <section class="card">
@@ -221,6 +215,7 @@
 </section>
 
 <script src="ui_i18n.js"></script>
+<script src="nav.js?v=20260913a"></script>
 <script src="map.js"></script>
 <script src="pos.js"></script>
 <script>
@@ -1324,6 +1319,7 @@ async function loadConfig() {
 }
 
 /* 初始画面 */
+navInit();          // 头部导航（单一源 nav.js）
 OrpahI18n.apply();
 buildTileOptions();      // 必须早于任何 ensureMap：它决定本语言的默认瓦片源
 /* 野外包列表：**异步**，所以拿到后如果当前就是野外包，重画一帧（否则首帧会用空 URL 落成网格） */

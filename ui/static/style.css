@@ -42,6 +42,17 @@ a.snlink { color: var(--acc); text-decoration: none; }
 a.snlink:hover { text-decoration: underline; }
 a.snlink.lost { color: var(--red); }
 .brand .sub { font-size: 12px; color: var(--mut); font-weight: 400; margin-left: 8px; }
+/* ---- 头部导航（内容生成自 nav.js，单一源）---- */
+#nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1 1 auto; }
+#nav .brand { margin-right: 10px; flex-wrap: wrap; }
+#nav .tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* 当前页：颜色 + 描边双重提示（仅颜色的话色弱/强光下看不出来） */
+.nav-link.cur { color: var(--acc); border-color: var(--acc); }
+.nav-tool.cur { color: var(--acc); }
+.page-now {
+  font-size: 13px; font-weight: 600; color: var(--txt); margin-left: 8px;
+  padding: 1px 8px; border: 1px solid var(--bd); border-radius: 8px; background: #0d1117;
+}
 .tools { display: flex; align-items: center; gap: 8px; }
 .menu { position: relative; }
 .menu-list {
