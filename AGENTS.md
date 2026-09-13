@@ -30,6 +30,12 @@
   - **判定实现 = `ui/static/pos.js` 的 `consensus()`（唯一一份，`track.html`/`replay.html` 共用）；
     选项与文案也在这里**：`consOpts(tref, vx, vy)`（漏传速度 → 正常走动被当成冲突）与
     `trustText(c, T)`（可信度措辞）—— 页面**不许**各写一份，`test_posjs.py` 的页面守卫会拦。
+    ★ **`trustText(c, T)` 的 `T` 必须由页面传进去**（`pos.js` 不依赖字典实现，单测传桩函数）——
+    漏传的运行期表现是 `T is not a function`，会把**调用它的整块逻辑**打断。2026-09-13 实测踩过：
+    `track.html` 的 `actTrustCell` 里写成 `trustText(top.cons)` → 一点「跑三幕演示」就只出表头、
+    状态永远卡在“三幕演示中…”（**不报错到明处**，最容易当成“演示太慢”）。
+    旧守卫只查“某处出现过 `trustText(c, T)`” → 漏检；现在 `test_posjs.py` **逐处检查每个调用都带
+    `, T)`**，且不允许出现“正则解析不出来的调用”（写法变了就必须同步改守卫，不许默默放过）。
     **两页都必须呈现可信度**（规格要求“精度与可信度分开显示”；2026-09-13 回放页补齐：
     逐帧判定 + 整窗统计 + **轨迹/进度条按可信度着色**）。着色走单一源 `TRUST_COLOR`（颜色）+
     `TRUST_STYLE`（线型：实线=通过、虚线=单一来源、点线=冲突）—— **双通道**，红绿色盲也能分辨；
@@ -229,8 +235,7 @@
     停着时光标只会因**用户操作**移动（点报文行跳转 / 拖进度条），那时“带过去”正是期望行为；
     用户自己滚列表不改光标 → 不会被抢（同地图 `fitBounds` 的取舍）。
     列表重建（`dataset.sig` 变了）必须把这两个下标复位成 `-1`，否则跟随会漏一次。
-  - **真值取点上限也是「单源」**：`POST /api/truth` 的时刻数上限在 `motion.TRUTH_MAX_TIMES`
-    （现 5000）→ `motion.calibration()` → `/api/config.truth_max_times`；
+  - **真值取点上限也是「单源」**：`POST /api/truth` 的时刻数上限在 `motion.TRUTH_MAX_TIMES`    （现 5000）→ `motion.calibration()` → `/api/config.truth_max_times`；
     `replay.html` 的 `TRUTH_CAP` 只是**离线兜底**（`test_motion.py` §8 守卫它与常量相等，
     并断言页面确实取接口）。**别在页面里另写一个数**：实测已经各写一份了（页面 4000 / 服务端 5000），
     一旦服务端上限**调小**，页面就会超发 → 服务端截断 → 取回点数与帧数对不上。

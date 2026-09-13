@@ -16,6 +16,7 @@
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -533,16 +534,32 @@ def page_guard():
     print("  OK   track.html 判定走 consensus() + consOpts()（单一实现，不另传阈值）")
     # 判定**文案**也必须单一源：两页都用 pos.js 的 trustText()，谁都不许再写一份
     # （2026-09-13 补：回放页此前根本没有可信度呈现，就是因为文案/判据没有共用入口）
-    for page, needle in (("track.html", "trustText(c, T)"), ("replay.html", "trustText(cons, T)")):
+    # ★ 2026-09-13 实测踩过：`trustText(c, T)` 的 **T 必须由页面传进去**（pos.js 不依赖字典实现），
+    #   而旧守卫只查“某处出现过 `trustText(c, T)`” —— 于是 `actTrustCell` 里那处 `trustText(top.cons)`
+    #   漏传 T 没被发现，一点「跑三幕演示」就 `T is not a function`：表格空白、状态卡在“演示中”。
+    #   现在改为**逐处检查每个调用都带 , T)**，并且不允许出现“正则解析不出来的调用”
+    #   （那意味着守卫跟不上写法，必须显式更新，而不是默默放过）。
+    for page in ("track.html", "replay.html"):
         with open(os.path.join(HERE, "ui", "static", page), encoding="utf-8") as f:
             src = f.read()
-        if needle not in src:
-            print(f"  FAIL {page} 没有走 pos.js 的 trustText()（可信度文案必须单一源）")
-            return 1
         if "function trustText" in src:
             print(f"  FAIL {page} 自己写了一份 trustText（必须共用 pos.js 那一份）")
             return 1
-    print("  OK   两页共用 pos.js 的 trustText()（可信度文案单一源）")
+        calls = re.findall(r"trustText\(([^()]*)\)", src)
+        if not calls:
+            print(f"  FAIL {page} 没有走 pos.js 的 trustText()（可信度文案必须单一源）")
+            return 1
+        if len(calls) != src.count("trustText("):
+            print(f"  FAIL {page}：有一处 `trustText(...)` 的写法这个守卫解析不了"
+                  f"（{len(calls)} 解析出 / 共 {src.count('trustText(')} 处）—— 请同步更新守卫，"
+                  "不要让它默默放过")
+            return 1
+        bad = [c for c in calls if not c.strip().endswith(", T")]
+        if bad:
+            print(f"  FAIL {page}：`trustText(...)` 漏传 T → 运行期会 `T is not a function`，"
+                  f"把调用它的整块逻辑打断：{bad}")
+            return 1
+    print("  OK   两页共用 pos.js 的 trustText()，且每处调用都把 T 传了进去（可信度文案单一源）")
     # 可信度着色：颜色与线型只能有一份映射（进度条 + 画布轨迹 + 地图轨迹三处共用），
     # 三处各写一套色迟早漂移（“同一时刻在进度条上是绿的、在轨迹上是红的”就是这类 bug）
     with open(os.path.join(HERE, "ui", "static", "replay.html"), encoding="utf-8") as f:

@@ -290,8 +290,16 @@ async function loadAnchorDefaults() {
     const r = await (await fetch("/api/stations")).json();
     if (r && r.ok && Array.isArray(r.stations) && r.stations.length) {
       list = r.stations.map(s => [s.x, s.y]);
+    } else {
+      /* 接口在但内容不可用（空表/非 ok）—— 也走兜底，但**不静默**：
+         否则会把兜底值当成后端给的站位。 */
+      console.warn("[track] /api/stations 返回不可用（空表/非 ok），测点表用离线兜底值", r);
     }
-  } catch (e) { /* 服务端不可达：用兜底列表 */ }
+  } catch (e) {
+    /* 服务端不可达：用离线兜底（`ANCHORS_FALLBACK`，与 `ui_server.DEMO_STATIONS` 有单源守卫）。
+       同样**不静默**：控制台说一句，方便排查“为什么站位不对”。 */
+    console.warn("[track] /api/stations 取不到，测点表用离线兜底值", e);
+  }
   for (const [x, y] of list) addRow(x, y);
   draw(); updateStat(null);
 }
@@ -348,6 +356,8 @@ function measureOnce(record = true) {
              dist: distFromRssi(rssi, A, n) * (a.dev || 1) };
   });
   const dists = obsSim.map(o => o.dist);
+  /* 迭代初值：上一帧估计（没有就 `null`）—— `trilaterate` 内部对 `null` 就是“从零开始”
+     （先算线性解，不做迭代）。传旧初值只是让迭代更快收敛，不改变解的正确性。 */
   const est = trilaterate(anchors, dists, estHist.length ? estHist[estHist.length - 1] : null);
   const cons = consensus(obsSim, consOpts(null));   // 判据与回放页共用 pos.js，不另写阈值
   // （模拟模式的观测都是“此刻”且没有 ts → 不需要也不应做运动补偿）
@@ -379,7 +389,17 @@ function measureOnce(record = true) {
    诚实说明：幕③（2 台同时偏大）属**信息论边界**（n−k≥3 才能定到哪台，4−2=2 不够）
    → 只如实报「拟合偏松」，不硬指一台、也不做订正（列里直接写“不做订正”）。 */
 const ACT_K = 20;
+/* 把「哪些台乘几倍」展开成与测点表等长的数组（不在 pairs 里的 = 1 = 正常）。
+   **下标越界就整个场景不跑（返回 `null`）**：不能把缺的那台当成 1 —— 那会让幕②/③
+   变成“看起来什么都没偏”，也就是演示静默失真（比报错难发现得多；
+   `runActs` 对 `devs=null` 的行会显示「需要 ≥4 台」，看得见）。 */
 function actDevs(saved, pairs) {
+  const bad = pairs.filter(p => p[0] >= saved.length);
+  if (bad.length) {
+    console.warn("[track] 三幕演示的场景引用了不存在的测点序号，该幕不执行：",
+                 bad.map(p => "#" + (p[0] + 1)).join(","), "现有", saved.length, "台");
+    return null;
+  }
   return saved.map((d, i) => {
     const hit = pairs.find(p => p[0] === i);
     return hit ? hit[1] : 1;
@@ -408,13 +428,16 @@ function actRun(devs) {
   }
   return agg;
 }
-/* 「一致性判定」那一格：用**得数最多的那种结果** + 它占多少次（措辞复用 trustText，单一源） */
+/* 「一致性判定」那一格：用**得数最多的那种结果** + 它占多少次（措辞复用 trustText，单一源）
+   ★ `trustText(c, T)` 是 `pos.js` 里的纯函数，**T 必须由页面传进去** ——
+   漏传不会报错到明处，而是 `T is not a function` 把整幕演示打断（表格空、状态卡在“演示中”）。
+   `test_posjs.py` 的页面守卫已锁住这条（每一处 `trustText(` 都得带 `, T)`）。 */
 function actTrustCell(agg) {
   const keys = Object.keys(agg.byKey);
   if (!keys.length) return "-";
   keys.sort((a, b) => agg.byKey[b].n - agg.byKey[a].n);
   const top = agg.byKey[keys[0]];
-  return trustText(top.cons) + " · " + top.n + "/" + agg.n;
+  return trustText(top.cons, T) + " · " + top.n + "/" + agg.n;
 }
 const fmt1 = (v) => (isFinite(v) ? v.toFixed(1) : "-");
 function runActs() {
@@ -852,6 +875,9 @@ function computeLoc(t) {
      优先该站位自己的路由器序列；该站位空表 = 这台没测到（**不能**回落到设备流，
      那会把“设备自己到最近路由器的强度”当成该站位的测量）；
      只有整个 per-station 序列都缺席（老数据源）才回落到设备流（悬停窗口语义）。 */
+  /* 时刻默认取 `Date.now()`，**不**取“最后一个样本的时刻”：本页是实时视图，用的就是“当下” ——
+     观测有时效阈值（`pos.js` 的 `ROUTER_MAX_AGE_MS`），设备已经沉默时应当**如实算不出位置**，
+     而不是拿旧样本当作当前位置展示（“按某个历史时刻算”是回放页的事，那里显式传 t）。 */
   const samplesOf = (sid) => samplesFor(realObs, sid, realSamples);
   const obs = obsAt(stations, samplesOf, t === undefined ? Date.now() : t, A, n);
   const estLin = obs.length >= 2
