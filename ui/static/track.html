@@ -193,6 +193,7 @@
       <select id="pnPerson" class="w-md"></select>
     </label>
     <button class="btn" id="pnRun" data-i18n="pn_run">聚合定位</button>
+    <label><input type="checkbox" id="pnOnMap" checked> <span data-i18n="pn_on_map">在地图上标出</span></label>
     <span class="hint" id="pnMsg"></span>
   </div>
   <div class="stat mono">
@@ -212,6 +213,8 @@
     </tr></thead>
     <tbody id="pnBody"></tbody>
   </table>
+  <!-- 地图标记的含义（短句，不折）：它只代表「假定在一起」的合并点 + 观测噪声圈 -->
+  <p class="hint" data-i18n="pn_map_hint">地图上：绿圈（颜色跟可信度走）= 人级合并点、它外面的虚线圆 = 合并半径（只代表观测噪声，不含共模误差）、灰点 = 各设备自己的定位（悬停看 SN 与不确定度）。这些标记不能证明「各设备在一起」—— 那要看下面的前提与盲区说明。</p>
   <!-- 口径（长）收进折叠：现场先看数字，要抠“为什么不能判设备是否分开”再展开 -->
   <details class="fold">
     <summary data-i18n="pn_fold">口径：这个「人级位置」是怎么算出来的、哪里不能信</summary>
@@ -534,6 +537,7 @@ function runActs() {
    那是合规相关的东西，抄两份迟早漂移）。本页只保留自己的图层管理。 */
 let lmap = null, lTruePath = null, lEstPath = null, lTrueMarker = null, lEstMarker = null, lRouters = [];
 let lRings = [], lEstLoc = null, lEllipse = null, lAdvice = null, mapSig = "";   // 真实模式地图图层：距离环 / 定位估计 / 95% 置信椭圆 / 建议补的站位
+let lPerson = null, lPersonRing = null, lDevFixes = [];   // 人级聚合：合并点 / 合并半径圈 / 各设备自己的定位点
 
 /* 地图上的测点来源：模拟模式 = 测点表；真实模式 = 站位表。
    不区分模式的话，真实模式地图会画出模拟模式的默认测点（而且不会报错）。 */
@@ -915,6 +919,8 @@ let stations = [];
 /* 清册快照（人级聚合要用「哪台设备属于谁」；`refreshSnList()` 每次刷新时覆盖） */
 let regDevices = [];
 let regPersons = [];
+/* 最近一次人级聚合的结果（地图图层用；null = 还没聚合过） */
+let personFused = null;
 let stMsgTimer = null;
 
 const cssQ = (s) => (window.CSS && CSS.escape)
@@ -1230,8 +1236,7 @@ function drawLoc(obs, est, wls, adv) {
 /* 真实模式地图视图：站位 + 距离环（半径 = 估计距离，米）+ 定位估计。
    同时清掉模拟轨迹/标记 —— 它们在地图上没有意义。 */
 function drawMapLoc(obs, est, wls, adv) {
-  ensureMap();
-  lTruePath.setLatLngs([]); lEstPath.setLatLngs([]);
+  ensureMap();  lTruePath.setLatLngs([]); lEstPath.setLatLngs([]);
   lTrueMarker.setOpacity(0); lEstMarker.setOpacity(0);
   lRings.forEach(r => r.remove());
   lRings = obs.map(o => L.circle(toLatLng(o.s.x, o.s.y), {
@@ -1272,6 +1277,63 @@ function drawMapLoc(obs, est, wls, adv) {
     }
   } else if (lAdvice) {
     lmap.removeLayer(lAdvice); lAdvice = null;
+  }
+  drawPersonOnMap();          // 人级聚合的标记（状态在 personFused，开关在 pnOnMap）
+}
+
+/* ---- 人级聚合在地图上的标记（2026-09-13）--------------------------------
+   为什么用地图而不是另画一个 canvas：现场要回答的是“人在**哪儿**”，地图上有底图/道路，
+   而且站位、距离环、95% 椭圆都已经在这张图上（合并点跟它们放在一起才好对照）。
+   三层含义分开画，哪个都不能省：
+     · **灰点** = 每台设备**自己**的定位（含单独悬停：SN + 不确定度）—— 先把“各自的”摆出来；
+     · **绿/橙/灰圈**（颜色跟聚合可信度走）= 合并成的那个人；
+     · **虚线圆** = 合并半径（`fusePerson` 的 `radius`）—— 悬停里写明“只代表观测噪声、
+       不含共模误差”，并且这些标记**不证明设备在一起**（那是前提假设，见卡片里的说明）。 */
+function drawPersonOnMap() {
+  ensureMap();
+  const on = $("pnOnMap") && $("pnOnMap").checked;
+  const f = personFused;
+  lDevFixes.forEach(m => lmap.removeLayer(m));
+  lDevFixes = [];
+  if (!on || !f || !f.est) {
+    if (lPerson) { lmap.removeLayer(lPerson); lPerson = null; }
+    if (lPersonRing) { lmap.removeLayer(lPersonRing); lPersonRing = null; }
+    return;
+  }
+  f.devices.forEach(d => {
+    if (!d.est || !d.est.ok) return;
+    const m = L.circleMarker(toLatLng(d.est.x, d.est.y), {
+      color: "#8b949e", radius: 4, weight: 1,
+      fillColor: "#8b949e", fillOpacity: 0.55,
+    }).addTo(lmap);
+    m.bindTooltip(pnDevTip(d), { direction: "top" });
+    lDevFixes.push(m);
+  });
+  const ll = toLatLng(f.est.x, f.est.y);
+  const col = (f.trust === "verified") ? "#3fb950"
+            : (f.trust === "single") ? "#d29922" : "#8b949e";
+  if (!lPerson) {
+    lPerson = L.circleMarker(ll, {
+      color: col, radius: 10, weight: 3, fillColor: col, fillOpacity: 0.22,
+    }).addTo(lmap);
+  } else {
+    lPerson.setLatLng(ll);
+    lPerson.setStyle({ color: col, fillColor: col });
+  }
+  lPerson.bindTooltip(pnMapTip(f), { direction: "top" });
+  if (f.radius) {
+    if (!lPersonRing) {
+      lPersonRing = L.circle(ll, {
+        radius: f.radius, color: col, weight: 1.5, dashArray: "6 4", fill: false,
+        opacity: 0.9,
+      }).addTo(lmap);
+    } else {
+      lPersonRing.setLatLng(ll);
+      lPersonRing.setRadius(f.radius);
+      lPersonRing.setStyle({ color: col });
+    }
+  } else if (lPersonRing) {
+    lmap.removeLayer(lPersonRing); lPersonRing = null;
   }
 }
 
@@ -1364,6 +1426,7 @@ async function loadPerson() {
     }
   }
   const fused = fusePerson(fixes);
+  personFused = fused;               // 地图图层要用（见 drawPersonOnMap）
   renderPerson(fused);
   /* 这张卡**不跟随 2s 自动刷新**（它要按人数多次查库，比单设备视图重）→
      那就把“取数时刻”写出来，否则读者分不清这是刚拉的还是十几分钟前的。 */
@@ -1409,6 +1472,18 @@ function renderPerson(f) {
 
 $("pnRun").onclick = loadPerson;
 $("pnPerson").onchange = loadPerson;
+$("pnOnMap").onchange = () => { drawPersonOnMap(); };
+
+/* 地图标记的悬停文案（单一处拼）：设备点 = SN + 不确定度；合并点 = 位置 + 口径提醒。 */
+function pnDevTip(d) {
+  const sig = (d.sigma === null || d.sigma === undefined) ? "" : " · ±" + d.sigma.toFixed(1) + " m";
+  return d.sn + " · " + trustText(d.cons || { trust: d.trust, obs: [] }, T) + sig;
+}
+function pnMapTip(f) {
+  return T("pn_map_tip")
+    .replace("{t}", fuseText(f, T))
+    .replace("{r}", (f.radius === null || f.radius === undefined) ? "—" : f.radius.toFixed(1));
+}
 
 /* 人员下拉：只列**名下有设备**的人，并在设备集变化时重建（不覆盖用户已选的） */
 function pnEnsure() {

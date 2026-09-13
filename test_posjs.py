@@ -694,6 +694,16 @@ def page_guard():
         print("  FAIL track.html：自己引了一个 FUSE_* 常量（阈值/规则只许在 pos.js 里）")
         return 1
     print("  OK   track.html 人级聚合走 pos.js 的 fusePerson()/fuseText()（单一实现）")
+    # 人级聚合的地图标记：必须在**每次地图重绘**里也跟着刷新（否则切了视图/换了窗，
+    # 地图上的人级标记就停在旧位置 —— 一种“看着还在、其实过期”的静默失真）。
+    if "function drawPersonOnMap" not in tk or "drawPersonOnMap();" not in tk:
+        print("  FAIL track.html：没有把「人级聚合」画到地图上（缺 drawPersonOnMap）")
+        return 1
+    seg = tk.split("function drawMapLoc", 1)[1] if "function drawMapLoc" in tk else ""
+    if "drawPersonOnMap();" not in seg.split("\nfunction ", 1)[0]:
+        print("  FAIL track.html：drawMapLoc 里没有调 drawPersonOnMap —— 地图重绘后人级标记会过期")
+        return 1
+    print("  OK   track.html 人级聚合在地图重绘时随刷新（drawMapLoc → drawPersonOnMap）")
     return 0
 
 
