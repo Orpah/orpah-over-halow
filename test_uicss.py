@@ -115,7 +115,7 @@ def check_hierarchy():
 
     # 折叠块里的关键字（都是 >300 字的“口径/图例”类说明；现场先看数据，要抠再展开）
     folded = {
-        "index.html": ["sl_hint", "rl_hint", "notify_why"],
+        "index.html": ["sl_hint", "rl_hint", "notify_why", "en_cal_foot"],
         "track.html": ["tk_devmul_hint", "tk_act_hint"],
         "replay.html": ["rp_legend", "rp_legend_map", "rp_bias_hint", "rp_trust_hint"],
     }

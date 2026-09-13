@@ -152,6 +152,20 @@ def main():
         check("服务端下发的 %d 个文案键都在字典里（告警 msg + 阈值标签）"
               % len(srv_keys), not miss, miss)
 
+    # ★ 第三条来源（2026-09-13）：`energy_calib.py` 下发的键（字段名 / 出处 / 错误 / 提示 / 徽标）。
+    # 同样因为**页面按数据里的键名查字典**（`T(o.key)` / `T(r.i18n)`）而扫描不到 ——
+    # 拼错就会在页面上原样显示成 `en_cal_err_xxx`。键表由模块自己列（单一源），这里逐个核。
+    ecal_keys = set()
+    try:
+        import energy_calib as ecal                              # noqa: E402
+        ecal_keys = ecal.i18n_keys()
+    except Exception as e:                       # 拿不到就**明确跳过**，不当通过
+        print("SKIP  能量标定文案键检查（%s: %s）" % (type(e).__name__, e))
+    if ecal_keys:
+        miss = sorted(ecal_keys - keys)
+        check("能量标定下发的 %d 个文案键都在字典里（字段/出处/错误/提示/徽标）"
+              % len(ecal_keys), not miss, miss)
+
     node = shutil.which("node")
     if node:
         r = subprocess.run([node, "--check", DICT], capture_output=True, text=True,

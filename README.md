@@ -58,6 +58,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | 时钟可信：①无 RTC 设备 `ts=0` → 服务器接收时刻（唯一入口）②设备时钟**偏移/漂移估计**（只估计不改数据；长基线才给漂移，原因可见：基线不足/噪声）③**设备自报能力位 `cap.rtc`**（三态；已签声明防篡改；无 RTC ⇒ 一律服务器时刻且不喂估计器；声明有 RTC 却给不出可用时间 → `id_cap_mismatch` 告警） | `orpah_proto`（`effective_ts`/`cap_of`/`rtc_of`） / `clock.py`（`ClockTracker`） | `test_clock.py`（88 条）+ `test_server.py`（28 条）+ `test_alerts.py` + `demo_clock.py` + 首页「上报控制」能力下拉/ts 置 0 |
 | 抓包解析 / 双源对照（pcap → ORPAH 报文；与 UDP 侧计数对差） | `capture.py`（解析复用 `orpah_proto` 单一源） | `test_capture.py` |
 | **能量轴（免电池客户端）**：三参数储能模型（采集 / 储能 / 上报代价）→ 由能量决定**间隔与降级**；降级**下限 L1**（永不 L3，§8.3 里 L3 不能确认人在场）；电量写进**已签**上报的 `battery_mv`，服务端从（级别+电量）**推导成因**；“没电了”从沉默里**分流**出来（`no_report_energy` warn vs `no_report` crit） | `energy.py` + `alerts.py` + `server.py`/`ui_server.py` | `test_energy.py`（51 条）+ `test_alerts.py` + 首页「能量轴」卡片（含扫描表） |
+| **能量参数实测标定（把演示值换成实测值）**：JSON 文件（`ORPAH_ENERGY_CALIB` 指路径，缺省仓库根 `energy_calib.json`）—— 可写**原始实测**（`sleep_ua` / `active_ma` × `report_ms`，代码按 `µA×mV÷1e6 = mW`、`mA×mV×ms÷1e6 = mJ` 换算并附算式）或直接给 mW/mJ；**逐项标出处**（实测 / 演示，页面徐标常显）；**文件有问题整份不采用**（值回演示值 + 错误可见，绝不半份生效）；策略阈值**不是**标定项（会被列为“已忽略”）；带 `who/when/how/device` 溯源与文件指纹 | `energy_calib.py` + `ui_server.py` + 首页能量卡 | `test_energy_calib.py`（60 条）+ `test_i18n.py`（下标 39 个键）+ `test_appjs.py`（开页拉整表 / 单一字段表） |
 | 存储：SQLite（元数据）+ IoTDB（时序/事件） | `registry`/`cases`/`keystore`/`stations` + `tsdb.py` | `test_tsdb_audit.py` |
 | **人级聚合（一个人的多台客户端 → 一个人的位置）**：按 1/σ² 加权合并各设备自己的定位，合并半径 1/√(Σ1/σ²)；可信度取参与设备里**最弱**的；**不做“设备是否分开”的判定** —— 实测这层数据分不了（单台 95% 椭圆半径中位 19.5 m；真相距 100/200/500 m 与“在一起”统计上分不开）→ 前提（假定在同一人身上）与盲区都写在页面上 | `ui/static/pos.js`（`fusePerson`/`fuseText`） + `track.html` 第 3 张卡 | `test_posjs.py`（12 条内核 + 2 条**实测事实锁**：同点 z 上界 / 相距 100 m 分不开） |
 
@@ -298,7 +299,7 @@ python demo_l1.py --n 3        # 进程内建 AP+STA 模拟器 + Server/Router/C
 ### 方式 3：一键跑全部检查 + 出报告（推荐做回归时用）
 
 ```bash
-python run_checks.py            # 25 个离线套件（各模块自检 + 批量合规 + 抓包解析 + 时钟漂移 + 能量轴 + pos.js 内核 + 文案字典 + UI 窄屏/信息层级/数据新鲜度守卫），约 5 秒
+python run_checks.py            # 26 个离线套件（各模块自检 + 批量合规 + 抓包解析 + 时钟漂移 + 能量轴/标定 + pos.js 内核 + 文案字典 + UI 窄屏/信息层级/数据新鲜度守卫），约 8 秒
 python run_checks.py --e2e      # 再加 6 个端到端 demo（L1/L2/L3/L3b/防 spoof/限频），约 25 秒
 ```
 - 报告写到 `checks_report.md`（含 git HEAD、每套件结果/耗时/关键输出、失败详情）。
@@ -362,7 +363,8 @@ orpah-over-halow/                      # 本项目（ORPAH 业务全链路；纯
 ├── downlink.py         # 【安全】下行真实性（F-14 B）：Server 签名 / Router 只持公钥 + (dts,dn) 防重放
 ├── metrics.py          # 【业务】指标纯计算（验签失败率/算法分布/平均 RSSI/处置时长）
 ├── clock.py            # 【业务】设备时钟偏移/漂移估计（纯计算；只估计不改数据，短窗/跳变/噪声里给 None）
-├── energy.py           # 【业务】能量轴三参数模型（采集/储能/上报代价 → 间隔与降级；参数是**演示标定值**）
+├── energy.py           # 【业务】能量轴三参数模型（采集/储能/上报代价 → 间隔与降级）
+├── energy_calib.py     # 【配置】能量模型的**实测标定入口**（读文件/换算/标出处；参数默认是演示值）
 ├── ratelimit.py        # 【限频】§5.8 各环节限频：server 两条 + router 两条 + **设备侧自愿自限频**（同一令牌桶）
 ├── stations.py         # 【定位】站位 = 已知坐标观测点（绑定 > 时间窗中位数 > 路由器序列）
 ├── motion.py           # 【定位】演示用「移动的人」+ 路径损耗/噪声（A/n **唯一源** → /api/config）

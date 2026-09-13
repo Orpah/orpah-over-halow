@@ -176,6 +176,43 @@ def check_sound_default_off(src):
     return bad
 
 
+def check_energy_calib(src):
+    """能量卡的**标定出处**（2026-09-13）：三条容易静默失效的接线。
+
+    ① 开页必须主动拉一次 `/api/energy` —— 整表/算式/溯源/错误**只在那里**（1s 轮询只带
+       徽标要的几个数）。实测踩过：不拉 → “标定项与出处”展开是**空的**，看着像没做
+       （不会报错，也不影响其它任何东西变红）。
+    ② `renderCalib()` 必须被 `renderEnergy()` 调到（否则徽标只在刷新时变色、正文不动）。
+    ③ 页面**不许写第二份字段表**：字段名清单在后端 `energy_calib.FIELD_IDS`（带 i18n 键、
+       单位、小数位、算式），页面只渲染 `rows` —— 页面里出现这些字段名字面量就是拄了第二份。
+    """
+    import energy_calib as ecal                     # 单一源：字段清单从模块现取
+    bad = 0
+    m = re.search(r"function\s+renderEnergy\s*\([^)]*\)\s*\{(.*?)\n\}", src, re.S)
+    body = m.group(1) if m else ""
+    if "renderCalib(" not in body:
+        print("  FAIL renderEnergy() 里没调 renderCalib() —— 标定徽标/正文不会随轮询更新")
+        bad += 1
+    if not re.search(r"function\s+fetchEnergy\s*\(", src):
+        print("  FAIL 找不到 `fetchEnergy()` —— 完整视图没人拉（标定表会是空的）")
+        bad += 1
+    # 初始化处（`connect();` 之后）必须拉一次
+    init = src.rfind("connect();")
+    if init < 0 or "fetchEnergy()" not in src[init:init + 200]:
+        print("  FAIL 开页没有调用 `fetchEnergy()` —— 标定表内容只在用户手点后才出现")
+        bad += 1
+    if "cb.rows" not in src:
+        print("  FAIL 没看到渲染 `cb.rows` —— 字段表是后端给的单一源，页面不能自己拼")
+        bad += 1
+    dup = [f for f in ecal.FIELD_IDS if f'"{f}"' in src]
+    if dup:
+        print(f"  FAIL app.js 里出现了标定字段名字面量 {dup} —— 页面拄了第二份字段表")
+        bad += 1
+    if not bad:
+        print("  OK   标定出处接线完整（开页拉一次 / renderCalib 挂在 renderEnergy 上 / 字段表只有后端一份）")
+    return bad
+
+
 def main():
     if not os.path.exists(APP_JS):
         print("  FAIL 找不到 ui/static/app.js")
@@ -190,6 +227,8 @@ def main():
     fail += check_alert_links(src)
     print("== 声音提醒：默认关 ==")
     fail += check_sound_default_off(src)
+    print("== 能量标定出处：开页拉整表 / 单一字段表 ==")
+    fail += check_energy_calib(src)
     print("== 页面守卫（app.js 确实被加载） ==")
     fail += page_guard()
     if fail:

@@ -72,6 +72,7 @@ import clock as clk                       # noqa: E402  设备时钟偏移/漂�
 import metrics                            # noqa: E402  指标面板纯计算（/api/metrics）
 import maps                               # noqa: E402  野外包（本地 XYZ 瓦片目录，/api/maps + /maps/…）
 import energy as en                       # noqa: E402  能量轴（免电池客户端模型，纯计算）
+import energy_calib as ecal              # noqa: E402  能量模型的实测标定入口（同一模型、更实的参数）
 import ratelimit as rl_mod                # noqa: E402  限频（§5.8）：令牌桶 + 计数 + 快照
 import tsdb                               # noqa: E402  Apache IoTDB 时序库
 import freshness as fr                    # noqa: E402  「这是不是老数据」的单一源（UI ④）
@@ -185,14 +186,20 @@ class OrpahApp:
         self.id_cap_rtc = None             # 设备声明的「有无 RTC」（None=未声明 / True / False）
         self.id_ts_broken = False          # 演示：ID 上报的 ts 置 0（无时钟，2026-09-13）
         # ---- 能量轴（2026-09-13）：免电池客户端能量模型驱动间隔与级别 ----
+        # **标定（2026-09-13）**：物理参数（待机 / 上报代价 / 储能 / 电压端点）先看实测标定文件
+        # （`ORPAH_ENERGY_CALIB` 或仓库根 `energy_calib.json`；没有就用 energy.py 演示值）。
+        # `self.cal` 是**唯一来源** —— 下面所有 plan/drain/mv_of 都从它取值，页面也显示它的出处；
+        # 没标定时它是“未标定”状态（值=演示值、出处=demo），**不是**错误。
+        self.cal = ecal.load()
         self.en_on = False                 # 是否让能量接管间隔/级别（默认关：间隔仍手工填）
         self.en_harvest = 0.5              # 平均采集功率（mW，演示参数）
-        self.en_charge = en.CHARGE0_MJ     # 当前电量（mJ）
-        self.en_store = en.STORE_MJ        # 储能容量（mJ）
+        self.en_charge = self.cal.charge0_mj   # 当前电量（mJ；标定给的初值）
+        self.en_store = self.cal.store_mj      # 储能容量（mJ；标定给的容量）
         self.en_push = False               # 采不敷出时是否“硬撑”（吃储能也要被听见）
         self.en_speedup = 10.0             # 演示加速倍数：真实间隔 ÷ 它 = 页面看到的周期
         self.en_state = {}                 # 最近一次能量状态（/api/status 用）
-        self.id_battery_mv = en.mv_of(en.CHARGE0_MJ)   # 下一份已签报告里的电量电压
+        self.id_battery_mv = en.mv_of(self.cal.charge0_mj, self.cal.store_mj,
+                                      self.cal.cell_empty_mv, self.cal.cell_full_mv)
         self.id_level_energy = None        # 能量决定的级别覆盖（None = 不覆盖）
         self.id_reports = deque(maxlen=20)     # 环形（appendleft 自动截断，线程安全）
         self.id_report_total = 0
@@ -629,7 +636,9 @@ class OrpahApp:
         if not self.en_on:
             self.en_state = {}
             return
-        p = en.plan(self.en_harvest, self.en_charge, self.en_store)
+        # 参数来自标定（唯一源）：没标定就是 energy.py 的演示值，出处标在 `calib` 里
+        p = en.plan(self.en_harvest, self.en_charge, self.en_store,
+                    sleep_mw=self.cal.sleep_mw, cost=self.cal.cost)
         no_interval = p["interval_s"] is None
         if not no_interval:
             interval = float(p["interval_s"])
@@ -639,7 +648,8 @@ class OrpahApp:
         if interval is not None:
             # 演示加速：真实 300s 的间隔按 `en_speedup` 倍压缩，否则现场看不到变化
             self.every = max(0.5, interval / self.en_speedup)
-        self.id_battery_mv = en.mv_of(self.en_charge, self.en_store)
+        self.id_battery_mv = en.mv_of(self.en_charge, self.en_store,
+                                      self.cal.cell_empty_mv, self.cal.cell_full_mv)
         self.id_level_energy = 1 if p["degraded"] else None   # 1 = HS256（§8.2 的 L1 算法）
         self.en_state = {
             "on": True, "harvest_mw": self.en_harvest, "charge_mj": round(self.en_charge, 2),
@@ -655,7 +665,9 @@ class OrpahApp:
         if not drain:
             return
         self.en_charge = en.drain(self.en_charge, self.en_harvest, interval, p["level"],
-                                  float(self.every) * self.en_speedup, store_mj=self.en_store)
+                                  float(self.every) * self.en_speedup,
+                                  store_mj=self.en_store, sleep_mw=self.cal.sleep_mw,
+                                  cost=self.cal.cost)
 
     def _aim_link_rssi(self):
         """设备自身的 REPORT 里的 rssi = **当前与之关联的那台路由器**测到的强度。
@@ -1142,7 +1154,8 @@ class OrpahApp:
         **扫的是模型**（与演示加速倍数无关）：页面另外乘 `en_speedup` 显示“页面周期”。
         """
         h_max = max(self.en_harvest * 2.0, 0.5)
-        ax = en.axis(n=13, h_max=h_max, charge_mj=self.en_charge, store_mj=self.en_store)
+        ax = en.axis(n=13, h_max=h_max, charge_mj=self.en_charge, store_mj=self.en_store,
+                     sleep_mw=self.cal.sleep_mw, cost=self.cal.cost)
         for r in ax["rows"]:                       # 附带“页面周期”（演示加速后）
             r["every_s"] = (None if r["interval_s"] is None
                             else round(max(0.5, r["interval_s"] / self.en_speedup), 2))
@@ -1164,7 +1177,10 @@ class OrpahApp:
                          "cell_empty_mv": en.CELL_EMPTY_MV, "cell_full_mv": en.CELL_FULL_MV},
             "state": self.en_state,
             "axis": self.energy_axis(),
-            "note": "parameters are DEMO values, not measured",   # 页面据此标注“演示参数”
+            # 标定出处（2026-09-13）：生效值/演示值/逐项来源/算式/错误与提示，都在 `calib` 里。
+            # 页面**不写第二份字段表**，直接画 `calib.rows`。
+            "calib": self.cal.view(),
+            "note": "parameters are DEMO values unless measured calibration is loaded",
         }
 
     def energy_snapshot(self):
@@ -1261,7 +1277,12 @@ class OrpahApp:
             # 形状与 GET /api/energy 的 `on/params/state` 一致（页面同一份渲染代码吃两种来源）；
             # 但**不含**扫描表 —— 那个只在 /api/energy 与这里的 `energy_axis` 出，别塞进 1s 轮询。
             "energy": {"on": self.en_on, "params": self._energy_params(),
-                       "state": self.en_state},
+                       "state": self.en_state,
+                       # 标定出处（1s 轮询只带**徽标要的**那几个数）：整表/算式/错误在 /api/energy
+                       "calib": {"ok": self.cal.ok, "source": self.cal.source,
+                                 "source_i18n": "en_cal_src_" + self.cal.source,
+                                 "n_measured": self.cal.n_measured,
+                                 "n_total": self.cal.n_total}},
             "energy_axis": self.energy_axis(),
             # 限频（§5.8，2026-09-13）：形状 `on/params/counters/...`（单一源，页面不写死参数）。
             # `recent` 用 ui_server 自己那份（server 的环形也可，但这里要保证与审计事件同序）。
@@ -2302,6 +2323,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 APP.id_level_energy = None
             elif a == "reset":
                 APP.en_charge = req.get("charge_mj", APP.en_store)
+            elif a == "reload":
+                # 重新读标定文件（改完文件不用重启 demo）。**会把储能/初始电量按文件重置** ——
+                # 与按钮上说的一致（那不是“悄悄改参数”，是“按新标定重新装载”）。
+                APP.cal = ecal.load()
+                APP.en_store = max(1.0, APP.cal.store_mj)
+                APP.en_charge = min(APP.cal.charge0_mj, APP.en_store)
+                print("[ui] 能量标定重载：" + APP.cal.summary())
             elif a == "set":
                 # `on` 也接受（页面一次提交里同时“启用 + 改参数”）：
                 # 明确写进来的参数优先级更高 → 先处理“首次开启充满”，再套参数。
@@ -2438,6 +2466,12 @@ def main():
 
     APP = OrpahApp(every=args.every, sn=args.sn, rssi=args.rssi,
                    walk=not args.no_walk)
+    # 能量标定（2026-09-13）：**大声说出**这份结论用的是实测还是演示参数 ——
+    # 能量卡片上的所有数字都受它影响，而“静默用了演示值”正是要防的那种失真。
+    print("[ui] 能量标定：" + APP.cal.summary())
+    for _e in APP.cal.errors:
+        print("[ui]   ⚠ 标定错误：%s %s" % (_e["key"], json.dumps(_e["args"],
+                                                          ensure_ascii=False)))
     if not APP.start():
         return 1
 

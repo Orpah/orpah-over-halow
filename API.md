@@ -1034,7 +1034,15 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
 
 免电池终端（采集 → 储能 → 定期上报）**能报多快、该不该降级、什么时候只能沉默**，
 都由「能量」决定。模型在 `energy.py`（三参数：采集 `harvest_mw` / 储能 `charge_mj` /
-每次上报代价 `cost_mj` —— ES256 15mJ、HS256 5mJ），**参数是演示标定值、不是实测**。
+每次上报代价 `cost_mj`）。
+
+> **参数的出处（2026-09-13）**：`energy.py` 里那组数是**演示标定值，不是实测**；上机之后
+> 用**标定文件**（`ORPAH_ENERGY_CALIB` 指路径，缺省仓库根 `energy_calib.json`）换成实测值，
+> 换算/校验/出处全在 `energy_calib.py`（示例 `energy_calib.example.json`）。**没标定 ≠ 出错**
+> （那就是演示值，页面徽标会写“未标定”）；**文件有问题 → 整份不采用**（值回到演示值 +
+> 错误列在 `calib.errors`，**绝不半份生效**）。🔴 **不是标定项**：`min_interval_s` /
+> `max_useful_interval_s` / `emergency_interval_s` —— 那些是**产品选择**，写进文件会被列进
+> “已忽略”。
 
 ### GET `/api/energy` → 全量视图
 
@@ -1046,8 +1054,21 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
              "emergency_interval_s":60.0,"cell_empty_mv":3000,"cell_full_mv":4200},
  "state":{ ...见下表... },
  "axis":{"rows":[{...}×13],"min_harvest_mw":0.083,"n":13,"speedup":10.0,"h_max":1.0},
- "note":"parameters are DEMO values, not measured"}
+ "calib":{"source":"none","source_i18n":"en_cal_src_none","exists":false,"ok":true,
+          "path":"…\\energy_calib.json","env":"ORPAH_ENERGY_CALIB","digest":null,
+          "origin":{},"n_measured":0,"n_total":7,"values":{...},"prov":{...},
+          "rows":[{"field":"sleep_mw","i18n":"en_cal_f_sleep_mw","unit":"mW","digits":4,
+                   "value":0.05,"demo":0.05,"prov":"demo","prov_i18n":"en_cal_prov_demo",
+                   "calc":null}×7],
+          "errors":[],"notes":[]},
+ "note":"parameters are DEMO values unless measured calibration is loaded"}
 ```
+
+`defaults` = **模型自带的演示值**（对照用，恒定）；`calib.values` = **生效值**（实测优先），
+`calib.prov` 逐项标 `measured` / `demo`，`calib.rows` 是**页面直接画的那张表**
+（字段名 i18n 键 / 生效值 / 演示值 / 出处 / 算式），`calib.calc` 里是**换算算式**
+（如 `8 µA × 3700 mV ÷ 1e6 = 0.0296 mW`，供标定的人核对）；`errors` / `notes` 的元素是
+`{key, args}`，**`args.field` 是 i18n 键**、其余是字面值（页面按同一规则替占位符）。
 
 ### POST `/api/energy`（body 带 `action`，**每步都回全量视图**）
 
@@ -1057,6 +1078,7 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
 | `off` | — | 关闭；清空状态（间隔回到「上报控制」卡片的手填值） |
 | `set` | `on?` `harvest_mw?` `charge_mj?` `store_mj?` `push?` `speedup?` | 改参数；`on:true` 等价于 `on`（首次开启充满），**显式传的参数优先**。`charge_mj` 会被钳到 `store_mj`；`harvest_mw ≥ 0`；`store_mj ≥ 1`；`speedup > 0` |
 | `reset` | `charge_mj?` | 充满（缺省 = `store_mj`） |
+| `reload` | — | **重新读标定文件**（改完文件不用重启 demo）。⚠ 会**同时把储能/初始电量按文件重置**（与按钮上说的一致，不是“悄悄改参数”）；服务端在日志里打印一行新的标定结论 |
 | 其它 | — | `{ok:false, err:"bad_action"}` |
 
 - **`drain=False` 的即时回显**：POST 后服务端**只重算策略、不推进电量**（`_energy_step(drain=False)`），
@@ -1079,14 +1101,15 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
 `rows[]` 每行 = 一个采集功率点上的策略：`harvest_mw / level / degraded / degraded_reason /
 interval_s / interval_es256_s / interval_hs256_s / net_mw / budget_ok / silence_in_s / usable /
 why`（+ 页面用的 `every_s`）。横轴上限取 `max(2×当前采集, 0.5mW)` 共 13 点，
-`min_harvest_mw` = **第一个“够用”的点** → 页面头条「要多少 mW 才跟得住人」
-（默认参数 ≈ `0.083 mW`；`0.1 mW` = 恰好够每 300s 用 ES256 报一次）。
+`min_harvest_mw` = **第一个“够用”的点** → 页面头条「要多少 mW 才跟得住人」。
+**这个数跟着标定走**：演示参数下 ≈ `0.083 mW`；换成一份实测样机（待机 8 µA、ES256 2 mJ）后
+降到 ≈ `0.007 mW` —— 演示值把上报代价估高了近 8 倍，所以**别把演示参数下的门槛当结论**。
 
 ### `/api/status` 上的两个字段（1s 轮询用，**不含**扫描表）
 
 | 字段 | 内容 |
 |---|---|
-| `energy` | `{on, params:{...}, state:{...}}` —— 形状与 GET `/api/energy` 的这三项一致（页面同一份渲染代码吃两种来源）。**刻意不放 `axis`**：13 行扫描表不该每秒重算/重传 |
+| `energy` | `{on, params:{...}, state:{...}, calib:{ok, source, source_i18n, n_measured, n_total}}` —— 前四项形状与 GET `/api/energy` 一致（页面同一份渲染代码吃两种来源）。**刻意不放 `axis`**（13 行扫描表不该每秒重算/重传），也**不放 `calib.rows/errors/notes`**（整表/算式/错误只在 `/api/energy`，1s 轮询只带徽标要的那几个数） |
 | `energy_axis` | 同 `axis`（页面画扫描表 + 标出当前工作点用） |
 
 > ⚠ 踩过的坑：`/api/status.energy` 一度直接就是 `state` 本体（扁平），而页面按

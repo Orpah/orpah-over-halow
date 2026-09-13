@@ -1,0 +1,30 @@
+{
+  "schema": "orpah-energy-calib/1",
+  "_comment": "示例文件（不是实测）。用法：复制成仓库根的 energy_calib.json，或设 ORPAH_ENERGY_CALIB 指到你的标定文件，然后把下面的数字换成真机实测值。详细口径见 energy_calib.py 的模块文档。",
+  "source": {
+    "device": "TX-AH + CH32V203（示例样机）",
+    "who": "（示例文件）",
+    "when": "0000-00-00",
+    "how": "示例：数字是编的，请换成实测。写清楚用什么测的（采样电阻/示波器/厂家曲线）、几台样机、多少次取均值、什么温度。"
+  },
+  "v_mv": 3700,
+  "sleep": {
+    "sleep_ua": 8
+  },
+  "report": {
+    "ES256": {
+      "active_ma": 12,
+      "report_ms": 45
+    },
+    "HS256": {
+      "active_ma": 12,
+      "report_ms": 22
+    }
+  },
+  "store_mj": 2000,
+  "charge0_mj": 1500,
+  "cell": {
+    "empty_mv": 3000,
+    "full_mv": 4200
+  }
+}

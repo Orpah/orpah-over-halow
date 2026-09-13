@@ -682,7 +682,78 @@ function fmtSilence(v) {
   return enNum(v, 0) + " s";
 }
 
+/* ---------- 标定出处（实测 vs 演示，2026-09-13）----------
+
+   “这个数是实测的还是演示的”必须**一眼看到** —— 后端 `energy_calib.py` 是唯一源
+   （字段表 / 算式 / 错误与提示的 i18n 键都在那儿），页面只渲染，**不写第二份字段表**。
+   两种形状：1s 轮询的 `/api/status.energy.calib` 只带徽标要的几个数；整表 / 算式 /
+   错误 / 溯源只在 `/api/energy` 里出（不该塞进每秒轮询）。
+    `calLine(o)` 把后端的 `{key, args}` 变人话：**`args.field` 是 i18n 键**，其余是字面值。 */
+function calLine(o) {
+  let s = T((o && o.key) || "");
+  const a = (o && o.args) || {};
+  Object.keys(a).forEach(k => {
+    const v = (k === "field" && a[k]) ? T(a[k]) : String(a[k]);
+    s = s.split("{" + k + "}").join(v);
+  });
+  return s;
+}
+
+function renderCalib(cb) {
+  const badge = $("enCalBadge");
+  if (!badge || !cb) return;
+  const src = cb.source || "none";
+  badge.className = "cal-badge " + src;         // 颜色 + 文字双通道（不辨色也能读）
+  let txt = T(cb.source_i18n || ("en_cal_src_" + src));
+  if (cb.n_total) {
+    txt += " · " + T("en_cal_count")
+      .replace("{n}", enNum(cb.n_measured, 0)).replace("{m}", enNum(cb.n_total, 0));
+  }
+  badge.textContent = txt;
+
+  const pathEl = $("enCalPath");
+  if (pathEl && cb.path !== undefined) {         // 只有完整视图带 path/exists
+    pathEl.textContent = cb.exists
+      ? cb.path + (cb.digest ? "  ·  " + T("en_cal_digest") + " " + cb.digest : "")
+      : T("en_cal_path_none").replace("{env}", cb.env || "ORPAH_ENERGY_CALIB");
+  }
+  const ul = $("enCalNotes");
+  if (ul && cb.errors) {                         // 错误 + 提示：**可见**，不静默
+    ul.innerHTML = "";
+    const add = (o, cls) => {
+      const li = document.createElement("li");
+      if (cls) li.className = cls;
+      li.textContent = calLine(o);               // 错误原文也当文本（textContent）
+      ul.appendChild(li);
+    };
+    (cb.errors || []).forEach(o => add(o, "err"));
+    (cb.notes || []).forEach(o => add(o));
+  }
+  const tb = $("enCalList");
+  if (tb && cb.rows) {
+    tb.innerHTML = "";
+    cb.rows.forEach(r => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        `<td>${esc(T(r.i18n))}</td>` +
+        `<td>${enNum(r.value, r.digits)} ${esc(r.unit)}` +
+        `${r.calc ? `<span class="cal-calc">${esc(r.calc)}</span>` : ""}</td>` +
+        `<td>${enNum(r.demo, r.digits)}</td>` +
+        `<td class="cal-prov ${r.prov === "measured" ? "yes" : ""}">` +
+        `${esc(T(r.prov_i18n))}</td>`;
+      tb.appendChild(tr);
+    });
+  }
+  const org = $("enCalOrigin");
+  if (org && cb.origin) {
+    const o = cb.origin || {};
+    const bits = ["device", "who", "when", "how"].filter(k => o[k]).map(k => o[k]);
+    org.textContent = bits.length ? T("en_cal_origin") + "：" + bits.join("  ·  ") : "";
+  }
+}
+
 function renderEnergy(e, ax) {
+  renderCalib(e && e.calib);
   const box = $("enState");
   if (!box) return;
   const on = !!(e && e.on);
@@ -770,6 +841,19 @@ async function postEnergy(body) {
   }
 }
 
+/* 能量卡的**两个来源分工**（见 renderCalib 注释）：1s 轮询只给徽标要的那几个数，
+   而**整表 / 算式 / 溯源 / 错误只在 `/api/energy`** —— 所以开页时必须主动拉一次，
+   否则“标定项与出处”里是空的、看着像没做（2026-09-13 实测就是这个现象）。
+   展开折叠块时再拉一次：改完标定文件直接展开就能看到，不必先点重载。 */
+async function fetchEnergy() {
+  try {
+    const r = await fetch("/api/energy").then(x => x.json());
+    if (r && r.axis) renderEnergy(r, r.axis);
+  } catch (err) {
+    console.error("fetchEnergy 失败:", err);
+  }
+}
+
 if ($("btnEnApply")) {
   $("btnEnApply").onclick = () => postEnergy({
     action: "set",
@@ -782,6 +866,11 @@ if ($("btnEnApply")) {
   });
   $("btnEnReset").onclick = () => postEnergy({ action: "reset" });
   $("enOn").onchange = () => postEnergy({ action: $("enOn").checked ? "on" : "off" });
+  // 重新读标定文件（改完文件不用重启 demo）；**会把储能/初始电量按文件重置**
+  if ($("btnEnReload")) $("btnEnReload").onclick = () => postEnergy({ action: "reload" });
+  // 展开「标定项与出处」→ 拉一次完整视图（顺带把改了文件后的新内容带进来）
+  const enFold = $("ensec") && $("ensec").querySelector("details.fold");
+  if (enFold) enFold.addEventListener("toggle", () => { if (enFold.open) fetchEnergy(); });
 }
 
 /* ---------- §8.2 降级演示：切换「哪个环节坏了」---------- */
@@ -916,6 +1005,7 @@ if ($("btnRlFlood")) {
 
 applyI18n();               // 本文件在 </body> 前加载，DOM 已就绪，直接应用
 connect();
+fetchEnergy();             // 能量卡的完整视图（标定项/算式/溯源/错误）只在 /api/energy 里
 /* refresh() 由两处触发：1s 轮询 + SSE 每来一条上报（onReport 末尾拉一次即时刷新）
    → 峰值约 2.5 次/秒。**故意没加防重入**（`refreshBusy`）：实测 `/api/status`
    中位 4.2 ms、最大 5.5 ms（本机 25 次），而 `ui_server.status()` 只读内存快照

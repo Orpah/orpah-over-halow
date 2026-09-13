@@ -321,6 +321,31 @@
     <button class="btn primary" id="btnEnApply" data-i18n="btn_apply">应用</button>
     <button class="btn" id="btnEnReset" data-i18n="en_reset">充满电</button>
   </div>
+  <!-- 标定出处（2026-09-13）：上面这几个参数到底是**实测**还是**演示值** ——
+       徽标 + 文件 + 重载按钮**常显**（这是“结论可不可信”的前提，不能折进说明里）；
+       逐字段表与长口径折进 details（现场先看数据）。 -->
+  <div class="config-row">
+    <span class="cal-badge" id="enCalBadge">—</span>
+    <span class="hint" id="enCalPath"></span>
+    <button class="btn" id="btnEnReload" data-i18n="en_cal_reload">重新读取标定文件</button>
+  </div>
+  <ul class="cal-notes" id="enCalNotes"></ul>
+  <details class="fold">
+    <summary data-i18n="en_cal_fold">标定项与出处（哪些是实测、哪些还是演示值）</summary>
+    <div class="id-stream">
+      <table>
+        <thead><tr>
+          <th data-i18n="en_cal_th_field">参数</th>
+          <th data-i18n="en_cal_th_value">生效值</th>
+          <th data-i18n="en_cal_th_demo">演示值</th>
+          <th data-i18n="en_cal_th_prov">来源</th>
+        </tr></thead>
+        <tbody id="enCalList"></tbody>
+      </table>
+    </div>
+    <div class="hint" id="enCalOrigin"></div>
+    <p class="hint" data-i18n="en_cal_foot">标定只改物理量（待机/上报代价/储能/电压端点），模型形状没变（仍是单点平均功率收支，没有时变取能与储能缓冲）；电压↔电量仍是线性近似。一份文件 = 一次标定（某台样机、某个温度），温度/老化/批次差异没建，别当全生命周期承诺。标定值来自本地文件，不是设备上报。</p>
+  </details>
   <div id="enState" class="id-grid"></div>
   <div class="id-stream">
     <div class="pub-head"><span data-i18n="en_axis_title">能量轴扫描（采集功率 → 上报间隔）</span>
@@ -334,7 +359,7 @@
       <tbody id="enAxisList"></tbody>
     </table>
   </div>
-  <p class="hint" data-i18n="en_foot">参数是演示标定值，不是实测（真机标定属阶段二）。横轴 0.1 mW 是「恰好够每 300s 用 ES256 报一次」的门槛。</p>
+  <p class="hint" data-i18n="en_foot">参数默认是演示值；若已加载实测标定文件，上方徽标会标出哪些项是实测。括号里的秒数是演示加速后的页面周期。</p>
 </section>
 
 <!-- ============ 告警通知（Webhook）配置 ============
