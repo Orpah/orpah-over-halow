@@ -518,6 +518,10 @@ ck("fusePerson：σ 缺失的台用中位权重（不因“没给 σ”被当成
    (() => { const f = P.fusePerson([{ sn: "A", est: { ok: true, x: 0, y: 0 }, trust: "verified" },
                                     fix("B", 10, 0, "verified", 4)]);
             return Number.isFinite(f.est.x) && near(f.est.x, 5, 1e-9); })());
+ck("fusePerson：**所有**参与台都没有 σ → 等权平均（mid=1 那条兜底，别让它悄悄变权重）",
+   (() => { const f = P.fusePerson([{ sn: "A", est: { ok: true, x: 0, y: 0 }, trust: "verified" },
+                                    { sn: "B", est: { ok: true, x: 10, y: 0 }, trust: "verified" }]);
+            return near(f.est.x, 5, 1e-9) && near(f.est.y, 0, 1e-9) && f.radius === null; })());
 ck("fusePerson：脏输入（null/缺 sn/est 为空）不炸",
    P.fusePerson(null).trust === "none" && P.fusePerson([null, {}, { sn: "A" }]).trust === "none");
 

@@ -803,7 +803,10 @@ function fusePerson(fixes) {
   if (ok.length === 1) {
     return pack("single", "one_device", ok[0].est, sigmaOf(ok[0]), ok);
   }
-  /* 1/σ² 加权；σ 拿不到的台给**中位权重**（不因“没给 σ”就被当成最可信或最不可信） */
+  /* 1/σ² 加权；σ 拿不到的台给**中位权重**（不因“没给 σ”就被当成最可信或最不可信）。
+     `known` 为空 = **所有**参与台都没给 σ（例如几台都只有线性解、`wls.ellipse` 为 null）
+     → `mid = 1` 就是**等权平均**（不是“中位”，而是“没有依据分权重时的默认”）；
+     这条兜底会被 `test_posjs` 的一条例（全台无 σ → 等权）钉住。 */
   const ws = ok.map(f => { const s = sigmaOf(f); return s === null ? null : 1 / (s * s); });
   const known = ws.filter(x => x !== null).sort((a, b) => a - b);
   const mid = known.length ? known[Math.floor(known.length / 2)] : 1;
