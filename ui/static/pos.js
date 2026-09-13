@@ -369,11 +369,22 @@ function resGrade(rms, medDist) {
    —— 于是只需**平移站位**，残差判定与测量模型一字不改。没给速度/时刻就按静止处理，
    `moved=false` 如实带出来（页面可据此提示"未做运动补偿"）。
 
-   返回 `{trust, est, kept, dropped, obs, rms, maxRes, tol, reason, moved, k}`；
+   返回 `{trust, est, kept, dropped, obs, rms, maxRes, sigma0, loose, reason, moved, k}`；
    `trust ∈ none|single|verified|conflict`；`est` 与 `wlsLocate` 同形（解不出时 `ok:false`）。
+   `sigma0` = 拟合残差；`loose` = 残差明显偏大（**只是事实、不是定罪**，见 CONS_S0_LOOSE）。
    **纯函数**（不读 `Date.now()`、不用随机）→ 实时页与回放页对同一输入给逐位相同的结果。 */
 const CONS_MIN = 3;       // 「自洽」至少要几台：3 —— 2 台永远能拟合得天衣无缝，判不出谁在撒谎
-const CONS_Z = 3;         // 定罪阈值：z ≥ 3σ_rel（距离偏差 ≥75%；再小就与 25% 测距噪声不可分）
+const CONS_Z = 5;         // 定罪阈值。**按实测零假设分布定的**：诚实场景 max-z 的 p99.9 / 上界
+                          // ≈ 3.8，且**与噪声幅度无关**（±1/±4 dBm 同样是 3.8 —— 统计量已对噪声归一）。
+                          // 所以阈值取 5（在诚实上界之上留余量）；原先拍脑袋的 3 会误报 3%。
+const CONS_SEP = 1.5;     // 还要**明显突出**：最大 z ≥ 1.5×次高（其余台里混着撒谦的那台时，诚实台也会偏大）
+/* 「拟合残差明显偏大」的事实门限（**不是定罪**：只说明“这组观测拟合不紧”，不指认谁）。
+   为什么要它：**多台同时撒谎**（n=4 里 2 台）时各台的 z 都变小 —— 两台谎报相距的四
+   个圆可能都“看着还行”，z 定不了案（这是 SPEC 的信息论边界：n−k ≥ 3 才能定位，
+   4−2=2 不行）。但此时**拟合残差 σ0 会明显变大**：实测诚实场景 σ0 上界
+   ±1dBm 0.45 / ±2dBm 0.84 / ±4dBm 1.62（均 n=4），而“2 台×4”无论噪声大小中位都 ≈ 2.1。
+   故取 1.8：演示噪声（±2dBm）下诚实不误报，多台撒谎时报出事实。 */
+const CONS_S0_LOOSE = 1.8;
 function consensus(obs, opts) {
   const o = opts || {};
   const zMin = o.z !== undefined ? o.z : CONS_Z;
@@ -402,11 +413,14 @@ function consensus(obs, opts) {
   };
   const pack = (trust, reason, est, idx, dropped, suspects) => {
     const r = est && est.ok ? resOf(est, idx) : [];
+    const s0 = (est && est.ok && isFinite(est.sigma0)) ? est.sigma0 : null;
     return { trust, reason, est: est || null, kept: idx.map(sidOf), dropped,
              suspects: (suspects || []).map(sidOf), obs: shifted,
              rms: est && est.ok ? est.rms : null,
              maxRes: r.length ? Math.max(...r.map(Math.abs)) : null,
              zs: (est && est.ok) ? (zAll || []) : null,   // 各台的 z（诊断用，页面可显示）
+             sigma0: s0,                                  // 拟合残差（诊断/展示；页面直接显示）
+             loose: s0 !== null && s0 >= CONS_S0_LOOSE,   // 残差偏大：只陈述事实，不指认谁
              moved, zMin };
   };
 
@@ -424,16 +438,46 @@ function consensus(obs, opts) {
     const rest = (subset || all).filter(j => j !== i);
     if (rest.length < 2) return null;
     const arr = rest.map(j => shifted[j]);
-    const e = wlsLocate(arr, trilaterate(arr.map(x => x.s), arr.map(x => x.dist), null));
+    /* 两台时两圆有两个交点（二义），靠**当前估计**选靠近的那个 —— 不能不给参照：
+       `trilaterate` 不传 last 会取“离原点更近的那个”，于是预测点可能跳到另一个分支，
+       于是**诚实的那台也会算出很大的 z**（实测：诚实场景 11% 被冤枉剔除、一台谎报时 
+       六成判不出）。给了参照分支就确定且合理了。 */
+    const init = trilaterate(arr.map(x => x.s), arr.map(x => x.dist),
+                             (est0 && est0.ok) ? est0 : null);
+    const e = wlsLocate(arr, init);
     if (!e || !e.ok) return null;             // 其余台连解都解不出 → 这台无从评价
     const dpred = Math.hypot(e.x - shifted[i].s.x, e.y - shifted[i].s.y);
-    return Math.abs(shifted[i].dist - dpred) / sigOf({ dist: dpred });
+    /* 分母 = 本台测距噪声 ⊕ **预测的不确定度**：
+       · 预测点来自其余台的带噪观测，`wlsLocate` 已经给了它的协方差 `e.cov` ——
+         把该不确定度沿“预测点→本台”方向投影出来（`sp`）；
+       · 若预测用的那几台**彼此都对不上**（`sigma0` > 1），这个预测本身就更不可信，
+         按 `sigma0` 放大。
+       为什么必须这么做（实测踩过）：把预测当成准确值，分母就只有本台噪声 ——
+       于是“其余台里混着一台撒谎的”时，**诚实的那台也会被算出很大的 z**
+       （实测 z_S4 = 9.3 与真正撒谎那台的 12.0 几乎分不开），而诚实场景里
+       11% 被冤枉剔除、一台谎报时六成判不出。 */
+    const sig = sigOf({ dist: dpred });
+    let sp = 0;
+    if (e.cov) {
+      const dx = shifted[i].s.x - e.x, dy = shifted[i].s.y - e.y;
+      const r = Math.hypot(dx, dy) || 1e-9;
+      const ux = dx / r, uy = dy / r;
+      sp = Math.sqrt(Math.max(0, ux * ux * e.cov.a + 2 * ux * uy * e.cov.b + uy * uy * e.cov.c));
+    }
+    const infl = (e.sigma0 && isFinite(e.sigma0)) ? Math.max(1, e.sigma0) : 1;
+    return Math.abs(shifted[i].dist - dpred) / (infl * Math.sqrt(sig * sig + sp * sp));
   };
   const consistent = (idx) => {
     if (idx.length < CONS_MIN) return null;
-    let ok = true;
-    idx.forEach(i => { const z = zOf(i, idx); if (z === null || z >= zMin) ok = false; });
-    return ok;
+    let ok = true, ev = 0;
+    idx.forEach(i => {
+      const z = zOf(i, idx);
+      if (z === null) return;                 // 比不出来（那两台的圆不相交）→ **跳过，不当矛盾**
+      ev++;
+      if (z >= zMin) ok = false;
+    });
+    /* 至少要**两处**真的比过：比不出来 ≠ 矛盾，但也不能把“没验过”当成“验过了” */
+    return ok && ev >= 2;
   };
   const zAll = all.map(i => zOf(i, all));
   const suspects = all.filter(i => zAll[i] !== null && zAll[i] >= zMin);
@@ -451,7 +495,14 @@ function consensus(obs, opts) {
      所以 3 台一律报 conflict，只把 suspects 当参考线索带出去。 */
   let imax = -1;
   all.forEach(i => { if (zAll[i] !== null && (imax < 0 || zAll[i] > zAll[imax])) imax = i; });
-  if (n >= CONS_MIN + 1 && imax >= 0 && zAll[imax] >= zMin) {
+  /* 「明显突出」才定案：最大 z 还要显著高于次高（倍率 CONS_SEP）——
+     诚实的噪声里也会有某台碰巧偏大（3σ 事件），若只看 z ≥ 3 就会把老实台剔掉
+     （实测：不要求突出时，诚实场景 11% 被冤枉）。要冤枉一台，得同时满足
+     “它超 3σ” **且** “比第二可疑的高出一大截”，而不是靠闸值大小。 */
+  let z2 = 0;
+  all.forEach(i => { if (i !== imax && zAll[i] !== null && zAll[i] > z2) z2 = zAll[i]; });
+  const standout = (imax >= 0) && zAll[imax] >= zMin && zAll[imax] >= CONS_SEP * z2;
+  if (n >= CONS_MIN + 1 && standout) {
     const idx = all.filter(j => j !== imax);
     if (consistent(idx) === true) {           // 剔掉它之后**其余台真的自洽** → 才敢定案
       return pack("verified", "outlier_dropped", fit(idx), idx, [sidOf(imax)], suspects);

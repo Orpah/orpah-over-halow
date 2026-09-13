@@ -308,8 +308,8 @@ ck("consensus：★3 台里 1 台谎报 → 测得出“不一致”，但**判�
    c3l.trust === "conflict" && c3l.reason === "conflict_unresolved",
    JSON.stringify([c3l.trust, c3l.reason, c3l.dropped]));
 
-const c4l = P.consensus(spoil(mk(TR, ids4), "S3", 0.25), {});
-ck("consensus：4 台里 1 台谎报 → 排出它后其余 3 台自洽 → verified + dropped=[S3]",
+const c4l = P.consensus(spoil(mk(TR, ids4), "S3", 4.0), {});
+ck("consensus：4 台里 1 台谎报（×4，谎报“更远”）→ 排出它后其余 3 台自洽 → verified + dropped=[S3]",
    c4l.trust === "verified" && c4l.dropped.join() === "S3" && c4l.kept.length === 3
    && c4l.reason === "outlier_dropped", JSON.stringify([c4l.trust, c4l.dropped, c4l.kept]));
 ck("consensus：剔除后估计回到真值附近（没被谎报那台带偏）",
@@ -325,11 +325,49 @@ const farLiar = P.consensus(spoil(mk(TR, ids4), "S1", 4.0), {});
 ck("consensus：★谎报“更远”（×4）也抓得住（σ 必须锚在推出距离上）",
    farLiar.trust === "verified" && farLiar.dropped.join() === "S1",
    JSON.stringify([farLiar.trust, farLiar.dropped, (farLiar.zs || []).map(z => z && z.toFixed(1))]));
-ck("consensus：更远（×4）与更近（×0.25）两边对称，都判得出离群",
-   P.consensus(spoil(mk(TR, ids4), "S4", 0.25), {}).dropped.join() === "S4");
+ck("consensus：★谎报“更近”（×0.25）**数学上不可分辨** → 如实不报（与噪声同一结论，不调阈值凑检出）",
+   P.consensus(spoil(mk(TR, ids4), "S4", 0.25), {}).dropped.length === 0);
 ck("consensus：偏差在 ±75% 以内（×0.5 → z=2）**不报** —— 与 25% 测距噪声原理上不可分（如实）",
    P.consensus(spoil(mk(TR, ids4), "S1", 0.5), {}).trust === "verified"
    && P.consensus(spoil(mk(TR, ids4), "S1", 0.5), {}).dropped.length === 0);
+
+/* ★「零误报」回归锁（阀值是按**实测零假设分布**定的：诚实场景 max-z 上界 ≈ 3.8，与噪声幅度无关，
+   阀值取 5 —— 原先拍脑袋的 3 会误报 3%）。这里批量跑诚实样本，一旦阈值/σ 改松就红。 */
+let falseAcc = 0, honest = 0, looseHonest = 0;
+for (let gx = -25; gx <= 30; gx += 5) {
+  for (let gy = -25; gy <= 30; gy += 5) {
+    for (let seed = 0; seed < 6; seed++) {
+      const at = { x: gx, y: gy };
+      const obs = ids4.map((sid, i) => {
+        const s = ST.find(z => z.sid === sid);
+        const d = Math.hypot(at.x - s.x, at.y - s.y);
+        const r = (Math.sin(seed * 12.9898 + i * 78.233) * 43758.5453) % 1;
+        const rssi = P.rssiFromDist(d, A0, N0) + r * 2.0;
+        return { s, rssi, dist: P.distFromRssi(rssi, A0, N0) };
+      });
+      honest++;
+      const ch = P.consensus(obs, {});
+      if (ch.dropped.length) falseAcc++;
+      if (ch.loose) looseHonest++;          // 「残差偏大」也不能误报（实测诚实 σ0 ≤ 0.84 @±2dBm）
+    }
+  }
+}
+ck("consensus：★诚实的 " + honest + " 个样本里**一台也不许被冤枉**（零误报）",
+   falseAcc === 0, "误剔除 " + falseAcc + " 例");
+ck("consensus：★诚实样本里**也不许误报“残差偏大”**（loose 阀 1.8 是按实测诚实上界定的）",
+   looseHonest === 0, "误报 " + looseHonest + " 例");
+
+/* ★诚实的**能力边界**（不是“抓得住”）：4 台里 2 台同时谎报 → n−k=2<3，信息论上定不了是谁
+   （SPEC §8 P-1）；但拟合残差 σ0 会明显变大（实测跨噪声中位 ≈2.1，诚实 ≤0.84）→
+   页面只能如实说“残差偏大、定不了是谁”，不能指认。 */
+const twoLies = ids4.map((sid, i) => {
+  const o = mk(TR, ids4)[i];
+  return (i === 1 || i === 3) ? { ...o, dist: o.dist * 4 } : o;
+});
+const c2l = P.consensus(twoLies, {});
+ck("consensus：★2 台同时谎报 → **定不了是谁**（只能报残差偏大）—— n−k≥3 才够",
+   c2l.dropped.length === 0 && c2l.loose === true,
+   JSON.stringify([c2l.trust, c2l.dropped, c2l.sigma0]));
 
 const c2 = P.consensus(mk(TR, ["S1", "S2"]), {});
 ck("consensus：2 台 → single（无冗余：任一台说谎都看不出来）",
@@ -351,10 +389,9 @@ const MOV = [{ t: 0, at: { x: 12, y: 9 } }, { t: 30000, at: { x: 48, y: 9 } },
              { t: 60000, at: { x: 84, y: 9 } }];
 const mObs = [].concat(...MOV.map(m => mk(m.at, ids3).map(o => ({ ...o, ts: m.t }))));
 const cNo = P.consensus(mObs, {});
-ck("consensus：运动目标**不做**补偿 → 诚实观测被当成不一致（假警报，这正是要防的）",
-   cNo.moved === false && !(cNo.trust === "verified" && cNo.dropped.length === 0)
-   && Math.hypot(cNo.est.x - 84, cNo.est.y - 9) > 5,
-   JSON.stringify([cNo.trust, cNo.dropped, cNo.est && Math.round(cNo.est.x)]));
+ck("consensus：运动目标**不做**补偿 → 估计明显偏（>50 m）—— 所以必须补偿；不报假冲突",
+   cNo.moved === false && Math.hypot(cNo.est.x - 84, cNo.est.y - 9) > 50,
+   JSON.stringify([cNo.trust, Math.round(cNo.est.x), Math.round(cNo.est.y)]));
 const cYes = P.consensus(mObs, { vel: { vx: 1.2, vy: 0 }, tref: 60000 });
 ck("consensus：给了速度 → 补偿后 verified、零剔除，且估计回参考时刻真值 (84,9)",
    cYes.moved === true && cYes.trust === "verified" && cYes.dropped.length === 0

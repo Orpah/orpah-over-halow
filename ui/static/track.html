@@ -126,10 +126,11 @@
     <button class="btn primary" id="btnRun" data-i18n="tk_run">开始</button>
   </div>
   <table class="anchors">
-    <thead><tr><th>#</th><th>x (m)</th><th>y (m)</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th>x (m)</th><th>y (m)</th><th data-i18n="tk_lie">谎报倍数</th><th></th></tr></thead>
     <tbody id="anchorBody"></tbody>
   </table>
   <p class="hint" data-i18n="tk_anchor_hint">测点坐标即路由器/无人机的悬停位置；客户端在其覆盖范围内移动，每个测点持续测 RSSI。</p>
+  <p class="hint" data-i18n="tk_lie_hint">「谎报倍数」= 把这台路由器的测距乘以该倍数（1 = 正常；4 = 谎报“目标在我这儿更远”）—— 这正是冒充/改装一台路由器最容易做的事。橙方块=在谎报的测点，橙叉=剔除它之后的定位。填 1 台：看定位被带偏多少、可信度那栏怎么把它剔掉；填 2 台：如实报“观测冲突”。</p>
 </section>
 
 <section class="card" id="cardStations" style="display:none">
@@ -166,6 +167,9 @@
     <div><span class="k" data-i18n="tk_lab_est">定位估计：</span><span class="v-ok" id="stEst">-</span></div>
     <div><span class="k" data-i18n="tk_lab_err">定位误差：</span><span class="v-err" id="stErr">-</span></div>
     <div><span class="k" data-i18n="tk_lab_trust">定位可信度：</span><span class="trust">-</span></div>
+    <div><span class="k" data-i18n="tk_lab_s0">观测拟合度 σ0：</span><span class="s0">-</span></div>
+    <div><span class="k" data-i18n="tk_lab_fixed">剔除后估计：</span><span class="v-ok" id="stFixed">-</span></div>
+    <div><span class="k" data-i18n="tk_lab_fixederr">剔除后误差：</span><span id="stFixedErr">-</span></div>
   </div>
   <div class="stat mono" id="statReal" style="display:none">
     <div><span class="k" data-i18n="tk_lab_sn">设备：</span><span id="stSn">-</span></div>
@@ -178,6 +182,7 @@
     <div><span class="k" data-i18n="tk_lab_res">定位残差：</span><span id="stRes">-</span></div>
     <div><span class="k" data-i18n="tk_lab_gdop">几何质量：</span><span id="stGdop">-</span></div>
     <div><span class="k" data-i18n="tk_lab_trust">定位可信度：</span><span class="trust">-</span></div>
+    <div><span class="k" data-i18n="tk_lab_s0">观测拟合度 σ0：</span><span class="s0">-</span></div>
     <div><span class="k" data-i18n="tk_lab_wls">权重解：</span><span id="stWls">-</span></div>
     <div><span class="k" data-i18n="tk_lab_ell">95% 置信：</span><span id="stEll">-</span></div>
     <div><span class="k" data-i18n="tk_lab_rad">搜索半径：</span><span id="stRad">-</span></div>
@@ -225,7 +230,9 @@ function readAnchors() {
   for (const tr of document.querySelectorAll("#anchorBody tr")) {
     const x = parseFloat(tr.querySelector(".x").value);
     const y = parseFloat(tr.querySelector(".y").value);
-    if (!isNaN(x) && !isNaN(y)) out.push({ x, y });
+    const lieEl = tr.querySelector(".lie");
+    const lie = lieEl ? parseFloat(lieEl.value) : 1;
+    if (!isNaN(x) && !isNaN(y)) out.push({ x, y, lie: (isNaN(lie) || lie <= 0) ? 1 : lie });
   }
   return out;
 }
@@ -236,8 +243,13 @@ function addRow(x = 30, y = 0) {
     `<td>${idx}</td>` +
     `<td><input class="x" type="number" step="1" value="${x}"></td>` +
     `<td><input class="y" type="number" step="1" value="${y}"></td>` +
+    `<td><input class="lie" type="number" step="0.1" min="0" value="1" title="${T("tk_lie")}"></td>` +
     `<td><button class="btn del" title="${T("btn_del")}">×</button></td>`;
   tr.querySelector(".del").onclick = () => { tr.remove(); renumber(); refreshRouters(); };
+  /* 改坐标/倍数时立即重测（不移动）：不然暂停时改了数字看不到任何反应 */
+  [".x", ".y", ".lie"].forEach(sel => {
+    tr.querySelector(sel).oninput = () => { if (!timer) measureOnce(false); };
+  });
   $("anchorBody").appendChild(tr);
 }
 function renumber() {
@@ -292,6 +304,15 @@ function moveClient() {
 function stepOnce() {
   tick++;
   moveClient();
+  measureOnce(true);
+}
+
+/* 一次「测量 → 定位 → 显示」（**不移动**）：改测点坐标/谎报倍数时也能立刻看到效果。
+   谎报倍数是**演示**：把这台的测距乘以倍数（1 = 正常；4 = 谎报“目标更远”）——
+   等价于冒充/改装这台路由器改 RSSI。定位仍按“全信”算（= 天真做法），
+   再用 pos.js 的 consensus() 判定，于是能**并排**看到“被带偏的位置”与“剔除后的位置”。 */
+let estFixedCur = null;      // 剔除作弊台后的估计（没剔除 = null）
+function measureOnce(record = true) {
   const anchors = readAnchors();
   const A = plA(), n = plN();
   const noise = parseFloat($("noise").value) || 0;
@@ -299,19 +320,30 @@ function stepOnce() {
   const obsSim = anchors.map((a, i) => {
     const rssi = rssiFromDist(Math.hypot(a.x - client.x, a.y - client.y), A, n)
                + (Math.random() * 2 - 1) * noise;
-    return { s: { x: a.x, y: a.y, sid: "#" + (i + 1) }, rssi, dist: distFromRssi(rssi, A, n) };
+    return { s: { x: a.x, y: a.y, sid: "#" + (i + 1) }, rssi,
+             dist: distFromRssi(rssi, A, n) * (a.lie || 1) };
   });
   const dists = obsSim.map(o => o.dist);
   const est = trilaterate(anchors, dists, estHist.length ? estHist[estHist.length - 1] : null);
-  setTrust(consensus(obsSim, {}));      // 可信度与精度分开（见 setTrust）
-  trueHist.push({ x: client.x, y: client.y });
-  if (trueHist.length > MAX_HIST) trueHist.shift();
-  if (est) {
-    estHist.push({ x: est.x, y: est.y });
-    if (estHist.length > MAX_HIST) estHist.shift();
+  const cons = consensus(obsSim, {});   // 判据与回放页共用 pos.js，不另写阈值
+  setTrust(cons);
+  estFixedCur = (cons && cons.dropped.length && cons.est && cons.est.ok)
+    ? { x: cons.est.x, y: cons.est.y } : null;
+  if (record) {
+    trueHist.push({ x: client.x, y: client.y });
+    if (trueHist.length > MAX_HIST) trueHist.shift();
+    if (est) {
+      estHist.push({ x: est.x, y: est.y });
+      if (estHist.length > MAX_HIST) estHist.shift();
+    }
   }
   draw();
   updateStat(est);
+  /* 剔除后估计：只有“真的剔了台”才显示（否则上面那行已经说了，重复反而混淆） */
+  $("stFixed").textContent = estFixedCur
+    ? `( ${estFixedCur.x.toFixed(1)}, ${estFixedCur.y.toFixed(1)} )` : "-";
+  $("stFixedErr").textContent = estFixedCur
+    ? `${Math.hypot(estFixedCur.x - client.x, estFixedCur.y - client.y).toFixed(1)} m` : "-";
 }
 
 /* ---- 地图（Leaflet）----
@@ -404,7 +436,7 @@ function draw() {
   const anchors = readAnchors();
   anchors.forEach(a => {
     const sx = cx + a.x * SCALE, sy = cy - a.y * SCALE;
-    ctx.fillStyle = "#58a6ff";
+    ctx.fillStyle = (a.lie !== 1) ? "#d29922" : "#58a6ff";   // 在谎报的测点标橙，一眼看出谁在撒
     ctx.fillRect(sx - 4, sy - 4, 8, 8);
     ctx.fillStyle = "#c9d1d9"; ctx.font = "11px monospace";
     ctx.fillText(`${a.x},${a.y}`, sx + 7, sy - 7);
@@ -412,6 +444,8 @@ function draw() {
 
   if ($("showTrue").checked) polyline(ctx, trueHist, "rgba(63,185,80,.55)");
   polyline(ctx, estHist, "rgba(248,81,73,.8)");
+  /* 剔除作弊台后的估计（橙叉）：与“全信”的红叉**并排**，一眼看出被带偏多少 */
+  if (estFixedCur) cross(ctx, cx + estFixedCur.x * SCALE, cy - estFixedCur.y * SCALE, "#d29922");
 
   const lx = trueHist.length, le = estHist.length;
   if (lx) cross(ctx, cx + trueHist[lx - 1].x * SCALE, cy - trueHist[lx - 1].y * SCALE, "#3fb950");
@@ -425,7 +459,13 @@ function draw() {
 function trustText(c) {
   const n = (c && c.obs) ? c.obs.length : 0;
   if (!c || !n || c.trust === "none") return T("tk_trust_none");
-  if (c.trust === "verified") return T("tk_trust_ok").replace("{n}", c.kept.length);
+  if (c.trust === "verified") {
+    if (c.dropped && c.dropped.length) {
+      return T("tk_trust_ok_dropped")
+        .replace("{d}", c.dropped.join(",")).replace("{n}", c.kept.length);
+    }
+    return T("tk_trust_ok").replace("{n}", c.kept.length);
+  }
   if (c.trust === "single") return T("tk_trust_single").replace("{n}", n);
   let s = T("tk_trust_conflict").replace("{n}", n);
   if (c.suspects && c.suspects.length) {
@@ -434,10 +474,16 @@ function trustText(c) {
   return s;
 }
 function setTrust(c) {
-  const txt = trustText(c);
+  let txt = trustText(c);
+  /* 残差偏大 → 附带**事实**（不是定罪）：多台同时撒谎时 z 定不了案（n−k≥3 才能定位），
+     但拟合残差会明显变大（阀值按实测标定，见 pos.js CONS_S0_LOOSE）。 */
+  if (c && c.loose) txt += " · " + T("tk_trust_loose").replace("{v}", c.sigma0.toFixed(1));
   const cls = (c && c.trust === "verified") ? "trust v-ok"
             : (c && c.trust === "conflict") ? "trust v-bad" : "trust";
   document.querySelectorAll(".trust").forEach(el => { el.textContent = txt; el.className = cls; });
+  const s0 = document.querySelectorAll(".s0");
+  const s0v = (c && c.sigma0 !== null && c.sigma0 !== undefined) ? c.sigma0.toFixed(2) : "-";
+  s0.forEach(el => { el.textContent = s0v; });
 }
 
 function updateStat(est) {
