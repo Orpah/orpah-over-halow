@@ -41,6 +41,7 @@ function connect() {
     let d;
     try { d = JSON.parse(ev.data); } catch (e) { return; }
     if (d.type === "report") onReport(d);
+    else if (d.type === "alert") alertToast(d);   // 告警**边沿**事件（服务端只在变化那一刻发）
   };
 }
 function setSrv(ok) {
@@ -947,6 +948,106 @@ function renderAlerts(r) {
     badge.style.boxShadow = "0 0 10px 2px currentColor";
     setTimeout(() => { badge.style.boxShadow = ""; }, 1500);
   }
+  renderNotify(r);            // 通知卡 + 阈值（同一份 /api/alerts 响应，不额外请求）
+}
+
+/* ---------- 告警通知卡（配置 + 计数 + 最近投递）与当前阈值 ----------
+   阈值快照来自服务端（alerts.thresholds()）—— 这里**只显示**，数值一个都不写死；
+   连“该显示哪几条”也来自服务端（THRESHOLDS 元信息），页面不维护第二份清单。 */
+/* 字典里没这个键 → 回退到机器值（源码中其它地方同写法，见 connZh/nodeLabel） */
+const i18nOr = (key, machine) => {
+  const s = OrpahI18n.t(key);
+  return s === key ? (machine || "") : s;
+};
+
+function notifyStateText(rec) {
+  if (rec.err === "off") return T("notify_st_off");
+  if (rec.ok === true) return T("notify_st_ok");
+  if (rec.ok === false) return T("notify_st_fail") +
+    (rec.status ? " " + rec.status : "");
+  return "—";
+}
+
+function renderNotify(r) {
+  const nf = r.notify, th = r.thresholds;
+  if (!nf || !$("notifyState")) return;
+  // 输入框只在用户没在编辑时回填（否则 1s 轮询会把正在输入的内容冲掉）
+  const url = $("notifyUrl");
+  if (url && document.activeElement !== url) url.value = nf.url || "";
+  if ($("notifyLevel")) $("notifyLevel").value = nf.min_level || "warn";
+  const st = $("notifyState");
+  st.textContent = nf.on ? T("notify_on") : T("notify_off");
+  st.className = nf.on ? "ok" : "";
+  $("notifySent").textContent = nf.sent;
+  $("notifyFailed").textContent = nf.failed;
+  $("notifySkipped").textContent = nf.skipped;
+  $("notifyWatch").textContent = nf.watching;
+  $("notifyErr").textContent = nf.last_error || "—";
+  $("notifyRecent").innerHTML = (nf.recent || []).map(x => {
+    const ev = i18nOr("notify_ev_" + x.event, x.event);
+    const err = x.err === "off" ? T("notify_st_off") : (x.err || "—");
+    return `<tr><td>${esc(x.t || "—")}</td><td>${esc(ev)}</td>` +
+      `<td>${esc(x.kind || "—")}</td><td>${esc(x.level || "—")}</td>` +
+      `<td>${esc(notifyStateText(x))}</td><td>${esc(err)}</td></tr>`;
+  }).join("") || `<tr><td colspan="6">${esc(T("notify_none"))}</td></tr>`;
+  if (th) {
+    $("alertTh").innerHTML = th.map(x =>
+      `<div class="id-row"><span>${esc(T(x.i18n))}</span>` +
+      `<b>${esc(String(x.value))}${x.unit ? " " + esc(x.unit) : ""}</b></div>`).join("");
+  }
+}
+
+async function notifyCtl(body) {
+  const r = await postCtl(body);
+  let info = {};
+  try { info = await r.json(); } catch (e) { /* ignore */ }
+  if (info && info.notify) renderNotify({ notify: info.notify, thresholds: null });
+  return info;
+}
+
+if ($("btnNotifySave")) {
+  $("btnNotifySave").onclick = async () => {
+    const info = await notifyCtl({ action: "notify_set", url: $("notifyUrl").value,
+                                   level: $("notifyLevel").value });
+    $("notifyMsg").textContent = (info.notify && info.notify.on)
+      ? T("notify_saved_on") : T("notify_saved_off");
+    $("notifyMsg").className = "hint";
+    refreshAlerts();
+  };
+  $("btnNotifyTest").onclick = async () => {
+    const info = await notifyCtl({ action: "notify_test" });
+    const rec = (info && info.test) || {};
+    const ok = rec.ok === true;
+    $("notifyMsg").textContent = rec.err === "off" ? T("notify_test_off")
+      : ok ? T("notify_test_ok") : T("notify_test_fail") + (rec.err || "?");
+    $("notifyMsg").className = "hint" + (ok ? "" : " err");
+    refreshAlerts();
+  };
+}
+
+/* ---------- 告警弹窗（SSE 边沿事件） ----------
+   只在新告警 / 级别升高 / 告警消失时收到（服务端 `_emit_alert` 只在边沿发）——
+   所以这里**不需要**自己判重，也不会每 3 秒弹一遍。弹窗说的是“通知发出去了没有”，
+   与上方红点（当前状态）是两件事：状态持续存在，通知只在变化的那一刻发一次。 */
+function alertToast(ev) {
+  const box = $("alertToast");
+  if (!box) return;
+  const a = ev.alert || {};
+  const div = document.createElement("div");
+  div.className = "alert-toast" + (a.level === "crit" ? " crit" : "");
+  const title = i18nOr("notify_ev_" + ev.event, ev.event);
+  const body = a.msg ? esc(alertText(a)) : esc(a.kind || ev.key || "");
+  const d = ev.delivery || {};
+  const sent = d.err === "off" ? T("notify_toast_off")
+    : d.ok === true ? T("notify_toast_sent")
+    : T("notify_toast_fail") + (d.err || "?");
+  div.innerHTML = `<span class="x" title="${esc(T("btn_cancel"))}">✕</span>` +
+    `<div class="tt">${esc(title)}</div>${body}` +
+    `<div class="tb${d.ok === true || d.err === "off" ? "" : " bad"}">${esc(sent)}</div>`;
+  div.querySelector(".x").onclick = () => div.remove();
+  box.appendChild(div);
+  while (box.children.length > 4) box.firstChild.remove();
+  setTimeout(() => div.remove(), 12000);        // 不永久占屏；红点仍是长期状态
 }
 
 async function refreshAlerts() {

@@ -124,6 +124,34 @@ def main():
                     bad_html.append(fn + ": " + l.strip()[:70])
     check("页面上 data-i18n 的兜底文案也不含（**）", not bad_html, bad_html[:5])
 
+    # ★ 服务端**下发**的文案键也要查（2026-09-13 新增）：
+    # `/api/alerts` 的告警 `msg` 与 `/api/*.thresholds` 的 `i18n` 都是**服务端给的键名**，
+    # 页面按数据里的键去查字典 —— 页面源码里没有字面量 → 上面那套「页面引用扫描」**查不出来**。
+    # 拼错一个字母就会在页面上原样显示成 `alert_th_rssi_jump`（看着像功能没做）。
+    # 来源两条（都是单一源）：① `alerts.THRESHOLDS` 的 i18n 字段；
+    # ② `alerts.py` 里每个 `_alert(...)` 调用的第 4 个实参（文案键）。
+    srv_keys = set()
+    try:
+        import alerts as alr                                    # noqa: E402
+        srv_keys |= {x[1] for x in alr.THRESHOLDS}    # (key, i18n, unit) 三元组
+        with open(os.path.join(HERE, "alerts.py"), encoding="utf-8") as f:
+            src = f.read()
+        i = 0
+        while True:
+            i = src.find("_alert(", i)
+            if i < 0:
+                break
+            m = re.search(r'"(alert_[a-z_]+)"', src[i:i + 600])   # 第 4 个实参在附近
+            if m:
+                srv_keys.add(m.group(1))
+            i += 7
+    except Exception as e:                     # 拿不到就**明确跳过**，不当通过
+        print("SKIP  服务端文案键检查（%s: %s）" % (type(e).__name__, e))
+    if srv_keys:
+        miss = sorted(srv_keys - keys)
+        check("服务端下发的 %d 个文案键都在字典里（告警 msg + 阈值标签）"
+              % len(srv_keys), not miss, miss)
+
     node = shutil.which("node")
     if node:
         r = subprocess.run([node, "--check", DICT], capture_output=True, text=True,

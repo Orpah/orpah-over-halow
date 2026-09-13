@@ -58,6 +58,7 @@ import motion                              # noqa: E402  演示用「移动的�
                                            #           （标定 A/n/噪声为唯一源 → /api/config）
 import spoof                               # noqa: E402  防 spoof：攻击报文构造（脚本/UI 共用）
 import alerts as alr                      # noqa: E402  告警规则引擎（页面红点）
+import notify as ntf                      # noqa: E402  告警通知（出站 Webhook，边沿触发）
 import clock as clk                       # noqa: E402  设备时钟偏移/漂移估计（纯计算）
 import metrics                            # noqa: E402  指标面板纯计算（/api/metrics）
 import energy as en                       # noqa: E402  能量轴（免电池客户端模型，纯计算）
@@ -195,6 +196,12 @@ class OrpahApp:
         self.spoof_events = deque(maxlen=60)   # 攻击流量流（最新在前）
         self.spoof_injected = 0            # 累计注入条数（页面的分母）
         self.spoof_lost = 0                # 注入了但没等到结果的条数（见 _spoof_sweep）
+        # ---- 告警通知（2026-09-13）：告警是**状态**（页面红点），通知是**事件** ----
+        # 没人在看页面时也必须能被通知到，所以巡视 + 投递放在**后台线程**里
+        # （不在 HTTP 请求里：投递要发网络请求，会把页面轮询卡住）。
+        self.notifier = ntf.Notifier()
+        self.alert_cache = {"t": "", "counts": alr.summary([]), "alerts": [],
+                            "thresholds": alr.thresholds()}
         # ---- 限频（§5.8，2026-09-13）：与 server 共用同一实例（页面要读它的计数） ----
         self.rl = rl_mod.RateLimiter.from_env()
         self.rl_events = []                # 最近被丢弃的（最新在前，供卡片展示）
@@ -345,6 +352,9 @@ class OrpahApp:
         # 以前是 write_report / _write_router_obs / registry.touch 各自 time.time() 兑底，
         # 既会有毫秒级偏差，也会出现「设备流存服务器时间、报文流还显示 0（1970）」的不一致。
         rx = time.time()
+        # RSSI 突变规则（2026-09-13）要拿**服务器接收时刻**算相邻样本的间隔：免电池设备
+        # 没有时钟（ts=0），拿设备自报的 ts 算不出“间隔多久跳了多少 dB”。
+        msg["rx"] = rx
         rtc = P.rtc_of(msg)                    # 设备能力声明（业务报文未签名 → 只能当提示）
         ts_s, ts_src = P.effective_ts(msg.get("ts"), rx, rtc=rtc)
         msg["ts_src"] = ts_src                 # 只改服务器侧这份副本，供前端标注；报文原文不动
@@ -520,6 +530,12 @@ class OrpahApp:
         th.start()
         self.threads.append(th)
         self._id_tick()          # 立即填充一次，不必等首个周期
+
+        # 7) 告警巡视线程（2026-09-13）：评估 + 边沿触发投递。
+        #    必须独立于页面/HTTP：没人开页面时也得能通知到（见 `_alert_watch` 说明）。
+        th = threading.Thread(target=self._alert_watch, daemon=True)
+        th.start()
+        self.threads.append(th)
         return True
 
     def _loop(self, core):
@@ -794,6 +810,92 @@ class OrpahApp:
         self.spoof_events.clear()
         self.spoof_injected = 0
         self.spoof_lost = 0
+
+    def rssi_series(self, limit=12):
+        """设备**自报**的链路强度序列（**最新在前**）→ 给 `alerts` 的 RSSI 突变规则用。
+
+        - 时刻用**服务器接收时刻**（`msg["rx"]`）而不是设备自报的 `ts`：免电池设备没有时钟
+          （ts=0），用它算不出“相邻样本间隔多久”；而这条规则判的正是“多久跳了多少 dB”。
+        - 只取最近 limit 条：规则本身也只看**最新那一对**（`alerts` 里已注明为何不比更早的）。
+        - `ORPAH-REPORT` **未签名** → 这条只能当线索（规则文案已写死这个口径）。
+        """
+        out = []
+        for seq in reversed(list(self.order)[-limit:]):
+            rec = self.reports.get(seq)
+            if not rec:
+                continue
+            m = rec["msg"]
+            if not m.get("sn") or m.get("rssi") is None or m.get("rx") is None:
+                continue
+            out.append({"sn": m["sn"], "rssi": m["rssi"], "ts": m["rx"]})
+        return out
+
+    def alert_view(self):
+        """告警视图（`/api/alerts` 与后台巡视线程**共用同一份**）—— 无状态，每次重算。
+
+        阈值快照一并给出（页面显示用，单一源 = `alerts.thresholds()`）；
+        `notify` 也带一份（页面不必再多一个请求）。
+        """
+        al = alr.evaluate(self.registry, self.cases, self.id_reports,
+                          clock=self.clock.snapshot(),
+                          energy=self.energy_snapshot(),
+                          ratelimit=self.rl_alert_view(),
+                          rssi_series=self.rssi_series())
+        return {"ok": True, "counts": alr.summary(al), "alerts": al,
+                "thresholds": alr.thresholds(), "notify": self.notifier.snapshot()}
+
+    def _emit_alert(self, rec, alert):
+        """把「投递出去的通知」也发一份到 SSE —— 页面据此弹一次 toast。
+
+        只在**边沿**上发（新告警/升级/消警），所以页面不会每 3 秒弹一遍同一个告警。
+        """
+        ev = {"type": "alert", "t": time.strftime("%H:%M:%S"),
+              "event": rec.get("event"), "key": rec.get("key"),
+              "level": alert.get("level"), "alert": alert,
+              "delivery": {"ok": rec.get("ok"), "status": rec.get("status"),
+                           "err": rec.get("err")}}
+        try:
+            EVENTS.put_nowait(ev)
+        except queue.Full:
+            pass
+
+    def _notify_step(self, alerts):
+        """一次「评估 → 差分 → 投递」（只跑在后台巡视线程里）。
+
+        投递结果都**留痕**：审计写 `notify` 事件（含 ok/status/err），页面看 `/api/status.notify`。
+        失败不重试（demo 边界，见 `notify.py` 头注释），但**必须可见** —— 不静默吞。
+        """
+        by_key = {a.get("key"): a for a in alerts or []}
+        for rec in self.notifier.step(alerts):
+            a = by_key.get(rec.get("key")) or {"kind": rec.get("kind"),
+                                               "level": rec.get("level"),
+                                               "key": rec.get("key")}
+            self._emit_alert(rec, a)
+            sn = a.get("sn") or ""
+            if rec.get("err") == "off":
+                continue      # 没配地址，不算投递（只在事件里不写噪声）
+            self.tsdb.write_event(
+                "notify", sn=sn,
+                detail=(f"event={rec.get('event')} kind={rec.get('kind')} "
+                        f"level={rec.get('level')} key={rec.get('key')} "
+                        f"ok={rec.get('ok')} status={rec.get('status')} "
+                        f"err={rec.get('err') or '-'}"))
+
+    def _alert_watch(self):
+        """后台告警巡视图：每 `ORPAH_NOTIFY_SEC`（默认 3 s）评估一次并投递。
+
+        为什么必须有这个线程（而不是只在页面轮询时投递）：**没人打开页面时也得能通知到** ——
+        那正是通知存在的意义。用 `self.stop.wait()` 等下一轮（不猜次数、不空转）。
+        """
+        interval = max(1.0, float(ntf._env_int("ORPAH_NOTIFY_SEC", 3)))
+        while not self.stop.is_set():
+            try:
+                v = self.alert_view()
+                self.alert_cache = dict(v, t=time.strftime("%H:%M:%S"))
+                self._notify_step(v["alerts"])
+            except Exception as e:        # 巡视图不能死（死了通知会静默停摆）
+                print(f"[notify] 巡视出错：{type(e).__name__}: {e}")
+            self.stop.wait(interval)
 
     def rl_alert_view(self):
         """给告警引擎的限频视图（`alerts.evaluate(ratelimit=…)`）。
@@ -1111,7 +1213,7 @@ class OrpahApp:
         }
 
     def cmd(self, action, sn=None, every=None, note="", kind=None, level=None, sec=None,
-            rtc="__missing__", on=None, n=None, rotate=None):
+            rtc="__missing__", on=None, n=None, rotate=None, url=None, resolve=None):
         if action == "pause":
             self.paused = True
         elif action == "resume":
@@ -1176,6 +1278,25 @@ class OrpahApp:
             # 只清"面板上的数"，不清"防线本身"，否则就把演示变成假的了）
             self.spoof_reset()
             return {"ok": True}
+        elif action == "notify_set":
+            # 告警通知配置（运行时改，不重启）：url（空=关闭）/ level（warn|crit）/ resolve
+            if url is not None:
+                self.notifier.set_url(url)
+            if level is not None:
+                self.notifier.set_min_level(level)
+            if resolve is not None:
+                self.notifier.set_resolve(resolve)
+            return {"ok": True, "notify": self.notifier.snapshot()}
+        elif action == "notify_test":
+            # 「测试发送」：立刻推一条，返回投递记录（ok/status/err 供页面显示）。
+            # 写审计（人为操作）—— 与其它人为动作一样要留痕。
+            rec = self.notifier.test()
+            self.tsdb.write_event(
+                "notify", sn="",
+                detail=(f"event=test url={self.notifier.url or '-'} "
+                        f"ok={rec.get('ok')} status={rec.get('status')} "
+                        f"err={rec.get('err') or '-'}"))
+            return {"ok": True, "test": rec, "notify": self.notifier.snapshot()}
         elif action == "rl_reset":
             # 演示用：清零计数后重新刷量，页面上的数字才对得上（**不**清桶本身 ——
             # 清了就等于“把限频关一下”，会把演示变成假的）
@@ -1247,12 +1368,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, json.dumps({"ok": True, **motion.calibration()}).encode())
             return
         if self.path == "/api/alerts":
-            # 无状态评估：每次用当前快照重算活跃告警（规则见 alerts.py）
-            al = alr.evaluate(APP.registry, APP.cases, APP.id_reports,
-                              clock=APP.clock.snapshot(), energy=APP.energy_snapshot(),
-                              ratelimit=APP.rl_alert_view())
-            self._send(200, json.dumps({"ok": True, "counts": alr.summary(al),
-                                        "alerts": al}).encode())
+            # 无状态评估：每次用当前快照重算活跃告警（规则见 alerts.py）。
+            # 与后台巡视线程（`_alert_watch`）**共用同一个视图函数** —— 页面看到的与
+            # 通知推的必须是同一份判定，否则会出现「页面红点亮了但没通知」这类对不上。
+            self._send(200, json.dumps(APP.alert_view()).encode())
             return
         if self.path.startswith("/api/energy"):
             self._send(200, json.dumps(APP.energy_view()).encode())
@@ -2104,7 +2223,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     note=req.get("note") or "", kind=req.get("kind"),
                     level=req.get("level"), sec=req.get("sec"),
                     rtc=req.get("rtc", "__missing__"), on=req.get("on"),
-                    n=req.get("n"), rotate=req.get("rotate"))
+                    n=req.get("n"), rotate=req.get("rotate"),
+                    url=req.get("url"), resolve=req.get("resolve"))
         self._send(200, json.dumps(r).encode())
 
 

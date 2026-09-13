@@ -430,6 +430,127 @@ a = alr.evaluate(regis(), case_mgr(), deque(
 check("降级：被拒的记录不算降级上报（§8.3 只看已签接受的）", kinds(a) == [])
 
 
+# ---- 规则 9：RSSI 突变（2026-09-13）-----------------------------------------
+# 阈值按**实测零假设分布**定（见 alerts.py 模块头那句「阈值怎么定的」）：
+# 只在 0.5~15 s 的相邻样本间比，默认 25 dB（诚实上界 12 dB @10s 的 2 倍余量）。
+# 下面这些用例把「不许误报」与「该报要报」两头都锁住。
+def rssi(sn, rssi, ts):
+    return {"sn": sn, "rssi": rssi, "ts": ts}
+
+
+def jumps(series, now=None):
+    return [x for x in alr.evaluate(regis(), case_mgr(), deque(),
+                                    now=int(now if now is not None else NOW),
+                                    rssi_series=series)
+            if x["kind"] == "rssi_jump"]
+
+
+# ★ 回归锁：诚实序列零误报。诚实序列 = 演示行走模型里设备自报的 rssi
+#   （`motion.Walk.nearest`，含 ±2 dBm 确定性噪声），四种上报间隔 × 2 h，**逐对样本**
+#   各评估一次（等价于“把每个时刻都当成现在”）。
+import motion                                    # noqa: E402
+_STATIONS = [("S1", 30.0, 0.0), ("S2", -15.0, 26.0),
+             ("S3", -15.0, -26.0), ("S4", -20.0, 0.0)]
+_walk = motion.Walk()
+_T0MS = 1_789_000_000_000
+_false = []
+_pairs = 0
+for _every in (1, 2, 5, 10):
+    _ser = []
+    for _i in range(int(2 * 3600 / _every)):
+        _tms = _T0MS + _i * _every * 1000
+        _sid, _r = _walk.nearest(_tms, _STATIONS)
+        _ser.append(rssi("A", _r, _tms / 1000.0))
+    _ser.reverse()                               # 最新在前
+    for _k in range(len(_ser) - 1):
+        _pairs += 1
+        if jumps(_ser[_k:_k + 2]):
+            _false.append((_every, _k))
+check("★ RSSI：诚实序列 %d 对样本（1/2/5/10s 间隔 × 2h）零误报" % _pairs, not _false)
+
+_a = jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 2)])
+check("RSSI：2 秒内跳 40 dB → rssi_jump warn，且带上一/当前/间隔三个数（页面能解释）",
+      len(_a) == 1 and _a[0]["level"] == "warn" and _a[0]["sn"] == "A"
+      and (_a[0]["rssi_from"], _a[0]["rssi_to"], _a[0]["jump_db"], _a[0]["dt_sec"])
+      == (-80.0, -40.0, 40.0, 2.0))
+check("RSSI：刚好等于阈值（25 dB）不报（严格大于才报）",
+      jumps([rssi("A", -40, NOW), rssi("A", -65, NOW - 2)]) == [])
+check("RSSI：差一点点超阈（25.1→26）也照样报（没有额外的“凑整”门槛）",
+      len(jumps([rssi("A", -40, NOW), rssi("A", -66, NOW - 2)])) == 1)
+check("RSSI：间隔 >15 s 不比 —— 分不清“突变”与“走了很远”（宁可不报）",
+      jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 16)]) == [])
+check("RSSI：间隔 <0.5 s 不比（同一瞬间的重复采样，噪声能随便跳）",
+      jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 0.4)]) == [])
+check("RSSI：只有一条样本 → 不报（没有可比的“前一次”）",
+      jumps([rssi("A", -40, NOW)]) == [])
+check("RSSI：缺 rssi / 缺 ts 的样本跳过，不崩",
+      jumps([{"sn": "A", "rssi": None, "ts": NOW}, {"sn": "A", "rssi": -40, "ts": None}]) == [])
+_a = jumps([rssi("A", -40, NOW), rssi("A", -80, NOW - 2),
+            rssi("B", -50, NOW), rssi("B", -52, NOW - 2)])
+check("RSSI：每台设备各算各的（A 跳了、B 没跳 → 只报 A）",
+      [x["sn"] for x in _a] == ["A"])
+check("RSSI：取的是**最新**那一对（老的跳变不再报 —— 消警靠样本自然滚出去）",
+      jumps([rssi("A", -40, NOW), rssi("A", -41, NOW - 2),
+             rssi("A", -80, NOW - 4)]) == [])
+check("RSSI：阈值可配（rssi_jump_db=5 时 10 dB 也算突变）",
+      len(jumps([rssi("A", -40, NOW), rssi("A", -50, NOW - 2)])) == 0
+      and len(alr.evaluate(regis(), case_mgr(), deque(), now=NOW, rssi_jump_db=5,
+                           rssi_series=[rssi("A", -40, NOW), rssi("A", -50, NOW - 2)])) == 1)
+check("RSSI：不传 rssi_series → 不评估（与 clock/energy 同约定）",
+      kinds(alr.evaluate(regis(), case_mgr(), deque(), now=NOW)) == [])
+
+# ---- 规则 10：校验位连续失败（2026-09-13）------------------------------------
+# 「连续」= 字面意思：从最新一条往回数 bad_check，中间夹了**任何**其它结果就停。
+def brec(err, t=NOW, sn="CN-WH01-9AF3C1D2"):
+    return {"accepted": False, "error": err, "ts_eff": t, "sn": sn}
+
+
+def bc(recs):
+    return [x for x in alr.evaluate(regis(), case_mgr(), deque(recs), now=NOW)
+            if x["kind"] == "badcheck_streak"]
+
+
+_a = bc([brec("bad_check")] * 3)
+check("校验位：连续 3 条 → warn，且带条数与 SN（仅线索口径）",
+      len(_a) == 1 and _a[0]["level"] == "warn" and _a[0]["n"] == 3
+      and _a[0]["sn"] == "CN-WH01-9AF3C1D2")
+check("校验位：只有 2 条 → 不报（默认阈值 3）", bc([brec("bad_check")] * 2) == [])
+check("校验位：中间夹一条**通过** → 连续断了，不报（那台设备明明能正常上报）",
+      bc([brec("bad_check"), {"accepted": True, "ts_eff": NOW},
+          brec("bad_check"), brec("bad_check")]) == [])
+check("校验位：中间夹别的拒绝码（signature_invalid）→ 也断",
+      bc([brec("bad_check"), brec("signature_invalid"),
+          brec("bad_check"), brec("bad_check")]) == [])
+_a = bc([brec("bad_check", t=NOW)] + [brec("bad_check", t=NOW - 10)] * 3)
+check("校验位：4 条连败 → n=4，since 取**最早**那条（页面「持续 X」才对）",
+      len(_a) == 1 and _a[0]["n"] == 4 and _a[0]["since"] == NOW - 10)
+check("校验位：阈值可配（badcheck_streak=2）",
+      len(alr.evaluate(regis(), case_mgr(), deque([brec("bad_check")] * 2), now=NOW,
+                       badcheck_streak=2)) == 1)
+check("校验位：空序列 → 不报", bc([]) == [])
+# 阈值 0 = 关掉这条。注意 5 条连败**同时**会触发 sig_fail_rate（5 条全被拒，比例 1.0）
+# —— 两条规则从不同角度描述同一串报文，都出是对的；这里只看 badcheck_streak 那条。
+check("校验位：阈值设为 0 = 关掉这条（连败也不报该条，其它规则照旧）",
+      [x for x in alr.evaluate(regis(), case_mgr(), deque([brec("bad_check")] * 5),
+                               now=NOW, badcheck_streak=0)
+       if x["kind"] == "badcheck_streak"] == [])
+
+# ---- 阈值快照（页面展示用；单一源 = alerts.THRESHOLDS）-----------------------
+_t = alr.thresholds()
+check("阈值快照：条数与 THRESHOLDS 元信息一致、且 key 不重复",
+      len(_t) == len(alr.THRESHOLDS)
+      and len({x["key"] for x in _t}) == len(_t))
+check("阈值快照：值是模块常量本身（不是另抄一份）",
+      all(x["value"] == getattr(alr, x["key"].upper()) for x in _t))
+check("阈值快照：每条都带 i18n 键（页面按它取文案）与单位字段",
+      all(x["i18n"].startswith("alert_th_") and "unit" in x for x in _t))
+check("阈值快照：本轮新增的两条也在里面（RSSI 突变 / 校验位连败）",
+      {x["key"] for x in _t} >= {"rssi_jump_db", "badcheck_streak"})
+check("阈值快照：覆盖值生效（th 注入优先）",
+      [x for x in alr.thresholds(rssi_jump_db=99) if x["key"] == "rssi_jump_db"][0]
+      ["value"] == 99)
+
+
 # ---- 排序 / 计数 / 空态 ----------------------------------------------------
 
 

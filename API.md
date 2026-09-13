@@ -214,6 +214,17 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 - **只清“面板上的数”，不清“防线本身”**：密钥库、限频桶、nonce 缓存一律不动 —— 与 `rl_reset` 同一取舍，
   否则“清一下再跑”就等于把演示变成假的（前一批的非 nonce 仍被记得、桶也没回满）。
 
+**新增 `notify_set` / `notify_test`（告警通知，2026-09-13）**：
+
+- `{action:"notify_set", url:"http://host/hook", level:"warn|crit", resolve:0|1}`
+  —— 运行时改配置（**不重启**；任一字段可省）。`url:""` = 关闭通知。
+  **改地址不清 `seen`**（换接收端不会把已推过的告警重推一遍）。
+  返回 `{ok:true, notify:<快照>}`。
+- `{action:"notify_test"}` —— 立刻推一条**测试通知**（`event:"test"`，`msg:"notify_test_msg"`），
+  用于现场验证接收端通不通；返回 `{ok:true, test:<投递记录>, notify:<快照>}`。
+  没配地址时记录里 `err:"off"`（**不是**“发成功”）；测试发送**不计入** `sent`/`failed`
+  （页面的「已推告警」说的是真告警），但会进「最近投递」列表，并写一条审计 `notify` 事件。
+
 **新增 `flood` / `rl_reset`（限频演示，2026-09-13，§5.8）**：
 
 - `{action:"flood", n:<条数>, rotate:true|false}` —— **真的**连发 n 条 ID-REPORT（走真链路，
@@ -472,11 +483,45 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 {"ok": true, "counts": {"crit": 1, "warn": 0, "total": 1},
  "alerts": [{"kind": "case_overtime", "level": "crit", "key": "case_overtime:C001",
              "msg": "alert_case_overtime", "since": 1789104728,
-             "case_id": "C001", "person_id": "P002", "gap": 35856}]}
+             "case_id": "C001", "person_id": "P002", "gap": 35856}],
+ "thresholds": [{"key": "no_report_sec", "i18n": "alert_th_no_report",
+                 "unit": "s", "value": 30}],
+ "notify": {"on": true, "url": "http://127.0.0.1:8899/hook", "min_level": "warn",
+            "sent": 4, "failed": 0, "skipped": 0, "watching": 1,
+            "last_error": null, "recent": [{"t": "14:37:10", "event": "alert",
+            "kind": "ratelimit", "level": "warn", "ok": true, "status": 200}]}}
 ```
 
-**无状态**：每次请求都用当前快照（设备清册 + 走失案件 + 最近签名上报）重算，
+**无状态**：每次请求都用当前快照（设备清册 + 走失案件 + 最近签名上报 + 设备自报 RSSI 序列）重算，
 不存告警表、没有确认/关闭流程 → 条件消失则告警自动消失，无需状态机。
+
+**`thresholds`（2026-09-13）**：当前生效的阈值快照（**含 env 覆盖**），单一源 = `alerts.thresholds()`。
+页面直接渲染它 —— **不写死数值，也不写死“该显示哪几条”**（顺序与 i18n 键都在 `alerts.THRESHOLDS`）。
+省得“改了环境变量却不知道生没生效”（真机上的常见坑）。
+
+**`notify`（2026-09-13，告警**出站**通知）**：见下节「9. 告警通知」。
+
+### 告警通知（出站 Webhook，2026-09-13）
+
+`notify.py` + `ui_server._alert_watch`（后台线程，每 `ORPAH_NOTIFY_SEC`=3s 评估一轮）。
+
+| 口径 | 说明 |
+|---|---|
+| 边沿触发 | 只推「新 `key`」与「同一 `key` **级别升高**（warn→crit）」；同级告警持续期间**一条都不重复推**（不差分就是每 3 秒刷一遍接收端）|
+| 告警消失 | 默认**不推**（`ORPAH_NOTIFY_RESOLVE=1` 打开则补推 `alert_resolved`）|
+| 最低级别 | `ORPAH_NOTIFY_MIN_LEVEL`（默认 `warn`；`crit` = 只看严重的）。低于它的进 `skipped` 且**记进 seen**（升级到 crit 时仍会推）|
+| 投递体 | `{"source":"orpah-over-halow", "event":"alert\|alert_upgraded\|alert_resolved\|test", "ts":…, "key":…, "alert": <告警对象>}` —— 只给**机器可读**字段，`alert.msg` 是 **i18n 键**（接收端自己本地化，与页面同一约定）|
+| 失败 | 计数 + `last_error` + 审计 `notify` 事件（`ok/status/err`）；**不重试**（无重试队列/退避/持久化）——demo 边界，不得写成“通知到了”|
+| 重启 | `seen` 只在内存 → 重启后**活跃告警会被重推一遍** |
+| 无鉴权 | 出站就一个 HTTP POST，没有签名/凭据；URL 由使用者自填 |
+| 没人开页面 | 巡视在**后台线程**里 → 页面没开也照推（这正是通知存在的意义）|
+
+**两种失败要分开说**（页面/审计都分）：`err="off"` = **没配地址**（通知关闭，不算失败也不算成功）；
+`ok=false` + `status`/`err` = **投递失败**（连不上 = `status:0`）。
+
+**环境变量**：`ORPAH_NOTIFY_URL`（空 = 关闭，默认）/ `ORPAH_NOTIFY_MIN_LEVEL`（`warn`）/ 
+`ORPAH_NOTIFY_TIMEOUT`（3s）/ `ORPAH_NOTIFY_SEC`（3s）/ `ORPAH_NOTIFY_RESOLVE`（0）。
+运行时可在页面上改 URL/级别（`POST /api/ctl`，见 §14），**不重启**。
 
 ### 时钟可信：设备无时钟时的 `ts`（2026-09-12）
 
@@ -530,7 +575,22 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 - 两个升级阈值均可配；把升级阈值设得**比起步阈值还小/相等** → 一超起步就 `crit`
   （等于把分级关掉，保留旧行为）。
 
-未做：Webhook/邮件通知、SSE 弹窗、RSSI 突变/校验位连续失败规则、页面展示当前阈值 —— 见 `ROADMAP.md` §三。
+| `badcheck_streak` | `warn` | 从**最新一条往回**数 `error == "bad_check"`，**中间夹了任何其它结果（通过 / 别的拒绝码）就停**；连续 ≥ N 条 → 报（**仅线索**：设备固件编码错、抄错号、扫描器，也包括伪造） | `3` | `ORPAH_ALERT_BADCHECK_STREAK` |
+| `rssi_jump` | `warn` | 设备**自报**的链路强度相邻样本跳变超阈（**仅线索、需人工复核**）；**只在间隔 0.5~15 s 的相邻样本间比**（间隔太长就分不清“突变”与“走了很远”→ 不比，宁可不报） | `25` dB | `ORPAH_ALERT_RSSI_JUMP_DB` |
+
+⚠ **两条新规则（2026-09-13）为什么敢用这个阈值**：按**实测零假设分布**定，不拍脑袋。
+诚实序列 = 演示行走模型里设备自报的 rssi（含 ±2 dBm 确定性噪声）按 1/2/5/10 s 间隔采样 2 h，
+量相邻样本 `|Δ|`：中位 `1.0/1.0/2.0/4.0`、**max `5.0/7.0/9.0/12.0`** —— 
+**跳变随采样间隔线性增长**（人在走），所以阈值必须在固定时间带上比，取 `25 dB`（诚实上界 12 dB 的 2 倍余量）。
+回归锁：`test_alerts.py` 用 **12956 对样本**（四种间隔 × 2h）断言**零误报**。
+
+⚠ 两条都是**线索型**告警：文案里**必须带**「仅线索、需人工复核」，
+不得归因（术语硬规则：偏差 ≠ 有人作恶；成因不唯一 —— 遮挡/多径、天线/接头、挪动、标定漂移、也包括被改装/冒充）。
+
+⚠ 实测发现的连带现象：连发 5 条 `bad_check` 会**同时**触发 `sig_fail_rate`（两条规则从不同角度描述同一串报文，
+都出是对的）—— 不要当成重复告警去“合并”。
+
+未做：**邮件**（需 SMTP 凭据，demo 不做，如实标注）、Webhook **重试/退避/持久化队列** —— 见 `ROADMAP.md` §三。
 
 规则（阈值可用**环境变量**覆盖，改了要重启；默认值有演示压缩也有真实时长，见下）：
 

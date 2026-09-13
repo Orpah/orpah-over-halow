@@ -19,6 +19,21 @@
     color: var(--acc); border: 1px solid var(--bd); border-radius: 8px;
     padding: 0 6px; font-size: 12px; white-space: nowrap;
   }
+  /* 告警弹窗（SSE 边沿事件：只在新告警/升级/消警时弹一次，不是每轮都弹） */
+  #alertToast {
+    position: fixed; right: 16px; bottom: 16px; z-index: 60;
+    display: flex; flex-direction: column; gap: 8px; max-width: 420px;
+  }
+  .alert-toast {
+    background: #161b22; border: 1px solid var(--bd); border-left: 4px solid var(--org);
+    border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5;
+    box-shadow: 0 6px 20px #0008;
+  }
+  .alert-toast.crit { border-left-color: var(--red); }
+  .alert-toast .tt { font-weight: 600; margin-bottom: 3px; }
+  .alert-toast .tb { color: var(--mut); font-size: 12px; }
+  .alert-toast .tb.bad { color: var(--red); }
+  .alert-toast .x { float: right; color: var(--mut); cursor: pointer; padding: 0 4px; }
 </style>
 </head>
 <body>
@@ -54,6 +69,49 @@
   <h3 data-i18n="alert_title">告警</h3>
   <ul class="alert-list" id="alertList"></ul>
 </section>
+
+<!-- ============ 告警通知（出站 Webhook）+ 当前阈值 ============ -->
+<!-- 阈值**单一源 = alerts.py**（含 env 覆盖）→ 页面只负责显示，不写死数值；
+     与 A/n/噪声走 /api/config 同一个做法。 -->
+<section class="card" id="notifyCard">
+  <h3 data-i18n="notify_title">告警通知（Webhook）</h3>
+  <div class="config-row id-ctl">
+    <label><span data-i18n="notify_url">Webhook 地址</span>
+      <input id="notifyUrl" type="text" spellcheck="false"
+             style="min-width:320px"
+             placeholder="http://127.0.0.1:8899/hook"></label>
+    <button class="btn" id="btnNotifySave" data-i18n="btn_apply">应用</button>
+    <label><span data-i18n="notify_level">最低推送级别</span>
+      <select id="notifyLevel">
+        <option value="warn">warn</option>
+        <option value="crit">crit</option>
+      </select></label>
+    <button class="btn" id="btnNotifyTest" data-i18n="notify_test">测试发送</button>
+    <span class="hint" id="notifyMsg"></span>
+  </div>
+  <div class="id-grid">
+    <div class="id-row"><span data-i18n="notify_state">状态</span><b id="notifyState">-</b></div>
+    <div class="id-row"><span data-i18n="notify_sent">已推告警</span><b id="notifySent">-</b></div>
+    <div class="id-row"><span data-i18n="notify_failed">投递失败</span><b id="notifyFailed" class="bad">-</b></div>
+    <div class="id-row"><span data-i18n="notify_skipped">低于级别未推</span><b id="notifySkipped">-</b></div>
+    <div class="id-row"><span data-i18n="notify_watching">正在跟踪</span><b id="notifyWatch">-</b></div>
+    <div class="id-row full"><span data-i18n="notify_err">最近错误</span><b id="notifyErr">-</b></div>
+  </div>
+  <p class="hint" data-i18n="notify_hint">出站只有一个 HTTP POST：无鉴权、无投递保证、失败不重试。「推过的告警」记在内存里 —— 进程重启后活跃告警会被重推一遍。同一告警持续期间只推一次，级别升高（warn→crit）再推一次。</p>
+  <div class="pub-head" data-i18n="notify_recent">最近投递（最新在前）</div>
+  <table>
+    <thead><tr>
+      <th data-i18n="th_time">时间</th><th data-i18n="notify_th_event">事件</th>
+      <th data-i18n="notify_th_alert">告警</th><th data-i18n="notify_th_level">级别</th>
+      <th data-i18n="notify_th_state">结果</th><th data-i18n="notify_th_err">说明</th>
+    </tr></thead>
+    <tbody id="notifyRecent"></tbody>
+  </table>
+  <div class="pub-head" data-i18n="alert_th_head">当前阈值（可用环境变量覆盖）</div>
+  <div class="id-grid" id="alertTh"></div>
+</section>
+
+<div id="alertToast"></div>
 
 <!-- ============ 拓扑（3 节点：客户端 / 路由器 / 服务器；链路标方向与帧数） ============ -->
 <section id="topology" class="card">

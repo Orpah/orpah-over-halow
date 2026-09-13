@@ -41,6 +41,7 @@ SUITES = [
     ("防 spoof（离线逐条）", "test_spoof.py", []),
     ("攻击流量面板（认领逻辑 / 单一源 / 页面守卫）", "test_attack.py", []),
     ("告警规则（含处置态）", "test_alerts.py", []),
+    ("告警通知（边沿触发 / Webhook / 失败可见）", "test_notify.py", []),
     ("指标面板纯计算", "test_metrics.py", []),
     ("时钟可信（ts=0 无 RTC）", "test_clock.py", []),
     ("IoTDB 审计/时间窗", "test_tsdb_audit.py", []),

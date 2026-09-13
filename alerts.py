@@ -23,6 +23,8 @@ alerts.py — 告警规则引擎（供页面红点消费）
       ORPAH_ALERT_ENERGY_LOW_MV       电量低阈值（mV，默认 3300）→ id_energy warn
       ORPAH_ALERT_ENERGY_OUT_MV       电量耗尽阈值（mV，默认 3100）→ id_energy crit
       ORPAH_ALERT_RL_SEC              限频丢弃告警窗口（秒，默认 60；窗口内有丢弃就报）
+      ORPAH_ALERT_RSSI_JUMP_DB        RSSI 突变阈值（dB，默认 25；见下「阈值怎么定的」）
+      ORPAH_ALERT_BADCHECK_STREAK     校验位**连续**失败多少条起报（默认 3）
 
   例（立案后 10 分钟才算超时，避免演示时刚立案就亮红点）：
       PowerShell:  $env:ORPAH_ALERT_CASE_OVERTIME_SEC=600; python ui_server.py --port 8901
@@ -43,6 +45,8 @@ alerts.py — 告警规则引擎（供页面红点消费）
     id_energy               设备自报电量低（warn）/ 耗尽（crit）——免电池终端的预期状态，提醒运维
     no_report_energy        设备沉默**且最后自报电量低** → 疑似没电（warn，不升级 crit）
     ratelimit               最近 rl_sec 内有限频丢弃（warn）——**只陈述事实、不归因**（大流量 ≠ 攻击）
+    rssi_jump               设备自报 RSSI 相邻样本跳变超阈（warn）——**仅线索、需人工复核**
+    badcheck_streak         最近连续 N 条上报都是「SN 校验位错」（warn）——同一口径，仅线索
 
 **能量轴归因分流（2026-09-13）**：沉默有两种相反成因，「没电了」该等它取能、「被藏/被干扰」该立刻搜
 —— 不能报同一条。判据用设备**最后自签上报里的**电量（在签名预像内，不可抵赖）加“还能撑多久”：
@@ -94,7 +98,28 @@ L3（无可用密钥、裸上报）→ 触发“设备异常”通知运维。
 - 默认 24h 是**真实时长**，演示（2s 一包）里不会自然发生；要看效果请把
   `ORPAH_ALERT_CASE_HANDLED_SEC` 设小（例：`60`）。
 
-第二批可加：RSSI 突变、校验位连续失败（需要历史序列，本模块暂不做）。
+**第二批两条（2026-09-13 已做）**：`rssi_jump` 与 `badcheck_streak`。两条都属**线索型**告警
+（不是“故障”也不是“结论”），文案必须带「仅线索」，不得归因（术语硬规则）。
+
+**「RSSI 突变」阈值怎么定的（2026-09-13 实测，不拍脑袋）**：诚实序列 = 演示行走模型里
+设备自报的 rssi（`motion.Walk.nearest`，含 ±2 dBm 确定性噪声）按上报间隔取样 2 h，量**相邻样本 |Δ|**：
+
+    上报间隔      1s     2s     5s    10s
+    中位         1.0    1.0    2.0    4.0
+    p99          4.0    5.0    8.0   11.0
+    max          5.0    7.0    9.0   12.0
+
+**跳变随采样间隔线性增长**（人在走：走得越久、RSSI 变化越大）→ 固定 dB 阈值会在
+把上报间隔调大（`every=10`）时误报。故规则只在**间隔 0.5~15 s** 的相邻样本间比，
+阈值取 **25 dB**（诚实上界 12 dB 的 2 倍余量；间隔 >15 s 没法归因就不比）。
+回归锁：`test_alerts.py` 用上面四种间隔的诚实序列断言**零误报**。
+
+**「校验位连续失败」口径**：从**最新一条往回**数 `error == "bad_check"` 的条数，
+**中间夹了任何其它结果（通过，或别的拒绝码）就停** —— 「连续」就是字面意思，
+不是“窗口里有多少条”。默认连续 3 条起报（warn）。
+
+**阈值快照（`thresholds()`）**：当前生效的阈值（含 env 覆盖）由本模块给出，页面直接显示、
+不写死 —— 与 A/n/噪声走 `GET /api/config` 同一个做法（单一源）。
 """
 import os
 import time
@@ -138,6 +163,53 @@ CAP_MISMATCH_SEC = _env_int("ORPAH_ALERT_CAP_MISMATCH_SEC", 300)  # 能力声明
 ENERGY_LOW_MV = _env_int("ORPAH_ALERT_ENERGY_LOW_MV", 3300)
 ENERGY_OUT_MV = _env_int("ORPAH_ALERT_ENERGY_OUT_MV", 3100)
 RL_SEC = _env_int("ORPAH_ALERT_RL_SEC", 60)   # 限频丢弃告警窗口（秒）
+# RSSI 突变（2026-09-13）：**只在间隔 0.5~15 s 的相邻样本间比**
+# （实测诚实上界 12 dB @10s；间隔太长就没法归因「跳变」与「走了很远」），阈值取 25 dB。
+RSSI_JUMP_DB = _env_int("ORPAH_ALERT_RSSI_JUMP_DB", 25)
+RSSI_PAIR_MIN_SEC = 0.5
+RSSI_PAIR_MAX_SEC = 15
+# 校验位连续失败（2026-09-13）：连续这么多条 bad_check 就报（默认 3）
+BADCHECK_STREAK = _env_int("ORPAH_ALERT_BADCHECK_STREAK", 3)
+
+# 阈值快照的元信息（→ 页面显示）：**顺序与 i18n 键都在这里**，页面不另写一份。
+# `unit` 只用于显示（比例类没单位 → None）。
+THRESHOLDS = [
+    ("no_report_sec", "alert_th_no_report", "s"),
+    ("no_report_crit_sec", "alert_th_no_report_crit", "s"),
+    ("case_overtime_sec", "alert_th_case_overtime", "s"),
+    ("case_handled_sec", "alert_th_case_handled", "s"),
+    ("case_handled_crit_sec", "alert_th_case_handled_crit", "s"),
+    ("sig_window", "alert_th_sig_window", ""),
+    ("sig_fail_ratio", "alert_th_sig_ratio", ""),
+    ("id_degraded_sec", "alert_th_degraded", "s"),
+    ("clock_offset_sec", "alert_th_clock_off", "s"),
+    ("clock_drift_ppm", "alert_th_clock_drift", "ppm"),
+    ("cap_mismatch_sec", "alert_th_cap_mismatch", "s"),
+    ("energy_low_mv", "alert_th_energy_low", "mV"),
+    ("energy_out_mv", "alert_th_energy_out", "mV"),
+    ("rl_sec", "alert_th_rl", "s"),
+    ("rssi_jump_db", "alert_th_rssi_jump", "dB"),
+    ("badcheck_streak", "alert_th_badcheck", ""),
+]
+
+
+def thresholds(**th):
+    """当前生效的阈值快照 → `[{"key", "i18n", "unit", "value"}]`（**单一源**）。
+
+    页面直接渲染它（不写死数值、也不写死该显示哪几条）—— env 覆盖后页面立刻反映，
+    省得“改了环境变量却不知道生没生效”。`th` 可注入（单测/自定义）。
+    """
+    cur = {"no_report_sec": NO_REPORT_SEC, "no_report_crit_sec": NO_REPORT_CRIT_SEC,
+           "case_overtime_sec": CASE_OVERTIME_SEC, "case_handled_sec": CASE_HANDLED_SEC,
+           "case_handled_crit_sec": CASE_HANDLED_CRIT_SEC, "sig_window": SIG_WINDOW,
+           "sig_fail_ratio": SIG_FAIL_RATIO, "id_degraded_sec": ID_DEGRADED_SEC,
+           "clock_offset_sec": CLOCK_OFFSET_SEC, "clock_drift_ppm": CLOCK_DRIFT_PPM,
+           "cap_mismatch_sec": CAP_MISMATCH_SEC, "energy_low_mv": ENERGY_LOW_MV,
+           "energy_out_mv": ENERGY_OUT_MV, "rl_sec": RL_SEC,
+           "rssi_jump_db": RSSI_JUMP_DB, "badcheck_streak": BADCHECK_STREAK}
+    cur.update({k: v for k, v in th.items() if k in cur})
+    return [{"key": k, "i18n": ik, "unit": u, "value": cur[k]}
+            for k, ik, u in THRESHOLDS]
 
 
 def _alert(kind, level, key_obj, msg, since, **data):
@@ -157,7 +229,7 @@ def level_by_gap(gap, warn_after, crit_after):
 
 
 def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None,
-             ratelimit=None, **th):
+             ratelimit=None, rssi_series=None, **th):
     """返回活跃告警列表（crit 在前，同级按触发时间）。
 
     参数与阈值都可注入，便于单测（见 test_alerts.py）。
@@ -169,6 +241,9 @@ def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None,
     `ratelimit` = `{"on": bool, "dropped": {"sn":…, "router":…, "total":…},
     "last_drop": {"t": epoch秒, "which": …, "sn": …, "router": …}|None}`
     （**限频**，2026-09-13；不传则不评估限频规则）。
+    `rssi_series` = **最新在前**的上报序列 `[{sn, rssi, ts}, …]`（设备**自报**的链路强度，
+    2026-09-13；不传则不评估 RSSI 突变规则）。注意它取自 `ORPAH-REPORT`，**未签名** →
+    只能当线索（见规则 9 的注释）。
     """
     now = int(now if now is not None else time.time())
     no_rep = th.get("no_report_sec", NO_REPORT_SEC)
@@ -185,6 +260,8 @@ def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None,
     en_low = th.get("energy_low_mv", ENERGY_LOW_MV)
     en_out = th.get("energy_out_mv", ENERGY_OUT_MV)
     rl_sec = th.get("rl_sec", RL_SEC)
+    jump_db = th.get("rssi_jump_db", RSSI_JUMP_DB)
+    bc_streak = th.get("badcheck_streak", BADCHECK_STREAK)
     energy = energy or {}
     out = []
 
@@ -360,6 +437,53 @@ def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None,
                               dropped_sn=int(dropped.get("sn") or 0),
                               dropped_router=int(dropped.get("router") or 0),
                               sn=ld.get("sn"), router=ld.get("router")))
+
+    # 9) RSSI 突变（2026-09-13）：设备**自报**的链路强度相邻样本跳变超阈 → warn（**仅线索**）。
+    #    **为什么是线索而不是结论**（术语硬规则）：RSSI 突变有成因不唯一 —— 遮挡/多径、
+    #    天线或接头、设备挪动、标定漂移，也包括被改装/冒充；而本 demo 的信号模型只假定空旷无遮挡。
+    #    **只比 0.5~15 s 的相邻样本**：实测（见模块头）跳变幅度随间隔线性增长，
+    #    间隔太长就分不清「突变」与「走了很远」→ 不比（宁可不报，也不编一个突变出来）。
+    #    每条设备只出最新一次；窗口用来看“最近还跳不跳”来自动消警。
+    by_sn = {}
+    for rec in (rssi_series or []):          # 最新在前
+        sn = rec.get("sn")
+        r = rec.get("rssi")
+        ts = rec.get("ts")
+        if not sn or r is None or ts is None:
+            continue
+        by_sn.setdefault(sn, []).append((float(ts), float(r)))
+    for sn, arr in by_sn.items():
+        arr.sort(key=lambda x: -x[0])        # 最新在前
+        if len(arr) < 2:
+            continue
+        (t1, r1), (t0, r0) = arr[0], arr[1]
+        dt = abs(t1 - t0)
+        if not (RSSI_PAIR_MIN_SEC <= dt <= RSSI_PAIR_MAX_SEC):
+            continue                         # 间隔不合适 → 没法归因，不比
+        d = abs(r1 - r0)
+        if d > jump_db:
+            out.append(_alert("rssi_jump", LEVEL_WARN, sn, "alert_rssi_jump",
+                              int(t1), sn=sn, jump_db=round(d, 1),
+                              rssi_from=round(r0, 1), rssi_to=round(r1, 1),
+                              dt_sec=round(dt, 2)))
+
+    # 10) 校验位连续失败（2026-09-13）：从最新一条往回数 `bad_check`，**中间夹了任何
+    #     其它结果（通过 / 别的拒绝码）就停** —— 「连续」是字面意思，不是“窗口里有多少条”。
+    #     同一口径：**仅线索**（可能是设备固件编码错、抄错号、扫描器在乱试，也包括伪造）。
+    if bc_streak > 0:
+        run = 0
+        since_ts = None                      # 取**最早**那条（连续段起点）→ 页面「持续 X」才对
+        first_sn = None
+        for rec in list(id_reports):         # deque 最新在前
+            if rec.get("accepted") or rec.get("error") != "bad_check":
+                break
+            run += 1
+            since_ts = int(rec.get("ts_eff") or now)
+            first_sn = rec.get("sn") or first_sn
+        if run >= bc_streak:
+            out.append(_alert("badcheck_streak", LEVEL_WARN, "recent",
+                              "alert_badcheck_streak", since_ts or now,
+                              n=run, sn=first_sn))
 
     out.sort(key=lambda a: (0 if a["level"] == LEVEL_CRIT else 1, a["since"]))
     return out

@@ -48,7 +48,8 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | 降级策略（§8）：按环节坏在哪自动选级 L0→L3；L2 告警、L3 只做覆盖发现（不当人员出现） | `orpah_id.pick_level()` / `counts_as_presence()` + `alerts.id_degraded` | `test_levels.py` + 首页「降级演示」下拉 |
 | 无认证空口防 spoof（14 条用例 = 13 种攻击 + 1 条合法对照，端到端） | `spoof.py`（含防线映射单一源） | `demo_spoof.py`、`test_spoof.py`、`test_attack.py` |
 | 设备清册 / 走失案件（立案→发现→找回·撤销→结案，含接手人） | `registry.py` / `cases.py` | 页面 + `test_server.py` |
-| 告警（长未上报 / 案件超时 / 处置超时 / 验签失败率 / 降级上报 / 设备时钟 / **能力声明不一致**） | `alerts.py` | `test_alerts.py`、`test_levels.py` |
+| 告警（长未上报 / 案件超时 / 处置超时 / 验签失败率 / 降级上报 / 设备时钟 / **能力声明不一致** / **RSSI 突变** / **校验位连败** / 电量 / 限频丢弃） | `alerts.py` | `test_alerts.py`、`test_levels.py` |
+| **告警通知（出站 Webhook + 页面弹窗）** | `notify.py` + `ui_server._alert_watch` | `test_notify.py` |
 | 指标面板（验签失败率·算法分布 / 平均 RSSI / 处置时长） | `metrics.py` | `test_metrics.py` |
 | 定位：多路由器观测 → 三边/WLS + 95% 椭圆 + 卡尔曼平滑 + 回放 + **误差 CDF（仅模拟环境有真值）** + **补站位建议（几何不行时给可执行坐标）** + **报文流时间轴（序号缺口=丢包证据）** | `motion.py` / `stations.py` / `ui/static/pos.js` | `test_motion.py`、`test_posjs.py`（61 条 + 2 条页面守卫，套件自己报数） |
 | 时钟可信：①无 RTC 设备 `ts=0` → 服务器接收时刻（唯一入口）②设备时钟**偏移/漂移估计**（只估计不改数据；长基线才给漂移，原因可见：基线不足/噪声）③**设备自报能力位 `cap.rtc`**（三态；已签声明防篡改；无 RTC ⇒ 一律服务器时刻且不喂估计器；声明有 RTC 却给不出可用时间 → `id_cap_mismatch` 告警） | `orpah_proto`（`effective_ts`/`cap_of`/`rtc_of`） / `clock.py`（`ClockTracker`） | `test_clock.py`（88 条）+ `test_server.py`（28 条）+ `test_alerts.py` + `demo_clock.py` + 首页「上报控制」能力下拉/ts 置 0 |
@@ -63,7 +64,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 
 | 页面 | 作用 | 主要接口 | 存储 |
 |---|---|---|---|
-| `index.html` | 三节点拓扑 + ORPAH-REPORT 报文流 + L2 消息流 + Orpah ID 卡片 + 发现记录 + 走失表 + 事件历史 + 上报控制/防 spoof 注入；顶部 ⚠ 告警计数 | `/api/status`、`/api/events`(SSE)、`/api/ctl`、`/api/alerts`、`/api/ts/events` | 计数只在内存（**重启归零**，是设计）；事件历史在 IoTDB |
+| `index.html` | 三节点拓扑 + ORPAH-REPORT 报文流 + L2 消息流 + Orpah ID 卡片 + 发现记录 + 走失表 + 事件历史 + 上报控制/防 spoof 注入；顶部 ⚠ 告警计数 + **告警通知卡（Webhook）+ 当前阈值** | `/api/status`、`/api/events`(SSE)、`/api/ctl`、`/api/alerts`、`/api/ts/events` | 计数只在内存（**重启归零**，是设计）；事件历史在 IoTDB；“已推过的告警”也只在内存（**重启会重推一遍活跃告警**） |
 | `registry.html` 设备清册 | 人员↔设备台账、状态、照片、`?sn=` 高亮定位 | `/api/registry`、`/api/upload` | SQLite `persons`/`devices` + `uploads/` |
 | `case.html` 走失案件 | 立案（寻人启事要素）/ 接手 / 找回结案 / 撤销 | `/api/cases`、`/api/registry` | SQLite `cases`/`case_events` |
 | `track.html` 定位与轨迹 | 模拟·真实双模式；站位表（打点/绑定）；WLS 定位 + 95% 椭圆；画布⇄地图 | `/api/ts/query`、`/api/stations`、`/api/config` | IoTDB（设备流 + 各路由器观测）+ SQLite `stations` |
@@ -78,7 +79,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 **HTTP 接口清单**（字段与规则一律见 `API.md`，这里只回答“有哪几个”）——
 GET：`/api/status`、`/api/registry`、`/api/cases`、`/api/stations`、`/api/keys`、`/api/config`、
 `/api/alerts`、`/api/metrics`、`/api/replay`、`/api/checksum`、`/api/ts/query`、`/api/ts/events`、`/api/events`(SSE)；
-POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/重放与伪造 ID 上报/防 spoof）、
+POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/重放与伪造 ID 上报/防 spoof/限频刷量/**告警通知配置·测试发送**）、
 `/api/upload`、`/api/registry`、`/api/cases`、`/api/stations`、`/api/keys`、`/api/sig`。
 
 ## 前端共享件（单一源，改一处多页生效）
@@ -109,7 +110,9 @@ POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/�
 | 7 | 走失案件 | `标记已接手` → 找回后 `找回（结案）`（误报则 `撤销（误报）`） | 状态→已找回/已撤销；设备回「启用」；审计事件落 IoTDB（首页「事件历史」卡可见） |
 | 8 | 回放 | 选 SN + 时间窗（快捷 `30` 分钟）→ `▶ 播放` | 轨迹/距离环/椭圆逐帧推进；进度条 **绿(≥2 台可定位)/橙(仅 1 台)/灰(无观测)**、`跳过无效段`；**报文流时间轴**（点行跳该帧）；`导出轨迹` GPX/GeoJSON/CSV（含 **对照：真值+原始+平滑**，缺口断开成段）；**误差 CDF**（仅模拟环境） |
 | 9 | 指标面板 | 打开（窗口 15 分钟–24 小时 + SN） | 验签失败率与算法分布、平均 RSSI、各案件处置时长（时长不可用会标 `invalid`，不给负数） |
-| 10 | 首页 | `暂停上报` 后等一会儿 | 「告警」卡出现「设备 X 无上报 · 持续 …」+ 顶部 ⚠ 计数（阈值见 `alerts.py` 的 `ORPAH_ALERT_*` 环境变量） |
+| 10 | 首页 | `暂停上报` 后等一会儿 | 「告警」卡出现「设备 X 无上报 · 持续 …」+ 顶部 ⚠ 计数（阈值见 `alerts.py` 的 `ORPAH_ALERT_*` 环境变量，**当前值就在「告警通知」卡的阈值表里**） |
+| 10b | 首页 | 在「告警通知」卡填一个 Webhook 地址（例 `http://127.0.0.1:8899/hook`）→ `应用` → `测试发送` | 接收端收到一条 `event=test` 的 POST；`最近投递` 出现该条（**测试发送不计入「已推告警」**） |
+| 10c | 首页 | 等真告警出现（如继续暂停上报到 30s 后） | 右下角弹出一条告警（写着「通知已推送」）+ 接收端收到 `event=alert`；**同一告警持续期间只有这一条**，级别升高（warn→crit）时才会再推一次 |
 | 11 | 首页 / 攻击流量 | `注入伪造上报` / `跑全部攻击`（Orpah ID 卡），或打开 **`attack.html` 独立面板** | 「期望 X · 实际 Y」对照（`signature_invalid` / `replay_detected` / `unknown_device`…），验签失败率随之上升并触发告警；面板上还能看**每条被哪道防线拦下**、各道防线拦了多少条，以及**只装攻击报文**的流量流（正常周期上报不在里面） |
 
 **自检（黄金样本一键）**：`python run_checks.py` 会把上面的算法/协议断言全跑一遍 ——
@@ -299,6 +302,7 @@ orpah-over-halow/                      # 本项目（ORPAH 业务全链路；纯
 ├── registry.py         # 【业务】人员↔设备台账（SQLite persons/devices，写穿透 + 首启播种）
 ├── cases.py            # 【业务】案件状态机（立案→发现→找回/撤销→结案；handler 与 status 正交）
 ├── alerts.py           # 【业务】告警规则（无存储、按快照重算；阈值走 ORPAH_ALERT_* 环境变量）
+├── notify.py           # 【业务】告警**出站**通知（Webhook；边沿触发 + 失败可见、不重试）
 ├── metrics.py          # 【业务】指标纯计算（验签失败率/算法分布/平均 RSSI/处置时长）
 ├── clock.py            # 【业务】设备时钟偏移/漂移估计（纯计算；只估计不改数据，短窗/跳变/噪声里给 None）
 ├── energy.py           # 【业务】能量轴三参数模型（采集/储能/上报代价 → 间隔与降级；参数是**演示标定值**）
