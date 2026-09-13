@@ -1389,9 +1389,15 @@ function renderPerson(f) {
        （否则“一致”那句会拿空数组去数，显示成“0 台一致”）；
        参数里不带嵌套括号（守卫要能逐处解析该函数的调用，见 test_posjs.page_guard）。 */
     const cs = d.cons || { trust: d.trust, obs: [] };
+    /* SN 是**服务端来的数据**（清册里可改、也可从上报里来）→ 用 `textContent` 填，
+       不拼进 innerHTML：这一格不需要转义，也就没有"忘了转义"这种可能
+       （`test_uicss.py` 有守卫钉住这一格必须是 textContent）。 */
     const tr = document.createElement("tr");
-    tr.innerHTML = '<td class="mono">' + d.sn + '</td>' +
-      '<td class="mono">' + (d.est && d.est.ok
+    const tdSn = document.createElement("td");
+    tdSn.className = "mono";
+    tdSn.textContent = d.sn;
+    tr.appendChild(tdSn);
+    tr.innerHTML = '<td class="mono">' + (d.est && d.est.ok
         ? `( ${d.est.x.toFixed(1)}, ${d.est.y.toFixed(1)} )` : "—") + "</td>" +
       '<td>' + trustText(cs, T) + "</td>" +
       '<td class="mono">' + ((d.sigma === null || d.sigma === undefined)

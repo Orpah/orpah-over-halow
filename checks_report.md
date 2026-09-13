@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 22:12:16
-- git HEAD：`950b2a5`
+- 时间：2026-09-13 22:21:22
+- git HEAD：`830e208`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（31/31 套件通过）
 
@@ -25,7 +25,7 @@
 | 抓包解析 / 双源对照 | `test_capture.py` | ✅ PASS | 0.1s | 通过 |
 | 设备时钟漂移（长基线） | `demo_clock.py` | ✅ PASS | 0.1s | 通过 |
 | 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
-| 地图共享件（map.js：基点/野外包 + maps.py） | `test_mapjs.py` | ✅ PASS | 0.1s | 通过 |
+| 地图共享件（map.js：基点/野外包 + maps.py） | `test_mapjs.py` | ✅ PASS | 0.2s | 通过 |
 | 首页转义口径（app.js：esc/alertText 单一出口） | `test_appjs.py` | ✅ PASS | 0.0s | 通过 |
 | 限频（§5.8 令牌桶 / 两条防线） | `test_ratelimit.py` | ✅ PASS | 0.1s | 通过 |
 | 设备侧自限频（§5.8 设备那一环，自愿） | `test_selflimit.py` | ✅ PASS | 0.1s | 通过 |
@@ -35,11 +35,11 @@
 | UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 2.6s | 通过 |
 | 数据新鲜度（freshness.py + fresh.js） | `test_fresh.py` | ✅ PASS | 0.2s | 通过 |
 | L1 端到端 | `demo_l1.py` | ✅ PASS | 1.4s | 通过 |
-| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.3s | 通过 |
+| L2 消息流 | `demo_l2.py` | ✅ PASS | 2.2s | 通过 |
 | L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.2s | 通过 |
-| L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.3s | 通过 |
+| L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.2s | 通过 |
 | 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.8s | 通过 |
-| 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 7.7s | 通过 |
+| 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 7.6s | 通过 |
 
 ## 关键输出
 
@@ -141,7 +141,7 @@
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
-    Ran 40 tests in 0.476s
+    Ran 40 tests in 0.490s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.0s）
@@ -206,7 +206,7 @@
       OK   replay.html 跑多帧持续偏差扫描（biasScan + 剔除最狠者后重扫）
       OK   track.html 人级聚合走 pos.js 的 fusePerson()/fuseText()（单一实现）
 
-### 地图共享件（map.js：基点/野外包 + maps.py） — PASS（0.1s）
+### 地图共享件（map.js：基点/野外包 + maps.py） — PASS（0.2s）
 
     == 基点导入/换算/存储（map.js 原文，node 跑） ==
     == 页面守卫（两页一致、入口齐全） ==
@@ -281,7 +281,7 @@
     == 头部导航：单一源（nav.js）+ 没有孤岛页面 ==
     == 信息层级：长口径折叠 + 标签成对 + 长列表限高 ==
     == 窄屏：页面局部多列网格要收成单列 ==
-    == 页面内联脚本：node --check ==
+    == 转义口径：服务端字符串不拼进 innerHTML ==
       OK   每页内联脚本语法正确（错一处 = 整页 JS 全不执行）
     UI 样式守卫：全部通过
 
@@ -300,7 +300,7 @@
     === ORPAH L1 验收 ===
     结果: [PASS]
 
-### L2 消息流 — PASS（2.3s）
+### L2 消息流 — PASS（2.2s）
 
     --- 分支一：走失库未命中 sn=CN-WH01-9AF3C1D2 ---
     --- mark 走失 sn=CN-WH01-9AF3C1D2（Server 下发 LOST-TABLE）---
@@ -318,7 +318,7 @@
     --- 阶段E：去重测试（重发已接受的 seq=4）---
     --- 阶段F：SN 校验（非法 sn → FORMAT-ERR）---
 
-### L3b 主动拉表 — PASS（1.3s）
+### L3b 主动拉表 — PASS（1.2s）
 
     --- 模拟 Router 重启（清空本地缓存 + 未同步）---
     --- Server untrack sn=CN-WH01-9AF3C1D2（变更推送，Router 无需再拉）---
@@ -331,14 +331,14 @@
 
       无认证空口防 spoof 端到端演示
       被冒充设备 SN : CN-WH01-9AF3C1D2
-      攻击者 SN    : CN-WH01-2R8925C28M-79（未登记 → 服务器不认识）
+      攻击者 SN    : CN-WH01-QHS793VW7H-58（未登记 → 服务器不认识）
       链路          : Client→STA→空口→AP→Router→UDP:19847→Server
       用例数        : 14（含 1 条合法对照）
     [server] 监听 127.0.0.1:19847 (UDP)，等待 ORPAH 报文…
       🎉 防 spoof 端到端验收全部通过
     ==========================================================================
 
-### 限频（§5.8）端到端 — PASS（7.7s）
+### 限频（§5.8）端到端 — PASS（7.6s）
 
       限频（§5.8）端到端演示
       链路        : Client→STA→空口→AP→Router→UDP:19947→Server

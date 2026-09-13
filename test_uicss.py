@@ -148,6 +148,27 @@ def check_hierarchy():
     check("首页长表用了 .scroll-y", idx.count('class="scroll-y"') >= 2, idx.count('class="scroll-y"'))
 
 
+def check_escaping():
+    """服务端来的字符串**不许拼进 innerHTML**（用 textContent）。
+
+    起因（2026-09-13 审查）：人级聚合的表格一开始把 `d.sn` 直接拼进 `tr.innerHTML`。
+    SN 是**服务端数据**（清册里可改/可从上报来），而那次审查只核了“已有代码都 esc 过”，
+    没看出新加的这一格没转义 —— 这类“新代码自己开了个口子”正是要防的。
+    这里只钉**这一格**（`textContent = d.sn`），不搞全页启发式（那会一堆误报）。
+    """
+    print("== 转义口径：服务端字符串不拼进 innerHTML ==")
+    p = os.path.join(STATIC, "track.html")
+    src = open(p, encoding="utf-8").read()
+    check("人级聚合表的 SN 用 textContent 填（不拼 innerHTML）",
+          "tdSn.textContent = d.sn" in src and "+ d.sn +" not in src)
+    # 精确到“有没有被拼进 HTML”，**不**数出现次数、也不禁 `${d.sn}` 本身 ——
+    # `o.textContent = \`${d.sn} · …\`` 是安全的（textContent 不解析 HTML），
+    # 那种计数/关键词式守卫只会制造误报（本节第一版就误报了一次）。
+    bad = [l.strip()[:70] for l in src.splitlines()
+           if "innerHTML" in l and "d.sn" in l]
+    check("SN 没有被拼进 innerHTML（用 textContent 是允许的）", not bad, bad)
+
+
 def check_inline_js():
     """每页**内联脚本**的语法必须能过 `node --check`（2026-09-13 真踩过）。
 
@@ -302,6 +323,7 @@ def main():
     check_nav()
     check_hierarchy()
     check_narrow_grids()
+    check_escaping()
     check_inline_js()
     if FAILS:
         print(f"UI 样式守卫：有问题（{len(FAILS)} 处）")
