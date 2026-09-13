@@ -145,6 +145,7 @@
     <button class="btn" id="expCsv">CSV</button>
     <span class="hint" id="expMsg" data-i18n="rp_exp_hint">导出整窗轨迹（不只已回放部分）；缺口断开成多段，不连线。经纬度按上面的基点换算。</span>
   </div>
+  <p class="hint" data-i18n="rp_exp_trust_hint">导出也带可信度：CSV 有 trust/s0 两列（与误差同一张表，能看出“误差大那段是不是本来就不该信”）；GPX 每点带 orpah:trust / orpah:s0 扩展（命名空间 urn:orpah:trust:1），并在轨迹 desc 里写小结；GeoJSON 每个 Feature 带与坐标一一对齐的 trusts 数组。</p>
   <canvas id="canvasReplay" width="620" height="420"></canvas>
   <div id="map" style="display:none"></div>
   <p class="hint">
@@ -711,7 +712,8 @@ function measureTrustWin() {
   S.frames.forEach((f, i) => {
     const sm = S.sm[i] || null;
     const c = consensus(f.obs, consOpts(f.t, sm && sm.vx, sm && sm.vy));
-    f.trust = c.trust;                      // 记在帧上：轨迹/进度条着色都用它
+    f.trust = c.trust;                      // 记在帧上：轨迹/进度条/导出都用它
+    f.s0 = c.sigma0;                        // 拟合残差（导出附上，便于事后核“哪段拟合偏松”）
     tally[c.trust] = (tally[c.trust] || 0) + 1;
     if (c.dropped.length) drop++;
     if (c.loose) loose++;
@@ -900,9 +902,30 @@ function pairRows() {
       err: Math.hypot(raw.x - tr.x, raw.y - tr.y),
       sx: sm ? sm.x : null, sy: sm ? sm.y : null,
       errSm: sm ? Math.hypot(sm.x - tr.x, sm.y - tr.y) : null,
+      trust: raw.trust || "",          // 逐帧可信度（与页面上看到的是同一份判定）
+      s0: raw.s0 === undefined ? null : raw.s0,
     });
   });
   return out;
+}
+
+/* 一段轨迹的可信度小结（写进 GPX 的 <desc> / 仅当该段帧上真有 trust 时）。
+   为什么要它：GPX 是拿去野外/GIS 的成果，若只给坐标，接收方会把“冲突段”的坐标当真。 */
+function trustDesc(run) {
+  const tally = {};
+  const s0 = [];
+  run.forEach(p => {
+    if (!p.trust) return;
+    tally[p.trust] = (tally[p.trust] || 0) + 1;
+    if (p.s0 !== null && p.s0 !== undefined && isFinite(p.s0)) s0.push(p.s0);
+  });
+  const n = Object.keys(tally).reduce((a, k) => a + tally[k], 0);
+  if (!n) return null;
+  s0.sort((a, b) => a - b);
+  const parts = ["verified", "single", "conflict", "none"]
+    .filter(k => tally[k]).map(k => k + " " + (100 * tally[k] / n).toFixed(0) + "%");
+  return "trust: " + parts.join(" / ") + " (n=" + n + ")" +
+         (s0.length ? ", median sigma0 " + s0[s0.length >> 1].toFixed(2) : "");
 }
 
 /* runsOf(pts, reset 断开?) —— 与 exportRuns 同一缺口规则；单独一份是因为真值可能比估计少。 */
@@ -947,16 +970,29 @@ function gpxOf(groups, sn) {
     const segs = g.runs.map(run =>
       "    <trkseg>\n" + run.map(p => {
         const ll = toLatLng(p.x, p.y);
+        /* 每点附**可信度**（GPX 1.1 的 extensions 就是给这类需求留的口）：
+           否则接收方只看坐标，会把“观测冲突”那段的点当真。无判定的源（真值）不加。 */
+        const ext = p.trust
+          ? "\n        <extensions><orpah:trust>" + xmlEsc(p.trust) + "</orpah:trust>" +
+            (p.s0 === null || p.s0 === undefined || !isFinite(p.s0)
+              ? "" : "<orpah:s0>" + p.s0.toFixed(3) + "</orpah:s0>") +
+            "</extensions>"
+          : "";
         return '      <trkpt lat="' + ll[0].toFixed(7) + '" lon="' + ll[1].toFixed(7) + '">' +
-               "<time>" + new Date(p.t).toISOString() + "</time></trkpt>\n";
+               "<time>" + new Date(p.t).toISOString() + "</time>" + ext + "</trkpt>\n";
       }).join("") + "    </trkseg>\n").join("");
     // 单源时名字保持与以前一致（就是 SN）；对照导出才在名字里标出是哪一条
     const name = one ? sn : sn + " " + SRC_LABEL[g.src];
-    return "  <trk><name>" + xmlEsc(name) + "</name><type>ORPAH " +
+    // 轨道级小结：把这段的可信度分布写在 <desc>，一眼能看出“这段到底能不能用”
+    const descs = g.runs.map(trustDesc).filter(Boolean);
+    const desc = descs.length ? "<desc>" + xmlEsc(descs.join(" | ")) + "</desc>" : "";
+    return "  <trk><name>" + xmlEsc(name) + "</name>" + desc + "<type>ORPAH " +
            SRC_LABEL[g.src] + "</type>\n" + segs + "  </trk>\n";
   }).join("");
   return '<?xml version="1.0" encoding="UTF-8"?>\n' +
-    '<gpx version="1.1" creator="ORPAH-over-HaLow simulator" xmlns="http://www.topografix.com/GPX/1/1">\n' +
+    '<gpx version="1.1" creator="ORPAH-over-HaLow simulator"\n' +
+    '     xmlns="http://www.topografix.com/GPX/1/1"\n' +
+    '     xmlns:orpah="urn:orpah:trust:1">\n' +
     "  <metadata><name>" + xmlEsc(sn) + "</name><time>" + new Date().toISOString() + "</time></metadata>\n" +
     tracks + "</gpx>\n";
 }
@@ -965,13 +1001,18 @@ function geoOf(groups, sn) {
   const feats = [];
   groups.forEach(g => g.runs.forEach(run => feats.push({
     type: "Feature",
-    properties: {
+    properties: Object.assign({
       sn: sn, source: SRC_LABEL[g.src],
       points: run.length,
       from: new Date(run[0].t).toISOString(),
       to: new Date(run[run.length - 1].t).toISOString(),
       from_ms: run[0].t, to_ms: run[run.length - 1].t,
-    },
+    /* 逐点可信度**与坐标一一对齐**（GeoJSON 的 properties 是要素级的，没有逐点位置，
+       所以用数组对齐并在此写明——不要让下游去猜、也不要只给一个汇总把冲突段抹平）。 */
+    }, run.every(p => p.trust)
+         ? { trusts: run.map(p => p.trust),
+             trust_desc: trustDesc(run) }
+         : {}),
     geometry: {
       type: "LineString",
       coordinates: run.map(p => {
@@ -992,23 +1033,25 @@ function csvOf(src) {
   if (src === "cmp") {
     const rows = pairRows();
     let s = head(["t_ms", "time", "truth_x", "truth_y", "est_x", "est_y", "err_m",
-                  "sm_x", "sm_y", "sm_err_m", "truth_lat", "truth_lon", "est_lat", "est_lon"]);
+                  "sm_x", "sm_y", "sm_err_m", "truth_lat", "truth_lon", "est_lat", "est_lon",
+                  "trust", "s0"]);
     for (const r of rows) {
       const tl = toLatLng(r.tx, r.ty), el = toLatLng(r.rx, r.ry);
       s += [r.t, new Date(r.t).toISOString(), n6(r.tx), n6(r.ty), n6(r.rx), n6(r.ry),
             r.err.toFixed(3), n6(r.sx), n6(r.sy),
             r.errSm == null ? "" : r.errSm.toFixed(3),
-            tl[0].toFixed(7), tl[1].toFixed(7), el[0].toFixed(7), el[1].toFixed(7)].join(",") + "\n";
+            tl[0].toFixed(7), tl[1].toFixed(7), el[0].toFixed(7), el[1].toFixed(7),
+            r.trust, r.s0 == null ? "" : Number(r.s0).toFixed(3)].join(",") + "\n";
     }
     return s;
   }
   const runs = exportRuns(src);
-  const pts = [].concat.apply([], runs);
-  let s = head(["t_ms", "time", "x", "y", "lat", "lon", "run"]);
+  let s = head(["t_ms", "time", "x", "y", "lat", "lon", "run", "trust", "s0"]);
   runs.forEach((run, ri) => run.forEach(p => {
     const ll = toLatLng(p.x, p.y);
     s += [p.t, new Date(p.t).toISOString(), n6(p.x), n6(p.y),
-          ll[0].toFixed(7), ll[1].toFixed(7), ri + 1].join(",") + "\n";
+          ll[0].toFixed(7), ll[1].toFixed(7), ri + 1,
+          p.trust || "", (p.s0 === null || p.s0 === undefined) ? "" : Number(p.s0).toFixed(3)].join(",") + "\n";
   }));
   return s;
 }

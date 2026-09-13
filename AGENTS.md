@@ -210,6 +210,11 @@
     ② **缺口必须断开**（> `ROUTER_MAX_AGE_MS` 或滤波器 `reset` → GPX 多 `<trkseg>` / GeoJSON 多
     `LineString` Feature），跨缺口的直线不是真走出来的路；③ 经纬度**只走 `map.js` 的 `toLatLng`**
     （与地图落点同一个换算），GeoJSON 坐标是 `[lng, lat]`。纯前端，无新接口。
+    **④ 导出必须带可信度（2026-09-13）**：否则接收方只看坐标，会把“观测冲突”那段的点当真 ——
+    CSV 有 `trust`/`s0` 两列（`sm`/`raw`/`cmp` 三个来源都有）；GPX 每点带
+    `<orpah:trust>`/`<orpah:s0>` 扩展（命名空间 `urn:orpah:trust:1`）+ 轨道 `<desc>` 小结；
+    GeoJSON 每个 Feature 带**与坐标一一对齐**的 `trusts` 数组（properties 是要素级的，
+    没有逐点位置，所以数组对齐并写明，不要让下游去猜）。
   - **对照导出（真值+原始+平滑，2026-09-13 补）**：第四个来源 `cmp` + 第三种格式 **CSV**。
     分工：GPX/GeoJSON 是**地图格式**（“看哪儿偏了”：三组线段 + `properties.source`），
     CSV 是**逐帧对照表**（“偏了多少”：`t,truth_x/y,est_x/y,err_m,sm_x/y,sm_err_m,+经纬度`）——

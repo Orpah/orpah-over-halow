@@ -517,6 +517,15 @@ def page_guard():
         print("  FAIL replay.html：进度条/画布/地图没有共用同一套可信度配色")
         return 1
     print("  OK   replay.html 可信度着色共用 TRUST_COLOR/TRUST_STYLE（颜色+线型单一源）")
+    # 导出也要带可信度：否则接收方只看坐标，会把“观测冲突”那段的点当真
+    for needle, why in (('"trust", "s0"', "CSV 没有 trust/s0 列"),
+                        ("orpah:trust", "GPX 没有逐点可信度扩展"),
+                        ("trusts:", "GeoJSON 没有与坐标对齐的 trusts 数组"),
+                        ("function trustDesc", "导出缺少可信度小结（GPX <desc>）")):
+        if needle not in rp2:
+            print(f"  FAIL replay.html：{why}")
+            return 1
+    print("  OK   replay.html 导出带可信度（CSV 列 + GPX 扩展/小结 + GeoJSON trusts）")
     return 0
 
 
