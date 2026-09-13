@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 10:51:44
-- git HEAD：`3a094b4`
+- 时间：2026-09-13 10:57:03
+- git HEAD：`83644e2`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（15/15 套件通过）
 
@@ -13,9 +13,9 @@
 | 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.2s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 0.1s | 通过 |
-| 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
+| 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.0s | 通过 |
 | 时钟可信（ts=0 无 RTC） | `test_clock.py` | ✅ PASS | 0.5s | 通过 |
-| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.6s | 通过 |
+| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.5s | 通过 |
 | UI 服务器契约 | `test_server.py` | ✅ PASS | 0.7s | 通过 |
 | 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.1s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
@@ -68,7 +68,7 @@
     PASS  C：刚过起步但未到升级点 → warn
     PASS  C：超过升级点 → crit
 
-### 指标面板纯计算 — PASS（0.1s）
+### 指标面板纯计算 — PASS（0.0s）
 
     PASS  签名：总数/通过/被拒
     PASS  签名：失败率 1/4
@@ -88,7 +88,7 @@
       OK   并发：4 写 × 50 条 + 2 读线程 → 无异常且一条不丢
     时钟可信测试全部通过
 
-### IoTDB 审计/时间窗 — PASS（0.6s）
+### IoTDB 审计/时间窗 — PASS（0.5s）
 
     == 1. actor 字段 ==
     == 2. query_events 回读 actor ==
@@ -107,7 +107,7 @@
     [server] [id 3] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=- accepted=False
-    Ran 29 tests in 0.534s
+    Ran 29 tests in 0.459s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -169,8 +169,8 @@
       OK   WLS：标准入参（{s,dist}）在精确距离下复原 (5,5)（证明读的是 o.s.x/o.s.y）
       OK   椭圆：特征值→半轴（√(5.991·4) / √(5.991·1)，长短轴比 2）
       OK   椭圆：退化协方差（近乎共线）→ degenerate=true（半径仍可给，形状不可信）
-      OK   track.html 判定走 consensus() + consOpts()（单一实现，不另传阈值）
       OK   两页共用 pos.js 的 trustText()（可信度文案单一源）
+      OK   replay.html 可信度着色共用 TRUST_COLOR/TRUST_STYLE（颜色+线型单一源）
 
 ### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.1s）
 

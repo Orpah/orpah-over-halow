@@ -114,7 +114,7 @@
     <label><input type="checkbox" id="rpSkip" checked> <span data-i18n="rp_skip">跳过无效段</span></label>
     <span class="hint" id="rpValid"></span>
   </div>
-  <p class="hint" data-i18n="rp_bar_legend">进度条：绿=可定位（≥2 台有观测）· 橙=仅 1 台（信息不足）· 灰=无观测。无效段保留不删（“某段时间完全没被任何路由器听到”本身就是线索）。</p>
+  <p class="hint" data-i18n="rp_bar_legend">进度条颜色 = 该时刻的可信度：绿=交叉校验通过 · 橙=单一来源（无冗余）· 红=观测冲突 · 灰=该格内没有可定位帧（无观测或只 1 台）。无效段保留不删（“某段时间完全没被任何路由器听到”本身就是线索）。</p>
   <div class="row">
     <label><span data-i18n="tk_view">视图</span>
       <select id="view">
@@ -151,8 +151,8 @@
     <label><input type="checkbox" id="rpSmooth" checked> <span data-i18n="rp_smooth">轨迹平滑（恒速卡尔曼）</span></label>
     <span class="hint" data-i18n="rp_smooth_hint">平滑用恒速卡尔曼（不是滑动平均）：靠速度外推，几乎没有滞后；搜索半径用滤波后协方差，不用测量协方差。</span>
   </p>
-  <p class="hint" data-i18n="rp_legend">蓝方块=站位、蓝圈=该站位的距离环、红叉=该时刻的定位估计、黄虚线椭圆=95% 置信范围、红线=已回放出的估计轨迹、绿线=平滑轨迹（恒速卡尔曼）、灰点=当时无观测的站位。</p>
-  <p class="hint" data-i18n="rp_legend_map">地图视图：蓝点=站位、蓝圈=距离环（半径即测距）、红点=该时刻定位估计、黄虚线多边形=95% 置信椭圆、红线=已回放轨迹（跨无观测缺口会断开，不会画成一段直路）。地图瓦片需联网。</p>
+  <p class="hint" data-i18n="rp_legend">蓝方块=站位、蓝圈=该站位的距离环、十字=该时刻的定位估计、黄虚线椭圆=95% 置信范围、轨迹按可信度分色+分线型（绿实线=交叉校验通过、橙虚线=单一来源、红点线=冲突；跨缺口断开）、灰虚线=平滑轨迹（平滑≠更可信）、灰点=当时无观测的站位。</p>
+  <p class="hint" data-i18n="rp_legend_map">地图视图：蓝点=站位、蓝圈=距离环（半径即测距）、红点=该时刻定位估计、黄虚线多边形=95% 置信椭圆、轨迹按可信度分色+分线型（绿实线=交叉校验通过、橙虚线=单一来源、红点线=冲突，跨无观测缺口会断开）、灰虚线=平滑轨迹。地图瓦片需联网。</p>
   <div class="stat mono">
     <div class="cell"><span class="k" data-i18n="rp_lab_used">参与定位</span><span class="v" id="rpUsed">-</span></div>
     <div class="cell"><span class="k" data-i18n="rp_lab_loc">定位估计</span><span class="v v-ok" id="rpLoc">-</span></div>
@@ -312,6 +312,36 @@ function trailRuns() {
   return runs;
 }
 
+/* 可信度 → 颜色（**唯一一份**）：进度条 / 画布轨迹 / 地图轨迹三处共用。
+   绿=交叉校验通过（多台互相印证）、橙=单一来源（无冗余，未交叉校验）、
+   红=观测冲突（互相矛盾）、灰=无判定（观测不足或该时段没有帧）。
+   **不是精度指标**：颜色只说“这几点能不能互证”，偏差大小看残差/椭圆/搜索半径。 */
+const TRUST_COLOR = { verified: "#3fb950", single: "#d29922", conflict: "#f85149", none: "#30363d" };
+/* 线型是**第二个通道**：绿色↔红色在红绿色盲下很难分（本仓对配色有要求），
+   所以除了颜色还给线型/线宽——实线=通过、虚线=单一来源、点线更粗=冲突。灰太浅看不出线型时也不影响。 */
+const TRUST_STYLE = { verified: { dash: [], w: 2 },
+                      single: { dash: [6, 4], w: 2 },
+                      conflict: { dash: [2, 3], w: 3 },
+                      none: { dash: [1, 4], w: 2 } };
+
+/* 已回放（`t <= 光标`）的估计轨迹：先按**缺口规则**分段（直接复用导出的同一份 `exportRuns`，
+   不另写一套：跳缺口的直线不是真走出来的路），段内再按可信度分成颜色子段。
+   返回 `[{tier, pts:[{x,y}]}]` —— 画布与地图共用（免得两处各切一遍、切法再漂）。
+   **不看未来**：只取 `f.t <= t`。 */
+function trustRuns(t) {
+  const out = [];
+  for (const run of exportRuns("raw")) {
+    let cur = null;
+    for (const f of run) {
+      if (f.t > t) break;
+      const tier = f.trust || "none";
+      if (!cur || cur.tier !== tier) { cur = { tier, pts: [] }; out.push(cur); }
+      cur.pts.push({ x: f.x, y: f.y });
+    }
+  }
+  return out;
+}
+
 function drawMapView(obs, est, ell) {
   ensureMap();
   refreshMapMarks();
@@ -333,24 +363,32 @@ function drawMapView(obs, est, ell) {
                                   fillColor: "#f85149", fillOpacity: 0.9 }).addTo(lmap);
     } else { lEst.setLatLng(ll); }
   } else if (lEst) { lmap.removeLayer(lEst); lEst = null; }
-  const runs = trailRuns();
-  while (lRuns.length > runs.length) lRuns.pop().remove();
-  runs.forEach((pts, i) => {
-    if (!lRuns[i]) lRuns[i] = L.polyline([], { color: "#f85149", weight: 2 }).addTo(lmap);
+  /* 估计轨迹：按可信度分色（与画布同一份 trustRuns / TRUST_COLOR） */
+  const tRuns = trustRuns(S.t);
+  while (lRuns.length > tRuns.length) lRuns.pop().remove();
+  tRuns.forEach((run, i) => {
+    const color = TRUST_COLOR[run.tier] || TRUST_COLOR.none;
+    const st = TRUST_STYLE[run.tier] || TRUST_STYLE.none;
+    const pts = run.pts.map(p => toLatLng(p.x, p.y));
+    const style = { color, weight: st.w, dashArray: st.dash.length ? st.dash.join(" ") : null };
+    if (!lRuns[i]) lRuns[i] = L.polyline([], style).addTo(lmap);
+    lRuns[i].setStyle(style);
     lRuns[i].setLatLngs(pts);
   });
-  /* 平滑轨迹（绿）：同样跨缺口断开 */
+  /* 平滑轨迹（中性灰虚线）：**不用绿色** —— 绿在这个页面里已经表示“交叉校验通过”。
+     平滑轨迹的语义是“更稳的位置”，不是“更可信”（两者分开，见 AGENTS：精度 ≠ 可信度）。 */
   const sruns = (smoothOn() && S.sm.length > 1) ? smRuns(S.t).map(r => r.map(p => toLatLng(p.x, p.y))) : [];
   while (lSmRuns.length > sruns.length) lSmRuns.pop().remove();
   sruns.forEach((pts, i) => {
-    if (!lSmRuns[i]) lSmRuns[i] = L.polyline([], { color: "#3fb950", weight: 2 }).addTo(lmap);
+    if (!lSmRuns[i]) lSmRuns[i] = L.polyline([], { color: "#8b949e", weight: 2,
+                                                   dashArray: "4 4" }).addTo(lmap);
     lSmRuns[i].setLatLngs(pts);
   });
   const sv = smoothAt(S.t);
   if (sv) {
     const ll = toLatLng(sv.pt.x, sv.pt.y);
-    if (!lSmDot) lSmDot = L.circleMarker(ll, { color: "#3fb950", radius: 6, weight: 2,
-      fillColor: "#3fb950", fillOpacity: 0.9 }).addTo(lmap);
+    if (!lSmDot) lSmDot = L.circleMarker(ll, { color: "#8b949e", radius: 6, weight: 2,
+      fillColor: "#8b949e", fillOpacity: 0.9 }).addTo(lmap);
     else lSmDot.setLatLng(ll);
   } else if (lSmDot) { lmap.removeLayer(lSmDot); lSmDot = null; }
 }
@@ -476,7 +514,10 @@ function analyzeValid() {
   }
 }
 
-/* 进度条分色：绿=可定位 / 橙=仅 1 台 / 灰=无观测
+/* 进度条分色：**按可信度**（不再是“能不能定位”）——绿=交叉校验通过 / 橙=单一来源 /
+   红=冲突 / 灰=该格内没有可定位帧（无观测或只有 1 台）。
+   每个小格的颜色 = 该格**末尾时刻生效**的那一帧的判定（帧已按时间升序，指针往前走，O(n)）；
+   帧不在本格内 → 灰（不能拿很久以前的判定往后面涂）。
    关键：**像素缓冲宽度必须 = 显示宽度×dpr**，否则颜色会被拉伸，
    某个时刻的颜色就不在滑块对应的位置上（左右等长但中间错位）。 */
 function drawValidBar() {
@@ -489,9 +530,13 @@ function drawValidBar() {
   const ctx = c.getContext("2d");
   ctx.clearRect(0, 0, c.width, c.height);
   const px = c.width / seg.n;
+  let j = 0;
   for (let i = 0; i < seg.n; i++) {
-    const cnt = seg.counts[i];
-    ctx.fillStyle = cnt >= 2 ? "#3fb950" : (cnt === 1 ? "#d29922" : "#30363d");
+    const t0 = S.from + i * seg.step, t1 = t0 + seg.step;
+    while (j < S.frames.length && S.frames[j].t <= t1) j++;
+    const f = j > 0 ? S.frames[j - 1] : null;
+    const tier = (f && f.t >= t0) ? (f.trust || "none") : "none";
+    ctx.fillStyle = TRUST_COLOR[tier] || TRUST_COLOR.none;
     ctx.fillRect(i * px, 0, Math.max(1, Math.ceil(px)), c.height);
   }
 }
@@ -666,6 +711,7 @@ function measureTrustWin() {
   S.frames.forEach((f, i) => {
     const sm = S.sm[i] || null;
     const c = consensus(f.obs, consOpts(f.t, sm && sm.vx, sm && sm.vy));
+    f.trust = c.trust;                      // 记在帧上：轨迹/进度条着色都用它
     tally[c.trust] = (tally[c.trust] || 0) + 1;
     if (c.dropped.length) drop++;
     if (c.loose) loose++;
@@ -1038,17 +1084,28 @@ function draw(obs, est, ell) {
     ctx.fillStyle = "#c9d1d9"; ctx.font = "11px monospace";
     ctx.fillText(o.s.name || o.s.sid, sx + 7, sy - 7);
   });
-  if (S.trail.length > 1) {                          // 已回放出的估计轨迹（null = 缺口，断开）
-    ctx.strokeStyle = "#f85149"; ctx.lineWidth = 2;
-    ctx.beginPath();
-    let started = false;
-    for (const p of S.trail) {
-      if (!p) { if (started) { ctx.stroke(); ctx.beginPath(); started = false; } continue; }
-      const X = cx + p.x * SCALE, Y = cy - p.y * SCALE;
-      if (started) ctx.lineTo(X, Y); else { ctx.moveTo(X, Y); started = true; }
+  /* 已回放的估计轨迹：**按可信度分色**（绿/橙/红，见 TRUST_COLOR）——
+     一眼能看出“哪一段只是单一来源、哪一段是观测冲突”（冲突段的点本身就不该信）。 */
+  for (const run of trustRuns(S.t)) {
+    const st = TRUST_STYLE[run.tier] || TRUST_STYLE.none;
+    ctx.strokeStyle = TRUST_COLOR[run.tier] || TRUST_COLOR.none;
+    ctx.lineWidth = st.w;
+    ctx.setLineDash(st.dash);
+    if (run.pts.length === 1) {                     // 孤点也要看得见（否则一帧冲突就“沉”了）
+      const X = cx + run.pts[0].x * SCALE, Y = cy - run.pts[0].y * SCALE;
+      ctx.setLineDash(st.dash);
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fillRect(X - 2, Y - 2, 4, 4);
+      continue;
     }
+    ctx.beginPath();
+    run.pts.forEach((p, i) => {
+      const X = cx + p.x * SCALE, Y = cy - p.y * SCALE;
+      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    });
     ctx.stroke();
   }
+  ctx.setLineDash([]);
   /* 地面真值路线（灰白细线，**仅模拟环境**有）：让 CDF 那张图有个视觉对照 ——
    “红线离真值路线多远”就是误差本身。真机没有真值 → 这段不画。
    点取自 S.truth（按帧时刻精确取样，与误差计算同一份数据）。 */
@@ -1063,9 +1120,11 @@ function draw(obs, est, ell) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
-  /* 平滑轨迹（恒速卡尔曼，绿）：与原始（红）并列画，不改原始结果 */
+  /* 平滑轨迹（恒速卡尔曼）：**中性灰虚线**（不用绿色 —— 绿在本页已表示“交叉校验通过”；
+     平滑只意味着“更稳”，不等于“更可信”：精度 ≠ 可信度）。与估计轨迹并列画，不改原始结果。 */
   if (smoothOn() && S.sm.length > 1) {
-    ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 2;
+    ctx.strokeStyle = "#8b949e"; ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
     for (const run of smRuns(S.t)) {
       ctx.beginPath();
       run.forEach((p, i) => {
@@ -1077,9 +1136,10 @@ function draw(obs, est, ell) {
     const sv = smoothAt(S.t);
     if (sv) {
       const X = cx + sv.pt.x * SCALE, Y = cy - sv.pt.y * SCALE;
-      ctx.fillStyle = "#3fb950";
+      ctx.fillStyle = "#8b949e";
       ctx.beginPath(); ctx.arc(X, Y, 4.5, 0, 2 * Math.PI); ctx.fill();
     }
+    ctx.setLineDash([]);
   }
   if (est) {
     if (ell) {                                       // 95% 置信椭圆

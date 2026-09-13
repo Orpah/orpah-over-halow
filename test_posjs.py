@@ -504,6 +504,19 @@ def page_guard():
             print(f"  FAIL {page} 自己写了一份 trustText（必须共用 pos.js 那一份）")
             return 1
     print("  OK   两页共用 pos.js 的 trustText()（可信度文案单一源）")
+    # 可信度着色：颜色与线型只能有一份映射（进度条 + 画布轨迹 + 地图轨迹三处共用），
+    # 三处各写一套色迟早漂移（“同一时刻在进度条上是绿的、在轨迹上是红的”就是这类 bug）
+    with open(os.path.join(HERE, "ui", "static", "replay.html"), encoding="utf-8") as f:
+        rp2 = f.read()
+    for needle, why in (("const TRUST_COLOR", "缺 TRUST_COLOR（可信度→颜色单一源）"),
+                        ("const TRUST_STYLE", "缺 TRUST_STYLE（线型第二通道，色盲也能分辨）")):
+        if needle not in rp2:
+            print(f"  FAIL replay.html：{why}")
+            return 1
+    if rp2.count("TRUST_COLOR[") < 3 or rp2.count("TRUST_STYLE[") < 2:
+        print("  FAIL replay.html：进度条/画布/地图没有共用同一套可信度配色")
+        return 1
+    print("  OK   replay.html 可信度着色共用 TRUST_COLOR/TRUST_STYLE（颜色+线型单一源）")
     return 0
 
 
