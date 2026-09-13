@@ -82,6 +82,27 @@ def loop_cores(cores, stop):
         time.sleep(0.005)
 
 
+def wait_budget(rtr, rl, sn, need, mac=None, timeout=20.0):
+    """等这条报文**一路上所有桶**都攒够 `need` 个令牌（只等一个桶不够 —— 2026-09-13 实测踩过）。
+
+    一条已签 ID-REPORT 要依次过 **三个**桶：Router 侧转发（按 SN，burst 40）、
+    Server 侧 per-SN（burst 5）、Server 侧 per-Router（源地址，burst 10）。
+    前置只等其中一个时会出现两种**看起来像限频坏了**的现象：
+      · 只等 Server 的 per-SN → 报文死在 Router 转发桶（页面上 0 接受、0 丢弃，查不出死在哪）；
+      · 等了两侧的 per-SN 但没等 Server 的 per-Router → 4 条全被 Server 丢掉（`srv 丢 4 / rtr 丢 0`）。
+    所以：**“上游有额度”这件事必须按整条路径来判**，缺一个都不算。
+    `mac` 给了就连 Router 侧的 probe 桶（未签名 REQ-CONNECT 走那条）一起等。
+    """
+    def ready():
+        if rtr.sn.tokens(sn) < need or rl.sn.tokens(sn) < need or rl.router.tokens("127.0.0.1") < need:
+            return False
+        return (mac is None) or (rtr.router.tokens(mac) >= need)
+    ok = wait_until(ready, timeout=timeout, interval=0.05)
+    return ok, (f"rtr.sn={rtr.sn.tokens(sn)} rl.sn={rl.sn.tokens(sn)} "
+                f"rl.router={rl.router.tokens('127.0.0.1')}"
+                + (f" rtr.probe={rtr.router.tokens(mac)}" if mac else ""))
+
+
 class Sink:
     """Server 侧收到的验签结果（线程安全）。"""
 
@@ -204,14 +225,21 @@ def main():
 
         # ---- ③ 限频不是封禁：回补后立刻恢复 -------------------------------
         print("\n[3] 限频不是封禁：等桶回补后正常上报立刻恢复")
+        # 前置：这条报文要过**三个**桶（Router 转发 / Server per-SN / Server per-Router）——
+        # 必须**按整条路径**等额度。2026-09-13 实测踩过：只等 Server 的 per-SN，
+        # 报文死在 Router 转发桶 → 现场是“0 接受、0 丢弃”，看着像限频坏了。
+        budget, tok = wait_budget(rtr, rl, dev.sn, 1, timeout=20.0)
+        check("前置：整条路径上的桶都攒够额度（否则测的不是“回补后恢复”）", budget, tok)
         d_before = srv.rl_dropped
-        refilled = wait_until(lambda: rl.sn.peek(dev.sn)[0], timeout=10.0, interval=0.05)
-        check("桶会回补（不是把设备拉黑）", refilled)
+        already = rl.sn.peek(dev.sn)[0]
+        check("桶会回补（不是把设备拉黑）", already or budget, f"进组时 {tok}")
         n2 = sink.count()
+        rc_d1 = router.rl_dropped
         client.send_id_report(dev.report())
         ok2 = wait_until(lambda: sink.count() > n2, timeout=5.0, interval=0.02)
         check("回补后这一条被接受", ok2 and srv.rl_dropped == d_before,
-              f"接受增量 {sink.count() - n2} / 新丢弃 {srv.rl_dropped - d_before}")
+              f"接受增量 {sink.count() - n2} / 新丢弃 {srv.rl_dropped - d_before}"
+              f" / Router 侧丢 {router.rl_dropped - rc_d1} / 进组时 {tok}")
 
         # ---- ④ 轮换 SN：per-SN 拦不住，per-Router 兜住 --------------------
         print(f"\n[4] 轮换 SN（{args.rotate} 个不同 SN、同一源地址）→ per-Router 兜住")
@@ -279,20 +307,16 @@ def main():
         print("\n[7] 设备侧自限频（§5.8 设备那一环，**自愿**）：延后 ≠ 丢弃，不撞上游的桶")
         lp = client.limiter
         pp = lp.snapshot()["params"]
-        # 前置：先等**上游两条桶**回补到能容下这一段突发（上面几组刚把桶刷空过）。
-        # 不先等就分不清"是设备侧自限频起了作用"还是"上游还没回补" —— 实测踩过两次：
-        # ① 只等“有额度”不够（桶边缘补出 1 个就放行，剩下 2 条仍被丢）；
-        # ② 完全不等 → 头 3 条全丢，看起来像自限频没用。
-        # 顺带这也是"桶会回补、限频不是封禁"的同一件事。
+        # 前置：这条路径上的**所有**桶都要攒够这一段突发（上面几组刚把桶刷空过）。
+        # 不先等就分不清“是设备侧自限频起了作用”还是“上游还没回补” —— 实测踩过三次：
+        # ① 完全不等 → 头 3 条全丢，看起来像自限频没用；
+        # ② 只等“有额度”（1 个令牌）→ 桶边缘仍会丢掉剩下的；
+        # ③ 只等两侧的 per-SN、**漏了 Server 的 per-Router** → 4 条被 Server 全丢
+        #    （现场 `srv 丢 4 / rtr 丢 0`）。所以走 wait_budget（整条路径）。
         need = int(pp["burst"])
-        budget = wait_until(
-            lambda: (rtr.sn.tokens(dev.sn) >= need and rl.sn.tokens(dev.sn) >= need),
-            timeout=20.0, interval=0.05)
-        check(f"前置：上游两条桶都回补到 ≥{need} 个令牌（否则测的不是设备侧自限频）",
-              budget,
-              f"Router per-SN 剩 {rtr.sn.tokens(dev.sn)} / "
-              f"Server per-SN 剩 {rl.sn.tokens(dev.sn)}（桶容量分别 "
-              f"{rtr.sn.burst:.0f} / {rl.sn.burst:.0f}）")
+        budget, tok = wait_budget(rtr, rl, dev.sn, need, timeout=20.0)
+        check(f"前置：整条路径上的桶都回补到 ≥{need} 个令牌（否则测的不是设备侧自限频）",
+              budget, tok)
         lp.reset_counters()
         srv.rl.reset_counters()
         router.rl.reset_counters()

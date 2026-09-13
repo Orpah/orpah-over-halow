@@ -69,6 +69,10 @@ def calibration():
         "noise_db": NOISE_DB,
         "rssi_range": {"min": RSSI_MIN, "max": RSSI_MAX},
         "walk": {"speed_mps": SPEED_MPS, "epoch_ms": WALK_EPOCH_MS},
+        # `POST /api/truth` 单次时刻数上限：页面按它**抽稀**后再发（见 TRUTH_MAX_TIMES）。
+        # 与上面几项同一性质：页面不能自己写一个数 —— 否则一旦服务端上限调小，
+        # 页面会超发 → 服务端截断 → 取回的真值点数与帧数对不上。
+        "truth_max_times": TRUTH_MAX_TIMES,
     }
 
 

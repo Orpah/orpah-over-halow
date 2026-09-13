@@ -188,12 +188,27 @@ ck("default() 复用同一实例", motion.default() is motion.default())
 print("== 8. 标定参数单一源 ==")
 cal = motion.calibration()
 ck("calibration() 给出页面要用的键与值",
-   set(cal) == {"path_loss", "noise_db", "rssi_range", "walk"}
+   set(cal) == {"path_loss", "noise_db", "rssi_range", "walk", "truth_max_times"}
    and set(cal["path_loss"]) == {"A", "n"}
    and cal["path_loss"]["A"] == motion.RSSI_A
    and cal["path_loss"]["n"] == motion.RSSI_N
    and cal["noise_db"] == motion.NOISE_DB,
    f"A={cal['path_loss']['A']} n={cal['path_loss']['n']} 噪声±{cal['noise_db']}")
+
+# 真值取点的“单次时刻数上限”也是副本高危区：页面按它抽稀、服务端按它截断。
+# 2026-09-13 实测踩过：页面写死 4000、服务端 `TRUTH_MAX_TIMES` = 5000（已经各写一份了）。
+# 页面抽稀过猛不算错，但一旦服务端上限调小 → 页面超发 → 服务端截断 → 取回的点数与帧数对不上。
+ck("calibration() 给出真值取点上限（truth_max_times == motion.TRUTH_MAX_TIMES）",
+   cal.get("truth_max_times") == motion.TRUTH_MAX_TIMES,
+   f"接口 {cal.get('truth_max_times')} / 常量 {motion.TRUTH_MAX_TIMES}")
+_rptxt = open(os.path.join(HERE, "ui", "static", "replay.html"), encoding="utf-8").read()
+_m = re.search(r"let\s+TRUTH_CAP\s*=\s*(\d+)", _rptxt)
+ck("replay.html 兜底上限与服务端常量一致（改了常量就得同步改兜底）",
+   _m and int(_m.group(1)) == motion.TRUTH_MAX_TIMES,
+   f"兜底={_m.group(1) if _m else None} / 常量 {motion.TRUTH_MAX_TIMES}")
+ck("replay.html 从 /api/config 取该上限（不靠写死的数字；抽稀用 TRUTH_CAP）",
+   "truth_max_times" in _rptxt and "TRUTH_CAP" in _rptxt
+   and "times.length / TRUTH_CAP" in _rptxt)
 
 STATIC = os.path.join(HERE, "ui", "static")
 PAGES = {                    # 页面 → (A 输入框 id, n 输入框 id)

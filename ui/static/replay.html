@@ -281,6 +281,14 @@ const S = {                          // 回放状态
   truthIdx: [],                      // 取到真值的帧在 S.frames/S.sm 里的下标（与 truth 同序一一对应）
 };
 
+/* `POST /api/truth` 单次时刻数上限 —— 页面按它**抽稀**后再发。
+   这个数**不是本页说了算**：`motion.TRUTH_MAX_TIMES` 是唯一源，开页从 `/api/config` 取；
+   下面的常量只是**离线兜底**（服务端不可达时用），`test_motion.py` §8 有守卫断言它与常量相等
+   —— 否则服务端调小上限时页面会超发 → 服务端截断 → 真值点数与帧数对不上。 */
+let TRUTH_CAP = 5000;
+let tlCurIdx = -1;                   // 时间线上一次“当前条”的下标（只在变化时滚动）
+let frCurIdx = -1;                   // 报文流同上
+
 /* ---- 地图视图（Leaflet）----
    底图源 / 条款说明 / 本地坐标→经纬度换算都在 **map.js**（与实时页共用单一源）。
    本页只保留自己的图层：回放的轨迹要**跨缺口断开**、站位固定、另有 95% 椭圆。 */
@@ -838,11 +846,16 @@ function smoothAt(t) {
 /* 取真值：按**帧时刻**逐点精确取（POST /api/truth），不做网格插值。
    为什么不用网格 GET：网格点之间要插值，而插值误差随步长**平方**增长 —— 步长 250ms 时
    实测 2.9cm（还行），但 12h 窗口被点数上限逼到 10.8s/点就是**米级**，真值自己会变成误差源。
-   帧数超过服务端上限（`motion.TRUTH_MAX_TIMES`）时**均匀抽稀**并如实报告实际帧数。 */
+
+   帧数超过服务端上限（`motion.TRUTH_MAX_TIMES`，从 `/api/config` 取）时**均匀抽稀**并如实报告
+   实际帧数。均匀抽稀的固有性质：帧数**略超**上限（如 1.05 倍）时 step=2 → 会少用近一半帧；
+   这是“均匀”的代价，不是 bug（上限之内 step=1、一帧不丢）。
+   取回的点数与帧数**对不上就不配对**（`S.truthIdx = []`）并给出原因 —— 宁可不用，
+   也不能把错位的真值当误差基准（错位会让 CDF/对照导出全错）。 */
 async function loadTruth() {
   const times = S.frames.map(f => f.t);
   if (!times.length) { S.truth = []; S.truthIdx = []; S.truthWhy = "no_frames"; return; }
-  const step = Math.ceil(times.length / 4000);
+  const step = Math.ceil(times.length / TRUTH_CAP);
   const idx = times.map((_, i) => i).filter(i => i % step === 0);
   try {
     const r = await fetch("/api/truth", {
@@ -851,7 +864,9 @@ async function loadTruth() {
     }).then(x => x.json());
     S.truth = (r && r.ok) ? (r.points || []) : [];
     S.truthIdx = S.truth.length === idx.length ? idx : [];   // 数量对不上就不配对（宁可不用）
-    S.truthWhy = (r && r.ok) ? null : ((r && r.code) || "err");
+    S.truthWhy = (r && r.ok)
+      ? (S.truthIdx.length ? null : "count_mismatch")
+      : ((r && r.code) || "err");
   } catch (e) {
     S.truth = []; S.truthIdx = []; S.truthWhy = "err";
   }
@@ -882,6 +897,10 @@ function renderCdf() {
   if (!S.truth.length) {
     $("cdfInfo").textContent = S.truthWhy === "no_walk" ? T("rp_cdf_no_walk")
       : (S.truthWhy === "no_frames" ? T("rp_cdf_no_frames") : T("rp_cdf_no_truth"));
+  } else if (!S.truthIdx.length) {
+    // 真值取回来了但**点数与帧数对不上**（服务端去重/截断）→ 不配对。
+    // 这里不能说“本窗没有帧”（帧就在手上），要如实说是配对失败。
+    $("cdfInfo").textContent = T("rp_cdf_no_pair");
   } else if (!raw.n) {
     $("cdfInfo").textContent = T("rp_cdf_no_frames");
   } else {
@@ -1134,6 +1153,9 @@ function csvOf(src) {
 
 function exportName(src, ext) {
   const safe = String($("rpSn").value || "device").replace(/[^A-Za-z0-9._-]/g, "_");
+  /* 文件名里的时间戳用**本机时区**：它只是给人看的标签，让人一眼认出“哪一段”。
+     文件**内容**里的时间是另一回事 —— GPX `<time>` / CSV `time` / GeoJSON 的
+     `from`·`to` 一律 `toISOString()`（UTC 带 Z，GPX 1.1 要求），两者别混。 */
   const stamp = (ms) => {
     const d = new Date(ms), p = (v) => String(v).padStart(2, "0");
     return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes());
@@ -1286,6 +1308,21 @@ function draw(obs, est, ell) {
 }
 
 /* ---------------- 事件时间线 ---------------- */
+/* 把列表里某一条滚进它自己的滚动容器（时间线 / 报文流共用一份）。
+   ★ **不能用 `el.offsetTop`**：它不是相对滚动容器的（实测：容器 scrollTop=3255 时
+   当前条的 offsetTop=3966，而它在容器内的真实偏移是 1776 → 用 offsetTop 比会
+   把列表滚到无关的位置，当前条仍在视野外，看着就像“跟丢”）。
+   用 `getBoundingClientRect` + `scrollTop` 算真实偏移，只动这个容器的 scrollTop
+   （不用 `scrollIntoView`：那会连带滚动祖先/整页）。 */
+function scrollRowIntoView(box, el) {
+  if (!box || !el) return;
+  const top = box.scrollTop + (el.getBoundingClientRect().top - box.getBoundingClientRect().top);
+  const h = el.offsetHeight || 24;
+  if (top < box.scrollTop || top + h > box.scrollTop + box.clientHeight) {
+    box.scrollTop = top - Math.max(0, (box.clientHeight - h) / 2);
+  }
+}
+
 function renderTimeline() {
   const only = $("rpOnlySec").checked;
   const list = only ? S.events.filter(e => SEC_TYPES.has(e.etype)) : S.events;
@@ -1298,6 +1335,7 @@ function renderTimeline() {
   const sig = list.length + "|" + only + "|" + (list[0] ? list[0].t : 0);
   if (ul.dataset.sig !== sig) {
     ul.dataset.sig = sig;
+    tlCurIdx = -1;                 // 列表重建 → 下标含义变了，下次渲染重新定位一次
     ul.innerHTML = list.map(e =>
       `<li class="${evtClass(e.etype)}" data-t="${e.t}">` +
       `<span class="t">${clockOf(e.t)}</span>` +
@@ -1314,12 +1352,14 @@ function renderTimeline() {
     if (t <= S.t) curIdx = i;
   });
   [...ul.children].forEach((li, i) => li.classList.toggle("cur", i === curIdx));
-  if (curIdx >= 0 && !S.playing) { /* 停着时也把当前条滚进视野 */ }
+  /* 光标移动就把那条滚进视野（**不只播放时**）。
+     为什么停着也要滚：停着时光标只会因为**用户操作**而移动（点报文行跳转 / 拖进度条 /
+     点时间线）—— 那时“带我去那儿”正是期望行为；而用户自己滚时间线**不动光标**，
+     所以不会被抢（同地图 fitBounds 的取舍：只跟随光标，不抢手动平移）。
+     只在 curIdx 变化时滚，避免每帧重复定位。 */
   const cur = ul.children[curIdx];
-  if (cur && S.playing) {
-    const box = ul, r = cur.offsetTop;
-    if (r < box.scrollTop || r > box.scrollTop + box.clientHeight - 24) box.scrollTop = r - box.clientHeight / 2;
-  }
+  if (cur && curIdx !== tlCurIdx) scrollRowIntoView(ul, cur);
+  tlCurIdx = curIdx;
 }
 
 /* ---------------- 报文流时间轴（原始上报帧） ----------------
@@ -1363,6 +1403,7 @@ function renderFrames() {
   }
   if (ul.dataset.sig !== "f" + f.n) {          // 结构只在换数据时重建
     ul.dataset.sig = "f" + f.n;
+    frCurIdx = -1;                             // 列表重建 → 下标含义变了，下次渲染重新定位一次
     ul.innerHTML = f.rows.map(r =>
       `<li data-t="${r.t}" title="${esc(T("rp_fr_jump"))}">` + frameRowText(r) + `</li>`
     ).join("");
@@ -1375,10 +1416,10 @@ function renderFrames() {
   });
   [...ul.children].forEach((li, i) => li.classList.toggle("cur", i === curIdx));
   const cur = ul.children[curIdx];
-  if (cur && S.playing) {                       // 播放时把当前帧滚进视野
-    const r = cur.offsetTop;
-    if (r < ul.scrollTop || r > ul.scrollTop + ul.clientHeight - 24) ul.scrollTop = r - ul.clientHeight / 2;
-  }
+  /* 光标移动就把当前帧滚进视野（**不只播放时**）：停着时光标只会因**用户操作**而移动
+     （点报文行跳转 / 拖进度条），那时“带过去”正是期望行为。滚法见 scrollRowIntoView。 */
+  if (cur && curIdx !== frCurIdx) scrollRowIntoView(ul, cur);
+  frCurIdx = curIdx;
 }
 
 /* 点某一行 → 光标跳到该帧（与拖动进度条同一路径：清轨迹重画，不另建一套跳转逻辑） */
@@ -1451,13 +1492,15 @@ document.querySelectorAll("[data-min]").forEach(b => {
 
 /* A/n 默认值取自服务端标定（motion.py = 唯一源 → /api/config）。
    本页拿 A/n 把**真实落库的 RSSI** 反算成距离，所以必须与模拟器/实时页同一套参数，
-   否则回放的定位会系统性偏离（且不报错）。用户仍可手改（例如试别的 n 看历史数据怎样变）。 */
+   否则回放的定位会系统性偏离（且不报错）。用户仍可手改（例如试别的 n 看历史数据怎样变）。
+   顺带取真值取点的时刻数上限（同一份标定快照）。 */
 async function loadConfig() {
   try {
     const r = await (await fetch("/api/config")).json();
     const pl = r.path_loss || {};
     if (pl.A != null) $("rpA").value = pl.A;
     if (pl.n != null) $("rpN").value = pl.n;
+    if (r.truth_max_times) TRUTH_CAP = r.truth_max_times;
   } catch (e) { /* 服务端不可达：保留 HTML 兜底值 */ }
 }
 

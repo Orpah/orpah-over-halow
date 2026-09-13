@@ -218,6 +218,24 @@
     加任何「预取/缓存未来样本」的优化都会破坏这条。同理**时序平滑也是因果的**：
     `kalmanTrack` 只吃 `t<=光标` 的帧（`smRuns`/`smoothAt` 都带 `p.t <= t`；实测 20 个光标位置
     最多前视 0 ms、0 个未来点）。
+  - **跟随光标滚动：不能用 `el.offsetTop`（2026-09-13 实测修）**：`offsetTop` 的原点是
+    **offsetParent**，不是滚动容器 → 拿它跟容器的 `scrollTop` 比会滚到无关位置
+    （实测：容器 `scrollTop=3255` 时当前条 `offsetTop=3966`，而它在容器里的真实偏移是 **1776**
+    → 滚完当前条仍在视野外 −1479 px，看着就像“时间线跟丢了”）。**统一走
+    `scrollRowIntoView(box, el)`**（`replay.html`，时间线 + 报文流共用一处）：
+    `top = box.scrollTop + (el.getBoundingClientRect().top - box.getBoundingClientRect().top)`，
+    只改该容器的 `scrollTop`（不用 `scrollIntoView` —— 那会连带滚动祖先/整页）。
+    **只在“当前条下标变化”时滚**（`tlCurIdx` / `frCurIdx`），且**不只播放时**：
+    停着时光标只会因**用户操作**移动（点报文行跳转 / 拖进度条），那时“带过去”正是期望行为；
+    用户自己滚列表不改光标 → 不会被抢（同地图 `fitBounds` 的取舍）。
+    列表重建（`dataset.sig` 变了）必须把这两个下标复位成 `-1`，否则跟随会漏一次。
+  - **真值取点上限也是「单源」**：`POST /api/truth` 的时刻数上限在 `motion.TRUTH_MAX_TIMES`
+    （现 5000）→ `motion.calibration()` → `/api/config.truth_max_times`；
+    `replay.html` 的 `TRUTH_CAP` 只是**离线兜底**（`test_motion.py` §8 守卫它与常量相等，
+    并断言页面确实取接口）。**别在页面里另写一个数**：实测已经各写一份了（页面 4000 / 服务端 5000），
+    一旦服务端上限**调小**，页面就会超发 → 服务端截断 → 取回点数与帧数对不上。
+    对不上时**不配对**（`S.truthIdx=[]`）且给原因 `count_mismatch` → 页面文案 `rp_cdf_no_pair`
+    （**不能**显示成“本窗没有可定位的帧”——帧就在手上，是配对失败）。
   - **测量噪声（`motion.py` 的 `NOISE_DB=2.0`）是平滑/椭圆能验证的前提**：无噪声时定位结果
     恒等于真值（RMS 0.00 m），平滑、残差、置信椭圆全都失去意义。噪声用 SHA-256(sid|t_ms)
     确定性生成（不用随机数库）→ 回放/测试可复现；**逐站位不同**（`ui_server` 必须传 `sid=`），
@@ -367,6 +385,15 @@
       5.2 µs/条）→ 限频层自己变成 CPU 放大器。改 `OrderedDict` + `move_to_end`/`popitem(last=False)`。
     - **「限频不是封禁」是回归锁**：`test_ratelimit.py` 里“默认参数下正常流量零丢弃”
       （Server 侧 120s、Router 侧 60s 各一条）+ “桶回补后立刻放行”两条不许改坏。
+    - **讲「上游有额度」必须按*整条路径*判（2026-09-13 实测，`demo_ratelimit.wait_budget`）**：
+      一条已签 ID-REPORT 要依次过**三个**桶 —— Router 转发（按 SN，burst 40）、
+      Server per-SN（burst 5）、Server per-Router（源地址，burst 10）。
+      只等其中一个就会出现**看着像限频坏了**的现场：
+      ① 只等 Server per-SN → 报文死在 Router 转发桶 → 页面上「0 接受、0 丢弃」（查不出死在哪）；
+      ② 等了两侧 per-SN 但**漏了 Server per-Router** → 4 条全被 Server 丢（`srv 丢 4 / rtr 丢 0`）。
+      → 前置一律走 `wait_budget(rtr, rl, sn, need[, mac])`：**缺一个桶就不算有额度**；
+      失败信息里把三个桶的令牌数一起打出来（下次一眼看出是哪一层没回补）。
+      另：**别用「桶边缘 1 个令牌」当“有额度”** —— 一段突发需要 `need = 突发条数` 个。
     - 测法照做：**在真实演示数据上刷量**（页面 `flood` / `demo_ratelimit.py`）——
       单帧验签层对“高频刷量”**毫无反应**，只有限频层会动，这就是它存在的理由；
       单看一侧也会误判（Router 侧一开，`demo_ratelimit.py` 的“等 server 处理完 200 条”永远等不到）。
