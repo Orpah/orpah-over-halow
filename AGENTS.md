@@ -367,6 +367,14 @@
     ★ 页面：`renderCover` 挂在 `renderEnergy` 上（没调 = 覆盖块空白，也是“静默失效”）；
     模型未开 / 缺口未建模 / 覆盖不了 **三种状态文案必须分开**；缺口输入用**小时**、模型用**秒**，
     换算只在提交处做一次。守卫：`test_appjs.py::check_energy_cover`。
+    ★ **E4③ 的落实（告警，2026-09-13）**：新 kind `id_cover_short`（`degrade` → warn / `short` → crit）——
+    判据**直接取模型算好的 `verdict`**（`alerts.py` 不重算），并要求该 SN 有**已签**电量
+    （模型推算要挂在已签事实上）；`ok`/`none` **不报**（没算过的事不报）。
+    `energy_snapshot()` 只把模型字段（`silence_in_s`/`cover`）挂给**模型真正驱动的那台**设备
+    （原来挂给每个 SN = 把“这一台”的数说成“所有台”的）。
+    落点 `ALERT_LINK.id_cover_short → index.html#ensec`（守卫会拦漏登记）；
+    文案里的秒/mJ 要在 `alertText()` 里格式化（否则弹窗上直接露出 `缺口 43200` —— 实测踩过），
+    缺字段就**不说那句**（`coverTail()` 按“有哪个字段说哪句”拼）。
     ★ 顺手修的旧 bug：POST `/api/energy` 的 `set` 分支里 `charge_mj` 在 `store_mj` **之前**处理 →
     “满储改大 + 同时充电”会被**旧容量**无声钳回去（页面上看着像没生效）→ 已改为先套 `store_mj`。
     测试：`test_energy.py` 第 12/13 节（缺口解析解 + 降级换覆盖 + 曲线积分/阶跃/畸形）；

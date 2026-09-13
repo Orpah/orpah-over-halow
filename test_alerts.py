@@ -371,6 +371,48 @@ check("分流：沉默 + 已经耗尽（低于 3100mV）→ no_report_energy + i
 check("分流：两条的严重度不同（沉默那条反而更轻）",
       {x["kind"]: x["level"] for x in a} == {"no_report_energy": "warn", "id_energy": "crit"})
 
+# ---- 规则 7b：覆盖（不断线）不足（2026-09-13，SPEC §5.2 E4③）----------------
+# 口径：取能波动 ≠ 允许夜间停机；覆盖不了 = **设计不足**（要处置的告警），不是作息。
+# 判据直接取模型算好的 verdict（**本模块不重算**）：degrade → warn / short → crit /
+# ok · none → 不报（没算过的事不报）。
+def cov(verdict, **kw):
+    d = {"mv": 4000, "since": NOW - 5,
+         "cover": {"verdict": verdict, "gap_s": 43200.0, "cover_s": 3000.0,
+                   "gap_short_s": 40200.0, "need_store_mj": 21600.0,
+                   "degraded": {"covers": False, "cover_s": 9000.0,
+                                "need_store_mj": 7200.0}, "curve": None}}
+    d["cover"].update(kw.pop("cover", {}))
+    d.update(kw)
+    return d
+
+
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW, energy={"A": cov("ok")})
+check("覆盖：verdict=ok（够）→ 不告警", a == [])
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW, energy={"A": cov("none")})
+check("覆盖：verdict=none（没建模缺口）→ 不报（**没算过的事不报**）", a == [])
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW, energy={"A": cov("degrade")})
+check("覆盖：degrade（常态不够、降级换覆盖够）→ warn",
+      kinds(a) == ["id_cover_short"] and a[0]["level"] == "warn")
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW, energy={"A": cov("short")})
+check("覆盖：short（降级也不够、会在缺口里断线）→ crit",
+      kinds(a) == ["id_cover_short"] and a[0]["level"] == "crit")
+check("覆盖：告警带可执行数据（缺口/能撑/还差/需要储能/降级那组）",
+      (a[0]["gap_s"], a[0]["cover_s"], a[0]["gap_short_s"], a[0]["need_store_mj"],
+       a[0]["deg_covers"], a[0]["deg_cover_s"], a[0]["deg_need_store_mj"])
+      == (43200.0, 3000.0, 40200.0, 21600.0, False, 9000.0, 7200.0))
+check("覆盖：key 带对象（前端据此判断“是不是新告警”）", a[0]["key"] == "id_cover_short:A")
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW,
+                 energy={"A": cov("short", cover={"curve": {"longest_gap_s": 21600.0,
+                                                           "dead_at_s": 3000.0,
+                                                           "sustainable": True}})})
+check("覆盖：有实测曲线时把「最长缺口 / 预计断线时刻 / 是否可永续」一并带出去",
+      (a[0]["curve_gap_s"], a[0]["dead_at_s"], a[0]["sustainable"])
+      == (21600.0, 3000.0, True))
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW, energy={"A": {"mv": 4000}})
+check("覆盖：快照里没有 cover（老调用方/未开模型）→ 不评估本条", a == [])
+a = alr.evaluate(regis(), case_mgr(), deque(), now=NOW, energy={"A": cov("short", mv=None)})
+check("覆盖：只吃**已签**上报里的电量 —— 没报过电量时不报（无值就是无值）", a == [])
+
 
 # ---- 规则 8：限频丢弃（2026-09-13，§5.8）------------------------------------
 # 只陈述事实、**不归因**（大流量 ≠ 有人在攻击）；窗口内有丢弃就报，窗口外自动消警。

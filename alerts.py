@@ -43,6 +43,7 @@ alerts.py — 告警规则引擎（供页面红点消费）
     id_clock                设备时钟偏移/漂移超出阈值（估计值，§5.5 深化）
     id_cap_mismatch         设备**已签**声明「有 RTC」却送出不可用的 ts（故障/被动手脚的信号）
     id_energy               设备自报电量低（warn）/ 耗尽（crit）——免电池终端的预期状态，提醒运维
+    id_cover_short          **覆盖（不断线）不足**：`degrade` warn / `short` crit —— **设计不足**（SPEC §5.2 E4）
     no_report_energy        设备沉默**且最后自报电量低** → 疑似没电（warn，不升级 crit）
     ratelimit               最近 rl_sec 内有限频丢弃（warn）——**只陈述事实、不归因**（大流量 ≠ 攻击）
     rssi_jump               设备自报 RSSI 相邻样本跳变超阈（warn）——**仅线索、需人工复核**
@@ -57,6 +58,14 @@ alerts.py — 告警规则引擎（供页面红点消费）
 有时钟，但某条上报的 `ts` 不可用（ts=0/荒谬/非整数）→ 报 warn。反之「声明无 RTC + ts=0」
 是**正常**（免电池终端的预期行为）→ 不报。只吃**已签**上报里的声明（`cap` 在 JCS 预像内，
 篡改即验签失败 → 声明可信），业务报文未签名、其 `cap` 只能当提示，不参与告警。
+
+**覆盖不足（`id_cover_short`，2026-09-13，SPEC §5.2 E4③）**："断线前的预警与断线事件**必须可见**" ——
+它是一条**要处置的告警**（设计不足），不是“正常作息”。口径：取能随环境波动是**换能器的事**，
+夜间/取能低谷恰恰是**必须覆盖**的时段；覆盖不了就该换更大的储能/取能（或按建议降级换覆盖）。
+判据直接取模型（`energy.coverage()`）算好的 `verdict`，**本模块不重算**（单一源）：
+`degrade`（常态不够、降级换覆盖够）→ warn；`short`（降级也不够，会在缺口里断线）→ crit；
+`ok` / 未建模（`none`）→ **不报**（没算过的事不报）。数据里带 `gap_s` / `cover_s` /
+`gap_short_s` / `need_store_mj` / 降级那组 / 曲线的最长缺口与**预计断线时刻**。
 
 **设备时钟（2026-09-12）**：`clock.ClockTracker` 从「设备自报 ts vs 服务器接收时刻」估计
 每台设备的**偏移**（中位数）与**漂移**（最小二乘斜率，ppm）。本规则在超阈时报 warn：
@@ -421,6 +430,34 @@ def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None,
             out.append(_alert("id_energy", LEVEL_WARN, sn, "alert_id_energy_low",
                               en.get("since") or now, sn=sn, mv=mv,
                               silence_in_s=en.get("silence_in_s")))
+
+    # 7b) 覆盖（不断线，2026-09-13，SPEC §5.2 E4③）：**断线前的预警必须可见**。
+    #     口径：取能波动 ≠ 允许夜间停机 —— 夜间/低谷是**必须覆盖**的时段，
+    #     覆盖不了 = **设计不足**（要处置的告警），不是“正常作息”。
+    #     · `degrade`（常态不够、降级换覆盖够）→ warn：还能顶住，但要按建议调；
+    #     · `short`（降级也不够）→ crit：**会在缺口里断线**（数据里带预计断线时刻）；
+    #     · `ok` / 未建模（`none`）→ 不报（**没算过的事不报**）。
+    #     数据全部来自模型（`energy.coverage()`），这里**不重算**（单一源）。
+    for sn, en in energy.items():
+        cv = en.get("cover") or {}
+        verdict = cv.get("verdict")
+        # 模型推算也要挂在**已签**事实上（最后一条已签上报里的电量）：连电量都没报过的设备，
+        # 不该拿“模型说的命”去指认它“设计不足”（无值就是无值，与规则 7 同一口径）。
+        if verdict not in ("degrade", "short") or en.get("mv") is None:
+            continue
+        deg = cv.get("degraded") or {}
+        curv = cv.get("curve") or {}
+        out.append(_alert("id_cover_short",
+                          LEVEL_CRIT if verdict == "short" else LEVEL_WARN,
+                          sn, "alert_id_cover_short", en.get("since") or now,
+                          sn=sn, verdict=verdict, gap_s=cv.get("gap_s"),
+                          cover_s=cv.get("cover_s"), gap_short_s=cv.get("gap_short_s"),
+                          need_store_mj=cv.get("need_store_mj"),
+                          deg_covers=deg.get("covers"), deg_cover_s=deg.get("cover_s"),
+                          deg_need_store_mj=deg.get("need_store_mj"),
+                          curve_gap_s=curv.get("longest_gap_s"),
+                          dead_at_s=curv.get("dead_at_s"),
+                          sustainable=curv.get("sustainable")))
 
     # 8) 限频（2026-09-13，§5.8）：窗口内**有丢弃**就报一条（warn）。
     #    只陈述事实，**不归因**（术语硬规则）：可能是某台设备被高频刷、网络重传风暴、

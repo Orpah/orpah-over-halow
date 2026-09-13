@@ -1132,13 +1132,29 @@ function fmtGap(sec) {
   return out;
 }
 
+/* 覆盖（不断线）告警的补语：**有哪个字段就说哪句**（缺字段就不说，不拿“—”凑话）。
+   ——降级换覆盖能撑多久 / 实测曲线的最长缺口与预计断线时刻 / 曲线是否可永续。 */
+function coverTail(a) {
+  const bits = [];
+  if (a.deg_cover_s != null) bits.push(T("alert_cover_deg").replace("{v}", fmtGap(a.deg_cover_s)));
+  if (a.curve_gap_s != null) bits.push(T("alert_cover_curve").replace("{v}", fmtGap(a.curve_gap_s)));
+  if (a.dead_at_s != null) bits.push(T("alert_cover_dead").replace("{v}", fmtGap(a.dead_at_s)));
+  if (a.sustainable === false) bits.push(T("alert_cover_unsus"));
+  return bits.length ? " · " + bits.join("，") : "";
+}
+
 /* 用告警自带字段填 msg 模板 */
 function alertText(a) {
   const data = Object.assign({}, a);
   delete data.msg;
   if (data.gap !== undefined) data.gap = fmtGap(data.gap);
+  // 覆盖告警带的是**秒/mJ**，直接填进模版会显示成「缺口 43200 里只能撑 4000」（页面实测踩到）
+  ["gap_s", "cover_s", "gap_short_s", "dead_at_s", "curve_gap_s", "deg_cover_s"]
+    .forEach(k => { if (data[k] != null) data[k] = fmtGap(data[k]); });
+  if (data.need_store_mj != null) data.need_store_mj = enNum(data.need_store_mj / 1000, 1) + " J";
   let s = T(a.msg);
   Object.keys(data).forEach(k => { s = s.split("{" + k + "}").join(String(data[k])); });
+  if (a.kind === "id_cover_short") s += coverTail(a);
   return s;
 }
 
@@ -1278,6 +1294,7 @@ const ALERT_LINK = {
   id_cap_mismatch: "index.html#idsec",           // 能力与声明不符 → Orpah ID 签名上报卡片
   id_clock: "index.html#ctlsec",                 // 时钟偏移 → 上报控制卡片
   id_energy: "index.html#ensec",                 // 电量低/耗尽 → 能量轴卡片
+  id_cover_short: "index.html#ensec",            // 覆盖（不断线）不足 → 同一张卡片的覆盖块
   id_degraded: "metrics.html?sn={sn}",           // 签名降级 → 算法分布/验签统计
   ratelimit: "index.html#rlsec",                 // 被限频丢包 → 限频卡片
   badcheck_streak: "metrics.html",               // SN 校验连败 → 验签/被拒统计

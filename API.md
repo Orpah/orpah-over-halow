@@ -679,6 +679,7 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 | `id_cap_mismatch` | `warn`（不分级） | 设备**已签**声明「有 RTC」（`cap_rtc is True`），却送出不可用的 `ts`（`ts_ok=false`） | `300` | `ORPAH_ALERT_CAP_MISMATCH_SEC` |
 | `id_energy` | `warn` / `crit` | 设备最后一条**已签**上报的电量低（`mv ≤ low` → warn）/ 已耗尽（`mv ≤ out` → crit）；数据带 `mv`/`silence_in_s`（还能撑多久） | `3300` / `3100` | `ORPAH_ALERT_ENERGY_LOW_MV` / `ORPAH_ALERT_ENERGY_OUT_MV` |
 | `no_report_energy` | `warn`（**不升级 crit**） | 设备沉默**且**最后一条已签电量低 → **疑似没电**（等它取能），与 `no_report` **分流**（处置相反，不得合并） | 同 `no_report`（`30`） | `ORPAH_ALERT_NO_REPORT_SEC` |
+| `id_cover_short` | `warn` / `crit` | **覆盖（不断线）不足**（SPEC §5.2 E4③）：模型算出缺口里撑不过 → `degrade`（降级换覆盖够）warn / `short`（降级也不够）crit。**设计不足**，不是“作息”。数据：`verdict/gap_s/cover_s/gap_short_s/need_store_mj/deg_covers/deg_cover_s/deg_need_store_mj/curve_gap_s/dead_at_s/sustainable`（**不重算**，直接取 `state.cover`；且要求该 SN 有**已签**电量） | — | — |
 | `ratelimit` | `warn` | 最近 N 秒内出现过**限频丢弃**（**两侧合并**，无论哪条防线）→ **只陈述事实、不归因**（大流量 ≠ 攻击）；数据带 `which` / `dropped_sn` / `dropped_router` / `sn` / `router` | `60` | `ORPAH_ALERT_RL_SEC` |
 
 ⚠ **默认值分两类，别看混**：
@@ -1148,6 +1149,7 @@ why`（+ 页面用的 `every_s`）。横轴上限取 `max(2×当前采集, 0.5mW
 |---|---|---|---|
 | `id_energy` | `warn` / `crit` | 设备最后一条**已签**上报的电量 `mv ≤ low` → warn；`mv ≤ out` → crit。数据 `sn/mv/silence_in_s` | `3300` / `3100`（`ORPAH_ALERT_ENERGY_LOW_MV` / `ORPAH_ALERT_ENERGY_OUT_MV`） |
 | `no_report_energy` | `warn`（**不升级 crit**） | 设备沉默 **且最后一条已签电量低** → 疑似没电：**等它取能** | 同 `no_report` 的 `no_report_sec`（30s） |
+| `id_cover_short` | `warn`（`degrade`）/ `crit`（`short`） | **覆盖（不断线）不足**（设计不足）：按模型给的 `verdict` 报 —— `degrade` 还能降级顶住、`short` 会在缺口里断线 | 无（条件就是模型的 verdict） |
 | `no_report` | `warn` → `crit`（30s → 300s） | 设备沉默**但电量充足** → 异常失联：**该出警** | `ORPAH_ALERT_NO_REPORT_SEC` / `_CRIT_SEC` |
 
 - **两者不合并**：处置相反（等它取能 vs 立刻搜），合并会让人做错事。

@@ -1230,17 +1230,26 @@ class OrpahApp:
 
         只吃已签上报里的 `battery_mv`（在签名预像内 → 设备不能抵赖"我快没电了"），
         逐设备取最新一条；`silence_in_s` 只有演示设备（当前能量模型）才有，其它设备为 None。
+
+        ★ **模型推算的字段只挂给“模型真正驱动的那台”**（`silence_in_s` / `cover`）：
+        能量模型算的是**本机这台演示设备**的命，不是别人的 —— 原来把它的倒计时挂到每个 SN 上，
+        等于把“这一台”的数说成“所有台”的（错得很难看出来）。别的设备只有它自报的电量。
         """
+        st = self.en_state or {}                       # 未启用时是 {}（不是 None）
+        model_sn = (self.id_dev.sn if self.id_dev is not None
+                    else (self.client.sn if self.client else None))
         out = {}
         for rec in list(self.id_reports):          # 最新在前
             sn = rec.get("sn")
             if not sn or sn in out:
                 continue
-            st = self.en_state or {}
-            out[sn] = {"mv": rec.get("battery_mv"),
-                       "silence_in_s": st.get("silence_in_s") if self.en_on else None,
-                       "level": rec.get("alg"), "degraded_reason": rec.get("degraded_reason"),
-                       "since": rec.get("ts_eff")}
+            item = {"mv": rec.get("battery_mv"),
+                    "level": rec.get("alg"), "degraded_reason": rec.get("degraded_reason"),
+                    "since": rec.get("ts_eff")}
+            if sn == model_sn:                         # 只有这台才有模型推算
+                item["silence_in_s"] = st.get("silence_in_s")
+                item["cover"] = st.get("cover")        # 覆盖（不断线）→ 告警 id_cover_short
+            out[sn] = item
             if len(out) >= 20:
                 break
         return out
