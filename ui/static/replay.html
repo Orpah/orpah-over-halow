@@ -90,7 +90,7 @@
     <label>n <input id="rpN" type="number" step="0.1" value="2.5"></label>
   </div>
   <p class="hint" id="rpInfo"></p>
-  <p class="hint" data-i18n="rp_hint">回放读 IoTDB 时间窗（重启不丢）；定位用与实时页**同一个**内核（pos.js），站位按当时的悬停时间窗取 RSSI 中位数。回放只看某时刻**之前**的样本 —— 不会"看到未来"。</p>
+  <p class="hint" data-i18n="rp_hint">回放读 IoTDB 时间窗（重启不丢）；定位用与实时页同一个内核（pos.js），站位按当时的悬停时间窗取 RSSI 中位数。回放只看某时刻之前的样本 —— 不会"看到未来"。</p>
 </section>
 
 <!-- ============ 1 · 回放 ============ -->
@@ -149,10 +149,10 @@
   <div id="map" style="display:none"></div>
   <p class="hint">
     <label><input type="checkbox" id="rpSmooth" checked> <span data-i18n="rp_smooth">轨迹平滑（恒速卡尔曼）</span></label>
-    <span class="hint" data-i18n="rp_smooth_hint">平滑用**恒速卡尔曼**（不是滑动平均）：靠速度外推，几乎没有滞后；搜索半径用滤波后协方差，不用测量协方差。</span>
+    <span class="hint" data-i18n="rp_smooth_hint">平滑用恒速卡尔曼（不是滑动平均）：靠速度外推，几乎没有滞后；搜索半径用滤波后协方差，不用测量协方差。</span>
   </p>
   <p class="hint" data-i18n="rp_legend">蓝方块=站位、蓝圈=该站位的距离环、红叉=该时刻的定位估计、黄虚线椭圆=95% 置信范围、红线=已回放出的估计轨迹、绿线=平滑轨迹（恒速卡尔曼）、灰点=当时无观测的站位。</p>
-  <p class="hint" data-i18n="rp_legend_map">地图视图：蓝点=站位、蓝圈=距离环（半径即测距）、红点=该时刻定位估计、黄虚线多边形=95% 置信椭圆、红线=已回放轨迹（**跨无观测缺口会断开**，不会画成一段直路）。地图瓦片需联网。</p>
+  <p class="hint" data-i18n="rp_legend_map">地图视图：蓝点=站位、蓝圈=距离环（半径即测距）、红点=该时刻定位估计、黄虚线多边形=95% 置信椭圆、红线=已回放轨迹（跨无观测缺口会断开，不会画成一段直路）。地图瓦片需联网。</p>
   <div class="stat mono">
     <div class="cell"><span class="k" data-i18n="rp_lab_used">参与定位</span><span class="v" id="rpUsed">-</span></div>
     <div class="cell"><span class="k" data-i18n="rp_lab_loc">定位估计</span><span class="v v-ok" id="rpLoc">-</span></div>
@@ -170,7 +170,7 @@
 <!-- ============ 1b · 定位误差 CDF（**仅模拟环境**有地面真值） ============ -->
 <section class="card">
   <h3 data-i18n="rp_cdf_head">定位误差 CDF（对照地面真值）</h3>
-  <p class="hint" data-i18n="rp_cdf_note">**只有本演示环境有地面真值**（`motion.py` 的行走模型，真机部署没有真值）：逐帧比较「估计位置 vs 真值位置」画累积分布。真机的定位质量请看**不需要真值**的那套指标：残差 RMS / GDOP / 95% 椭圆 / 搜索半径。</p>
+  <p class="hint" data-i18n="rp_cdf_note">只有本演示环境有地面真值（`motion.py` 的行走模型，真机部署没有真值）：逐帧比较「估计位置 vs 真值位置」画累积分布。真机的定位质量请看不需要真值的那套指标：残差 RMS / GDOP / 95% 椭圆 / 搜索半径。</p>
   <canvas id="cdfCanvas" width="620" height="240"></canvas>
   <div class="stat mono">
     <div class="cell"><span class="k" data-i18n="rp_cdf_n">参与帧数</span><span class="v" id="cdfN">-</span></div>

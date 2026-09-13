@@ -109,6 +109,21 @@ def main():
           % (nfiles, len(refs), len(fams)), nfiles > 0)
     check("页面引用的 key 全部在字典里", not missing, missing)
 
+    # 页面把 i18n 文案当**纯文本**渲染（不是 markdown）→ 值里写 `**加粗**` 会原样显示成星号
+    # （2026-09-13 实测踩过：中文句子里露出 `**本系统不做密钥轮换**`）。源码注释/文档里仍可用
+    # Markdown，这条只管**文案**。同样检查 HTML 里 data-i18n 的兜底文案（它是字典值的副本）。
+    bad_val = [l.strip()[:70] for l in txt.split("\n") if RE_KEY.match(l) and "**" in l]
+    check("i18n 文案值里不含 Markdown 标记（**）", not bad_val, bad_val[:5])
+    bad_html = []
+    for fn in sorted(os.listdir(STATIC)):
+        if not fn.endswith(".html"):
+            continue
+        with open(os.path.join(STATIC, fn), encoding="utf-8") as f:
+            for l in f:
+                if "data-i18n" in l and "**" in l:
+                    bad_html.append(fn + ": " + l.strip()[:70])
+    check("页面上 data-i18n 的兜底文案也不含（**）", not bad_html, bad_html[:5])
+
     node = shutil.which("node")
     if node:
         r = subprocess.run([node, "--check", DICT], capture_output=True, text=True,

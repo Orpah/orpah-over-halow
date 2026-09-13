@@ -160,7 +160,7 @@
     <button class="btn" id="btnIdSpoofAll" data-i18n="btn_spoof_all">跑全部攻击</button>
     <button class="btn" id="btnIdSpoofStop" data-i18n="btn_stop" style="display:none">停止</button>
   </div>
-  <p class="hint" id="spoofMsg" data-i18n="spoof_idle">按「注入伪造上报」把攻击报文真的扔进空口 —— 防线：格式 → SN 校验位（Damm32/mod97）→ 时间窗/nonce → 吊销表 → **设备公钥验签**。</p>
+  <p class="hint" id="spoofMsg" data-i18n="spoof_idle">按「注入伪造上报」把攻击报文真的扔进空口 —— 防线：格式 → SN 校验位（Damm32/mod97）→ 时间窗/nonce → 吊销表 → 设备公钥验签。</p>
 </section>
 
 <!-- ============ 发现记录（走失命中） ============ -->
@@ -262,7 +262,7 @@
       <tbody id="enAxisList"></tbody>
     </table>
   </div>
-  <p class="hint" data-i18n="en_foot">参数是**演示标定值，不是实测**（真机标定属阶段二）。横轴 0.1 mW 是「恰好够每 300s 用 ES256 报一次」的门槛。</p>
+  <p class="hint" data-i18n="en_foot">参数是演示标定值，不是实测（真机标定属阶段二）。横轴 0.1 mW 是「恰好够每 300s 用 ES256 报一次」的门槛。</p>
 </section>
 
 <script src="ui_i18n.js"></script>
