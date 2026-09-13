@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 09:51:25
-- git HEAD：`7a1b5b1`
+- 时间：2026-09-13 09:53:59
+- git HEAD：`a5e97f0`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（15/15 套件通过）
 
@@ -10,13 +10,13 @@
 | 套件 | 脚本 | 结果 | 耗时 | 说明 |
 |---|---|---|---|---|
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
-| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.2s | 通过 |
+| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.4s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
 | 时钟可信（ts=0 无 RTC） | `test_clock.py` | ✅ PASS | 0.6s | 通过 |
-| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.7s | 通过 |
-| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.6s | 通过 |
+| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.6s | 通过 |
+| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.8s | 通过 |
 | 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.1s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
 | 能量轴（免电池客户端） | `test_energy.py` | ✅ PASS | 0.0s | 通过 |
@@ -38,7 +38,7 @@
       OK   truth_at：空输入 → 空表（页面显示“不适用”，不编 0）
     全部通过
 
-### 密钥生命周期 — PASS（0.2s）
+### 密钥生命周期 — PASS（0.4s）
 
     == 1. 签发（幂等） ==
     == 2. 验签（第 1 代） ==
@@ -88,7 +88,7 @@
       OK   并发：4 写 × 50 条 + 2 读线程 → 无异常且一条不丢
     时钟可信测试全部通过
 
-### IoTDB 审计/时间窗 — PASS（0.7s）
+### IoTDB 审计/时间窗 — PASS（0.6s）
 
     == 1. actor 字段 ==
     == 2. query_events 回读 actor ==
@@ -99,7 +99,7 @@
       OK   合法值生效
     全部通过
 
-### UI 服务器契约 — PASS（0.6s）
+### UI 服务器契约 — PASS（0.8s）
 
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
@@ -107,7 +107,7 @@
     [server] [id 3] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
     [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=- accepted=False
-    Ran 29 tests in 0.458s
+    Ran 29 tests in 0.618s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -174,10 +174,10 @@
 
 ### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.1s）
 
-    PASS  字典 zh/en key 集合一致（783 / 783）
+    PASS  字典 zh/en key 集合一致（790 / 790）
     PASS  每个 key 恰好 2 次（zh + en）
     PASS  字典非空且含中文与英文条目（翻译真的两套）
-    PASS  扫描 14 个页面/脚本，引用 753 个 key（含动态前缀家族 12 个）
+    PASS  扫描 14 个页面/脚本，引用 760 个 key（含动态前缀家族 12 个）
     PASS  页面引用的 key 全部在字典里
     PASS  node 语法检查通过
 
