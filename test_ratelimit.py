@@ -22,6 +22,7 @@ if HERE not in sys.path:
 
 import orpah_proto as op
 import ratelimit as RL
+from router import RouterBridge
 from server import OrpahServer
 
 ADDR = ("127.0.0.1", 40001)
@@ -371,6 +372,104 @@ class TestServerWiring(unittest.TestCase):
         srv._handle(op.build_id_report({"payload": {"sn": SN}}), ADDR)
         srv._handle(op.build_id_report({"payload": {"sn": SN}}), ADDR)
         self.assertEqual(len(srv.id_reports), 1)
+
+
+class TestRouterWiring(unittest.TestCase):
+    """Router 侧（§5.8 的行 1/行 2）：转发按 SN 限、未签名 REQ-CONNECT 按**源 MAC** 限。
+
+    不碰真 socket：RouterBridge 不 start()，手工塞一个假 UDP socket，直接调 `_handle_up`。
+    这也是 `_handle_up(msg, eth)` 需要 **eth 原始帧**的原因（限 probe 要读源 MAC）。
+    """
+
+    MAC_A = bytes([0x4A, 0x06, 0x59, 0x00, 0x00, 0x01])
+    MAC_B = bytes([0x4A, 0x06, 0x59, 0x00, 0x00, 0x02])
+    MAC_A_STR = "4a:06:59:00:00:01"
+    MAC_B_STR = "4a:06:59:00:00:02"
+
+    def _rt(self, **rlkw):
+        rl = RL.RateLimiter(**rlkw)
+        drops = []
+        rt = RouterBridge(ap_port=59999, server_port=59998, rl=rl,
+                          on_ratelimit=drops.append)
+        rt.udp = _FakeSock()
+        rt._synced = True          # 否则每条 REQ-CONNECT 都会去 sync()（本用例不测那条路径）
+        return rt, rl, drops
+
+    def _frame(self, msg, mac=None):
+        return op.build_eth_frame(op.encode_msg(msg), src_mac=mac or self.MAC_A)
+
+    def test_forward_limited_by_sn_only(self):
+        """行 2：转发按 SN 限。**只按 SN** —— 不能把 probe 的源 MAC 桶也吃进来。"""
+        rt, rl, drops = self._rt(sn_rate=0.0, sn_burst=3, router_rate=0.0, router_burst=100)
+        for i in range(6):
+            rt._handle_up(op.build_report(SN, seq=i, rssi=-55), self._frame(op.build_report(SN, seq=i)))
+        self.assertEqual(rl.dropped_sn, 3)                 # 只放行桶容量 3 条
+        self.assertEqual(rl.dropped_router, 0)             # 源 MAC 桶**没被动过**
+        self.assertEqual(rt.rl_dropped, 3)
+        self.assertEqual(rt.up_count, 3)                   # 只有放行的进了转发
+        self.assertEqual([r["which"] for r in rt.rl_drops], ["sn"] * 3)
+        self.assertEqual(rt.rl_drops[0]["side"], "router")
+
+    def test_forward_does_not_consume_probe_bucket(self):
+        """★ 2026-09-13 实测踩过：把源 MAC 传给转发检查 → probe 桶（1/s）把 13 条
+        demo_spoof 连发当 probe 限掉。这条锁住“转发只吃 SN 桶”。"""
+        rt, rl, drops = self._rt(sn_rate=100.0, sn_burst=100, router_rate=100.0,
+                                 router_burst=100)
+        for i in range(13):                                # 模拟 demo_spoof 的 13 条连发
+            rt._handle_up(op.build_report(SN, seq=i), self._frame(op.build_report(SN, seq=i)))
+        self.assertEqual(rt.rl_dropped, 0, "13 条连发被限了 —— 转发不该吃 MAC 桶")
+        self.assertEqual(rt.up_count, 13)
+
+    def test_probe_limited_by_source_mac(self):
+        """行 1：未签名的 REQ-CONNECT 相当于 probe → 按源 MAC 限（且不吃转发额度）。"""
+        rt, rl, drops = self._rt(sn_rate=0.0, sn_burst=1, router_rate=0.0, router_burst=2)
+        for _ in range(5):
+            rt._handle_up(op.build_req_connect(SN), self._frame(op.build_req_connect(SN)))
+        self.assertEqual(rl.dropped_router, 3)             # 5 发 - 桶容量 2 = 丢 3
+        self.assertEqual(rl.dropped_sn, 0, "probe 不该吃该设备的转发额度")
+        self.assertTrue(all(r["which"] == "router" for r in rt.rl_drops))
+        self.assertEqual(rt.rl_drops[0]["router"], self.MAC_A_STR)
+
+    def test_probe_bucket_is_per_mac(self):
+        """另一台设备（另一个源 MAC）不受影响 —— 这正说明限的是“谁在发”。"""
+        rt, rl, drops = self._rt(sn_rate=100.0, sn_burst=100, router_rate=0.0, router_burst=1)
+        rt._handle_up(op.build_req_connect(SN), self._frame(op.build_req_connect(SN)))   # A 过
+        rt._handle_up(op.build_req_connect(SN), self._frame(op.build_req_connect(SN)))   # A 丢
+        self.assertEqual(rl.dropped_router, 1)
+        rt._handle_up(op.build_req_connect(SN),
+                      self._frame(op.build_req_connect(SN), self.MAC_B))                 # B 过
+        self.assertEqual(rl.dropped_router, 1, "B 被 A 的桶连坐了")
+        rt._handle_up(op.build_req_connect(SN),
+                      self._frame(op.build_req_connect(SN), self.MAC_B))                 # B 丢
+        self.assertEqual(rl.dropped_router, 2)
+        self.assertEqual(rt.rl_drops[0]["router"], self.MAC_B_STR)   # 这条记的是 B
+
+    def test_tracked_req_connect_is_never_limited(self):
+        """★ 命中走失表的 REQ-CONNECT **不限**：那条路径会顺便产生 FOUND，
+        限掉它等于漏报“发现走失”（与 server 侧 FOUND 不限同一条理由）。"""
+        rt, rl, drops = self._rt(sn_rate=0.0, sn_burst=1, router_rate=0.0, router_burst=1)
+        rt.lost_cache[SN] = {"tracked": True}
+        for _ in range(20):
+            rt._handle_up(op.build_req_connect(SN), self._frame(op.build_req_connect(SN)))
+        self.assertEqual(rt.rl_dropped, 0, "命中的 REQ-CONNECT 被限了 → 会漏报 FOUND")
+        self.assertEqual(rt.found_count, 20)               # 20 次“发现”一条不少
+
+    def test_normal_rate_not_limited(self):
+        """默认参数下，正常设备（每 2 秒一次 REQ-CONNECT + 每秒一条上报）零丢弃。
+
+        直接拿限频器 + 假时钟算（不经过链路）：要锁的是**参数选得对不对**，
+        而不是链路能不能跑（那个在 demo_ratelimit.py 里测）。
+        """
+        rt, rl, drops = self._rt(sn_rate=RL.RTR_SN_RATE, sn_burst=RL.RTR_SN_BURST,
+                                 router_rate=RL.RTR_MAC_RATE, router_burst=RL.RTR_MAC_BURST)
+        t0 = 1000.0
+        for i in range(120):                               # 60 秒，每 0.5 秒一拍
+            t = t0 + i * 0.5
+            if i % 4 == 0:                                 # 每 2 秒一次 REQ-CONNECT
+                self.assertTrue(rl.check(sn=None, router=self.MAC_A_STR, now=t).ok,
+                                f"第 {t - t0:.1f}s 的 REQ-CONNECT 被误限")
+            self.assertTrue(rl.check(sn=SN, now=t).ok, f"第 {t - t0:.1f}s 的上报被误限")
+        self.assertEqual(rl.dropped(), 0, "默认 Router 侧参数把正常流量限住了")
 
 
 class _FakeSock:

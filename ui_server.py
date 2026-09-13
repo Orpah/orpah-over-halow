@@ -477,7 +477,8 @@ class OrpahApp:
         self.router = RouterBridge(ap_port=HOST_A, server_port=UDP_SRV,
                                    on_up=self._on_up, on_down=self._on_down,
                                    on_found=self._on_found_router,
-                                   on_up_id=self._on_up_id)
+                                   on_up_id=self._on_up_id,
+                                   on_ratelimit=self._on_ratelimit)
         if not self.router.start():
             print("[ui] Router 连不上 AP host 口，退出")
             return False
@@ -675,10 +676,22 @@ class OrpahApp:
         """给告警引擎的限频视图（`alerts.evaluate(ratelimit=…)`）。
 
         只给形状需要的最小集：累计计数 + 最近一次丢弃的时刻/防线（不搬整张桶表）。
+        **两侧合并**：对“有人在刷”这件事而言，是 Server 还是 Router 拦下的不重要；
+        页面/告警上再分说是哪一侧。
         """
         snap = self.rl.snapshot()
-        return {"on": snap["on"], "dropped": snap["dropped"],
-                "last_drop": self.rl.last_drop}
+        rtr = self.router.rl.snapshot() if self.router else None
+        drop = dict(snap["dropped"])
+        last = self.rl.last_drop
+        if rtr:
+            drop = {"sn": drop["sn"] + rtr["dropped"]["sn"],
+                    "router": drop["router"] + rtr["dropped"]["router"],
+                    "total": drop["total"] + rtr["dropped"]["total"]}
+            # 取两侧更晚的那次（两侧的 t 都是 epoch 秒）
+            lt = (self.router.rl.last_drop or {}).get("t") or 0
+            if lt > ((last or {}).get("t") or 0):
+                last = dict(self.router.rl.last_drop, side="router")
+        return {"on": snap["on"], "dropped": drop, "last_drop": last}
 
     def flood(self, n=200, rotate=False, timeout=30.0):
         """演示限频（§5.8）：连发 n 条 ID-REPORT，看有多少被丢。
@@ -697,6 +710,7 @@ class OrpahApp:
         n = max(1, min(int(n or 200), 2000))          # 上限防手滑（2000 条 ≈ 几秒）
         before_a = self.srv.id_report_total
         before_d = self.srv.rl_dropped
+        rtr0 = self.router.rl_dropped if self.router else 0
         sn0 = self.client.sn if self.client else self.sn
         for i in range(n):
             if rotate:
@@ -704,32 +718,41 @@ class OrpahApp:
                     {"payload": {"sn": f"CN-WH01-RL{i:04d}"}}))
             else:
                 self._send_id_report()                # 真签名（含 ECDSA 开销：这才叫刷量）
+        # 判据：**两侧合计**（Router 侧限的是带宽，它丢的报文根本到不了 Server ——
+        # 只看 server 侧计数会永远等不到；2026-09-13 实测踩过）。
         done = wait_until(
-            lambda: (self.srv.id_report_total + self.srv.rl_dropped
-                     >= before_a + before_d + n),
+            lambda: (self.srv.id_report_total - before_a
+                     + self.srv.rl_dropped - before_d
+                     + (self.router.rl_dropped - rtr0 if self.router else 0)) >= n,
             timeout=timeout, interval=0.02)
         acc = self.srv.id_report_total - before_a
         drop = self.srv.rl_dropped - before_d
+        drop_rtr = (self.router.rl_dropped - rtr0) if self.router else 0
         if not done:
             print(f"[ui] 警告：刷量 {n} 条在 {timeout}s 内未被服务端处理完"
-                  f"（已处理 {acc + drop} 条）")
+                  f"（已处理 {acc + drop + drop_rtr} 条）")
         return {"ok": bool(done), "sn": sn0, "rotate": bool(rotate), "sent": n,
-                # 注意：这两个数含**同一时刻的周期报文**（同一 SN 的 L2 REPORT 也会被限）
-                "accepted": acc, "dropped": drop}
+                # 注意：这几个数含**同一时刻的周期报文**（同一 SN 的 L2 REPORT 也会被限）
+                "accepted": acc, "dropped": drop, "dropped_router": drop_rtr}
 
     def _on_ratelimit(self, rec):
-        """被限频丢弃（server 回调）：留痕 + 落库。
+        """被限频丢弃（**Server 侧与 Router 侧共用**这个回调）：留痕 + 落库。
+
+        两侧的区别只在 `rec["side"]`（`server` / `router`）与 `which` 的含义：
+          · Server 侧：`sn` = per-SN 桶（省验签 CPU）、`router` = per-Router 桶（源地址）；
+          · Router 侧：`sn` = 转发按 SN 限（省带宽）、`router` = per-源MAC（未签名的 REQ-CONNECT）。
 
         **与 `id_reject` 分开**：那些是过了限频但**验签链**判不合格（伪造/重放/吊销）；
-        这里是**根本没让进验签**（省 CPU）。混在一起会让“被哪道防线拒”失真，
+        这里是**根本没让进验签**（省 CPU / 省带宽）。混在一起会让“被哪道防线拒”失真，
         也会污染签名失败率告警（`sig_fail_rate`）。
         """
         self.rl_events.insert(0, rec)
         del self.rl_events[20:]
         self.tsdb.write_event(
             "ratelimit", sn=rec.get("sn", "") if rec.get("sn") != "-" else "",
-            detail=(f"which={rec.get('which')} mtype={rec.get('mtype')} "
-                    f"router={rec.get('router')} retry_after={rec.get('retry_after')}"))
+            detail=(f"side={rec.get('side', 'server')} which={rec.get('which')} "
+                    f"mtype={rec.get('mtype')} router={rec.get('router')} "
+                    f"retry_after={rec.get('retry_after')}"))
 
     def _on_id_report(self, rec):
         """Server 验签结果回调：更新卡片 + 签名上报流（带 trust）。"""
@@ -935,6 +958,13 @@ class OrpahApp:
             # 限频（§5.8，2026-09-13）：形状 `on/params/counters/...`（单一源，页面不写死参数）。
             # `recent` 用 ui_server 自己那份（server 的环形也可，但这里要保证与审计事件同序）。
             "ratelimit": dict(self.rl.snapshot(), recent=self.rl_events[:5]),
+            # Router 侧（§5.8 的两行：转发按 SN / 未签名 REQ-CONNECT 按源 MAC）——
+            # 与 Server 侧**分开报**：两边参数不同、丢的后果也不同（砍带宽 vs 砍 CPU），
+            # 合成一个数就说不清“报文死在哪一段”了。
+            "ratelimit_rtr": dict(
+                self.router.rl.snapshot() if self.router else {},
+                dropped_total=self.router.rl_dropped if self.router else 0,
+                recent=list(self.router.rl_drops)[:5] if self.router else []),
             # 防 spoof 演示的攻击清单（脚本/UI 同一份，见 spoof.py；页面按语言取 zh/en）
             "spoof_kinds": [{"kind": k, "zh": spoof.case_info(k)[0],
                              "en": spoof.case_info(k)[1],

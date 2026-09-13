@@ -270,23 +270,32 @@
   - **查审计事件别读错字段**：`GET /api/ts/events` 返回的键是 **`rows`**（不是 `events`）；
     另注意它按 `etype`/`sn` 在**本地**过滤（值过滤不进 WHERE，见 §0 IoTDB 条），
     所以“某类事件为空”先确认字段名，再确认是不是真没写进去。
-  - **限频（§5.8，2026-09-13）**：`ratelimit.py`（令牌桶，纯 `now` 函数、**不睡眠不轮询**）。
-    服务端两条防线 **per-SN + per-Router，两条都 peek 通过才各扣一个令牌**（否则被拒的请求
-    白吃好设备的额度），放在 `server._handle` 里 **验签之前** —— 限频是为省 ECDSA 的 CPU，不是判真假。
-    **必须两条**：per-SN 的 key 取自**尚未验签的 `payload.sn`** → 轮换 SN 就能绕过它
-    （`demo_ratelimit.py` 实测：轮换 60 条时 sn 防线丢 0、router 防线丢 34）→
-    per-Router（源地址）是兜底；两条都能被「换源」绕过，**不得写成“防住了”**。
-    - **丢弃另记 `ratelimit` 事件**，**绝不**记成 `id_reject`：后者是“过了限频但验签链判不合格”，
-      混在一起会让「被哪道防线拒」失真，还会污染签名失败率告警。
-    - **`ORPAH-FOUND` 故意不限频**（漏一条 = 一个人没被找到）；“某台 Router 刷 FOUND”属 F-12 一类
-      （Router 身份），不是限频能解的 —— 这条决定写在 `server._handle` 的注释里，别顺手加上。
-    - **参数是部署配置**（`ORPAH_RL_*`；UI 只读 `/api/status.ratelimit.params`，**页面不写死**），
-      默认值按“正常 1 条/秒不误伤 + 演示批次 13 条不被拦”选，**不是实测标定**；
-      桶表 key 上限（`ORPAH_RL_MAX_KEYS`）必须有 —— key 来自报文内容，是不可信输入。
-    - **「限频不是封禁」是回归锁**：`test_ratelimit.py` 里“默认参数下 120s 正常流量零丢弃”
-      + “桶回补后立刻放行”两条不许改坏（改动限频参数先看这两条）。
-    - 测法照做：**在真实演示数据上刷量**（页面按钮 `flood` / `demo_ratelimit.py`）——
-      单帧验签层对“高频刷量”**毫无反应**，只有限频层会动，这就是它存在的理由。
+  - **限频（§5.8，2026-09-13）**：两处，**各吃各的桶**，参数两套前缀（`ORPAH_RL_*` = Server 侧、
+    `ORPAH_RLR_*` = Router 侧），都是纯 `now` 函数、**不睡眠不轮询**（测试传假时钟）。
+    - **Router 侧**（`router.RouterBridge`，限**带宽**）：行 2 = 转发**按 SN**（`check(sn=…)`）；
+      行 1 = 未签名的 REQ-CONNECT（相当于 probe）**按源 MAC**（`check(router=mac, sn=None)`，用
+      `orpah_proto.eth_src_mac(frame)` 读源 MAC，别自己写 `frame[6:12]`）。
+      **★ 别把 mac 传给转发检查**（2026-09-13 实测踩过）：probe 桶是 1/s，会把 `demo_spoof` 的
+      13 条连发当探针限掉 → e2e 直接 FAIL。`test_ratelimit.py` 有专门用例锁这条。
+    - **Server 侧**（`server._handle`，限 **CPU**）：per-SN + per-Router，两条都「先 peek 再 consume」，
+      **整段持锁**（原子；否则并发下会超量放行 —— 且那种 bug 的测试很容易写成“碰运气能过”）。
+      位置在**验签之前**（限频是为省 ECDSA，不是判真假）。
+    - **两侧参数故意不同**（Router 侧更宽：转发 5/s 桶 40、probe 1/s 桶 5；Server 侧 per-SN 2/s 桶 20、
+      per-Router 20/s 桶 60）：Router 侧砍带宽、Server 侧砍 CPU；两边都做窄，报文死在 Router，
+      就看不出「哪道防线拦的」。
+    - **丢弃另记 `ratelimit` 事件**（`side=server|router`），**绝不**记成 `id_reject`（后者是
+      “过了限频但验签链判不合格”）；计数也要**分两侧报**（`/api/status.ratelimit` / `ratelimit_rtr`），
+      合成一个数就说不清“报文死在哪一段”（Server 侧计数里**不含** Router 丢掉的报文）。
+    - **两个例外，永不限频**：`ORPAH-FOUND`；以及**命中走失表的 REQ-CONNECT**（那条路径会顺便产生
+      FOUND，限掉它 = 漏报发现）。代价如实写：刷“已知走失 SN”可绕开 probe 那行。
+    - **key 是攻击者可控的** → 桶表必须有 key 上限，且**淘汰必须 O(1)**：曾经用
+      `min(buckets, key=…last)` 扫描 → 满表时每报文扫 4096 项，实测 **219 µs/条**（无淘汰路径才
+      5.2 µs/条）→ 限频层自己变成 CPU 放大器。改 `OrderedDict` + `move_to_end`/`popitem(last=False)`。
+    - **「限频不是封禁」是回归锁**：`test_ratelimit.py` 里“默认参数下正常流量零丢弃”
+      （Server 侧 120s、Router 侧 60s 各一条）+ “桶回补后立刻放行”两条不许改坏。
+    - 测法照做：**在真实演示数据上刷量**（页面 `flood` / `demo_ratelimit.py`）——
+      单帧验签层对“高频刷量”**毫无反应**，只有限频层会动，这就是它存在的理由；
+      单看一侧也会误判（Router 侧一开，`demo_ratelimit.py` 的“等 server 处理完 200 条”永远等不到）。
   - **地图代码分两层**：`ui/static/map.js` = **底图源列表 / 条款说明 / 本地坐标↔经纬度换算 /
     底图图层 + 离线回落**的**单一源**（track.html 与 replay.html 共用，两页 `ensureMap()` 都调
     `addBaseLayer(lmap)`）—— 那是**合规相关**的东西

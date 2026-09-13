@@ -171,6 +171,8 @@
     <div class="id-row"><span data-i18n="rl_params">参数</span><b id="rlParams">-</b></div>
     <div class="id-row"><span data-i18n="rl_allowed">已放行</span><b id="rlAllowed">-</b></div>
     <div class="id-row"><span data-i18n="rl_dropped">已丢弃</span><b id="rlDropped" class="ok">-</b></div>
+    <div class="id-row"><span data-i18n="rl_rtr_params">Router 侧（带宽）</span><b id="rlRtrParams">-</b></div>
+    <div class="id-row"><span data-i18n="rl_rtr_dropped">Router 侧已丢弃</span><b id="rlRtrDropped" class="ok">-</b></div>
   </div>
   <div class="config-row id-ctl">
     <button class="btn" id="btnRlFlood" data-i18n="rl_btn_flood">刷量（同一 SN）</button>
@@ -181,13 +183,14 @@
   <div class="pub-head" data-i18n="rl_recent_head">最近被丢弃的（最新在前）</div>
   <table>
     <thead><tr>
-      <th data-i18n="th_time">时间</th><th data-i18n="rl_th_mtype">报文</th>
+      <th data-i18n="th_time">时间</th><th data-i18n="rl_th_side">哪一侧</th>
+      <th data-i18n="rl_th_mtype">报文</th>
       <th data-i18n="th_sn">序列号</th><th data-i18n="rl_th_src">来源</th>
       <th data-i18n="rl_th_which">哪条防线</th><th data-i18n="rl_th_retry">可再试（秒）</th>
     </tr></thead>
     <tbody id="rlRecent"></tbody>
   </table>
-  <p class="hint" data-i18n="rl_hint">两条防线（per-SN + per-Router）都过才放行，且发生在验签之前（省的是 ECDSA 的 CPU）。边界照实说：per-SN 的 key 取自报文里尚未验签的 sn，所以轮换 SN 就能绕过它，剩下靠 per-Router（源地址）兜；发现走失（ORPAH-FOUND）不受限（漏一条等于一个人没被找到）；全体一起被刷时两条防线都会到顶，那时只能靠上游/接入侧，限频不是“防住了”。刷量条数按服务端参数自动取（同一 SN 取 3 倍桶容量、轮换取 per-Router 桶容量 + 20）—— 仿真空口的吞吐有限，条数再大只会等更久，不改变结论。</p>
+  <p class="hint" data-i18n="rl_hint">§5.8 的限频分两处：Router 侧（网口上行）限带宽 —— 转发按 SN、未签名 REQ-CONNECT 按源 MAC；Server 侧限 CPU（ECDSA 验签之前）—— per-SN + per-Router（源地址），两条都过才放行。两边参数不同（Router 侧更宽）是有意的：两边都做窄，报文死在 Router 就看不出「哪道防线拦的」。边界照实说：per-SN 的 key 取自尚未验签的 sn，轮换 SN 就能绕过它；命中走失表的 REQ-CONNECT 与 ORPAH-FOUND 都不限（漏一条等于一个人没被找到）；全体一起被刷时各条防线都会到顶，那时只能靠上游/接入侧，限频不是“防住了”。刷量条数按服务端参数自动取。速度差照实说：仿真空口只有几 条/秒的吞吐，而两个桶补得比它快，所以页面上「轮换刷量」大致拦不下几条（不包装成演示效果）；要看两条线各拦一段，请看离线 demo_ratelimit.py（实测同一 SN 连发 200 条：Router 侧丢 159、Server 侧丢 35）。</p>
 </section>
 
 <!-- ============ 发现记录（走失命中） ============ -->

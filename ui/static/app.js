@@ -345,7 +345,7 @@ function renderIdReports(list) {
    否则改了环境变量会出现“页面说的与服务器做的不一致”。*/
 let rlBusy = false;
 let rlP = {};                     // 最近一次 /api/status 里的限频参数（刷量条数按它算）
-function renderRatelimit(rl) {
+function renderRatelimit(rl, rtr) {
   if (!rl) return;
   const p = rl.params || {};
   rlP = p;
@@ -362,21 +362,39 @@ function renderRatelimit(rl) {
     .replace("{t}", d.total || 0).replace("{s}", d.sn || 0)
     .replace("{r}", d.router || 0);
   $("rlDropped").className = (d.total || 0) > 0 ? "bad" : "ok";
+  // Router 侧（§5.8 的行 1/2）：与 Server 侧**分开显示** —— 参数不同、丢的后果也不同
+  // （砍带宽 vs 砍 CPU），合成一个数就说不清“报文死在哪一段”了。
+  const rp = (rtr && rtr.params) || {};
+  $("rlRtrParams").textContent = T("rl_params_fmt_rtr")
+    .replace("{a}", `${rp.sn_burst}/${rp.sn_rate}`)
+    .replace("{b}", `${rp.router_burst}/${rp.router_rate}`);
+  const rd = (rtr && rtr.dropped) || {};
+  $("rlRtrDropped").textContent = T("rl_drop_fmt").replace("{t}", rd.total || 0)
+    .replace("{s}", rd.sn || 0).replace("{r}", rd.router || 0);
+  $("rlRtrDropped").className = (rd.total || 0) > 0 ? "bad" : "ok";
   const tbody = $("rlRecent");
   if (!tbody) return;
   tbody.innerHTML = "";
-  const rows = rl.recent || [];
+  // 两侧的最近丢弃合到一张表（按侧着色文字），否则“到底是谁丢的”就看不见了。
+  // 合并后要**按时间重排**：两边各只留最近 5 条，直接拼起来会把另一侧较新的挤掉
+  // （表头写的是“最新在前”，就得真的是最新在前）。t 是 HH:MM:SS，同日可直接比字符串。
+  const rows = (rl.recent || []).map(r => Object.assign({ side: "server" }, r))
+    .concat((rtr && rtr.recent ? rtr.recent : []).map(r => Object.assign({}, r)))
+    .sort((a, b) => String(b.t || "").localeCompare(String(a.t || "")))
+    .slice(0, 8);
   if (!rows.length) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="6" class="pub-empty">${esc(T("rl_recent_empty"))}</td>`;
+    tr.innerHTML = `<td colspan="7" class="pub-empty">${esc(T("rl_recent_empty"))}</td>`;
     tbody.appendChild(tr);
     return;
   }
   rows.forEach(r => {
     const tr = document.createElement("tr");
     const which = r.which === "router" ? T("rl_which_router") : T("rl_which_sn");
+    const side = r.side === "router" ? T("rl_side_router") : T("rl_side_server");
     tr.innerHTML =
-      `<td>${esc(r.t || "")}</td><td>${esc(r.kind || "-")}</td>` +
+      `<td>${esc(r.t || "")}</td><td class="no">${esc(side)}</td>` +
+      `<td>${esc(r.kind || r.mtype || "-")}</td>` +
       `<td>${esc(r.sn || "-")}</td><td>${esc(r.router || "-")}</td>` +
       `<td class="no">${esc(which)}</td>` +
       `<td>${r.retry_after == null ? "-" : esc(String(r.retry_after))}</td>`;
@@ -405,9 +423,11 @@ async function rlFlood(btn, n, rotate) {
     if (!r || r.ok === false && r.sent === undefined) {
       rlMsg(T("rl_fail") + (r && r.err ? r.err : ""), "err");
     } else {
-      // 数字含同一时刻的周期报文（同一 SN 的 L2 REPORT 也会被限）
+      // 数字含同一时刻的周期报文（同一 SN 的 L2 REPORT 也会被限）；
+      // Router 侧丢的不会到 Server → 两边分开报（否则加起来对不上“发了多少条”）。
       rlMsg(T(rotate ? "rl_done_rotate" : "rl_done")
         .replace("{n}", r.sent).replace("{a}", r.accepted).replace("{d}", r.dropped)
+        .replace("{dr}", r.dropped_router == null ? 0 : r.dropped_router)
         + (r.ok ? "" : " " + T("rl_timeout")), r.dropped > 0 ? "" : "err");
     }
   } catch (e) {
@@ -494,7 +514,7 @@ async function refresh() {
     renderFounds(s.founds || []);
     renderId(s.id_demo || {});
     renderIdReports(s.id_reports || []);
-    renderRatelimit(s.ratelimit || {});
+    renderRatelimit(s.ratelimit || {}, s.ratelimit_rtr || {});
     fillSpoofKinds(s.spoof_kinds || []);
     spoofKinds = s.spoof_kinds || spoofKinds;
     // §8.2 降级演示下拉：选项来自 /api/status（单一源），选中值回显当前模式

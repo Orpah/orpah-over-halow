@@ -366,3 +366,15 @@ def parse_eth_frame(frame, want_ethertype=ORPAH_ETHERTYPE):
     if want_ethertype is not None and ethertype != want_ethertype:
         return None
     return ethertype, frame[14:]
+
+
+def eth_src_mac(frame):
+    """以太网帧 → 源 MAC 字符串（`"aa:bb:cc:dd:ee:ff"`）；长度不足返回 None。
+
+    限频（§5.8）按**源**限速时要用它（未签名的 REQ-CONNECT 相当于 probe，
+    防的是“同一台设备狂发”）。放在这里是为了**只有一份帧解析** ——
+    别在 router/工具里另写一遍 `frame[6:12]`（格式串一改就会两处不一致）。
+    """
+    if not frame or len(frame) < 12:
+        return None
+    return ":".join("%02x" % b for b in frame[6:12])

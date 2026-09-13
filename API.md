@@ -109,7 +109,8 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 | `id_cap_rtc` | 当前设备**声明的有无 RTC**：`true`=有 / `false`=无 / `null`=未声明（三态，页面下拉回显） |
 | `id_ts_broken` | 演示开关：设备自报 `ts` 一律置 0（“没有可用时钟”，页面复选框回显） |
 | **`spoof_kinds`** | **防 spoof 演示的攻击清单** `[{kind, zh, en, expect}]`（来自 `spoof.UI_KINDS`，脚本/页面同一份）。页面按当前语言取 `zh`/`en` 生成下拉，`expect` 用于「期望 vs 实际」对比——**后端不返回本地化文案，只给两种语言让页面挑**，避免中英混排 |
-| **`ratelimit`** | **限频（§5.8）状态**：`{on, params:{sn_rate,sn_burst,router_rate,router_burst,max_keys}, allowed, dropped:{sn,router,total}, sn_table, router_table, top_sn, recent[≤5], since}`。**参数以服务端为单一源**（页面不写死）；`recent` 只 5 条、**不含全表**（桶表可能几千 key，不该每秒重传）|
+| **`ratelimit`** | **限频（§5.8）状态 —— Server 侧**：`{on, params:{sn_rate,sn_burst,router_rate,router_burst,max_keys}, allowed, dropped:{sn,router,total}, sn_table, router_table, top_sn, recent[≤5], since}`。**参数以服务端为单一源**（页面不写死）；`recent` 只 5 条、**不含全表**（桶表可能几千 key，不该每秒重传）|
+| **`ratelimit_rtr`** | **限频状态 —— Router 侧**（§5.8 的行 1/2）：同 `ratelimit` 的形状（`params.sn_*` = 转发按 SN、`params.router_*` = REQ-CONNECT 按源 MAC），另加 `dropped_total` 与 `recent`。**必须与 `ratelimit` 分开报**：两侧参数不同（Router 侧更宽）、丢的后果也不同（砍带宽 vs 砍 CPU），合成一个数就说不清“报文死在哪一段”—— 而且 **Server 侧计数里不含 Router 丢掉的报文** |
 | **`energy`** | 能量轴（免电池客户端，2026-09-13）：`{on, params, state}` —— 形状与 GET `/api/energy` 的三项**一致**（页面同一份渲染代码吃两种来源）。**不含扫描表**（那个在 `energy_axis`，见 §13） |
 | **`energy_axis`** | 能量轴扫描表 `{rows[13], min_harvest_mw, n, speedup, h_max}`（页面画「采集功率 → 上报间隔」表 + 标出当前工作点） |
 
@@ -205,11 +206,14 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 **新增 `flood` / `rl_reset`（限频演示，2026-09-13，§5.8）**：
 
 - `{action:"flood", n:<条数>, rotate:true|false}` —— **真的**连发 n 条 ID-REPORT（走真链路，
-  与页面/脚本同一套入口），返回 `{ok, sent, accepted, dropped, sn, rotate}`。
-  - `rotate:false`（默认）：同一 SN 连发 → 命中 **per-SN** 防线；
+  与页面/脚本同一套入口），返回 `{ok, sent, accepted, dropped, dropped_router, sn, rotate}`。
+  - `rotate:false`（默认）：同一 SN 连发 → **两侧各拦一段**：Router 侧转发桶（带宽）先砍，
+    剩下的在 Server 侧 per-SN 桶（CPU）被丢；
   - `rotate:true`：每条换一个 SN（源地址不变）→ per-SN 桶对每个新 SN 都是满桶，
-    **拦不住**，只能由 **per-Router** 桶兜（条数不超它的桶容量时一条都不丢）。
-  - `n` 上限 2000（防手滑）；`ok:false` = 服务端在 timeout（默认 30s）内**没处理完**，
+    **拦不住**，只能由 per-Router / per-源MAC 兜（条数不超桶容量时一条都不丢）。
+  - `dropped` 只算 **Server 侧**，`dropped_router` 是 **Router 侧**（页码/告警两侧分开显示；
+    Server 侧计数**不含** Router 丢掉的报文）。
+  - `n` 上限 2000（防手滑）；`ok:false` = 两侧合计在 timeout（默认 30s）内**没处理完**，
     此时数字偏小、**不静默**（日志里也有 `[ui] 警告：刷量 …`）。
   - 返回的 `accepted`/`dropped` 含**同一时刻的周期报文**（同一 SN 的 L2 REPORT 也会被限）。
 - `{action:"rl_reset"}` —— 只清计数（便于页面数字对得上），**不清桶**：
@@ -318,7 +322,7 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 | `found` | Server 收到 ORPAH-FOUND（走失命中） | `router <ip>:<port>` | `system` |
 | `id_report` | Server 验完一条 Orpah ID 上报 | `alg=… level=… trust=… accepted=…` | `system` |
 | `id_reject` | 同上但 `accepted=false`（验签被拒） | 同上 + `err=<原因>` | `system` |
-| `ratelimit` | 限频丢弃（**验签之前**，§5.8；见 `ratelimit.py`） | `which=sn\|router mtype=… router=<ip:port> retry_after=<秒>` | `system` |
+| `ratelimit` | 限频丢弃（**验签之前**，§5.8；见 `ratelimit.py`） | `side=server\|router which=sn\|router mtype=… router=<ip:port\|源MAC> retry_after=<秒>` | `system` |
 | `case_mark` | 立案（去重后只写一次） | `case_id` | 操作者（POST 传的 `actor`） |
 | `case_found` | 案件进入已发现（`newly` 时才写） | 触发来源 | `system` |
 | `case_close` | 结案 | `<case_id>:closed\|revoked` | 操作者（POST 传的 `actor`） |
@@ -529,7 +533,7 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 | `id_cap_mismatch` | `warn`（不分级） | 设备**已签**声明「有 RTC」（`cap_rtc is True`），却送出不可用的 `ts`（`ts_ok=false`） | `300` | `ORPAH_ALERT_CAP_MISMATCH_SEC` |
 | `id_energy` | `warn` / `crit` | 设备最后一条**已签**上报的电量低（`mv ≤ low` → warn）/ 已耗尽（`mv ≤ out` → crit）；数据带 `mv`/`silence_in_s`（还能撑多久） | `3300` / `3100` | `ORPAH_ALERT_ENERGY_LOW_MV` / `ORPAH_ALERT_ENERGY_OUT_MV` |
 | `no_report_energy` | `warn`（**不升级 crit**） | 设备沉默**且**最后一条已签电量低 → **疑似没电**（等它取能），与 `no_report` **分流**（处置相反，不得合并） | 同 `no_report`（`30`） | `ORPAH_ALERT_NO_REPORT_SEC` |
-| `ratelimit` | `warn` | 最近 N 秒内出现过**限频丢弃**（无论哪条防线）→ **只陈述事实、不归因**（大流量 ≠ 攻击）；数据带 `which` / `dropped_sn` / `dropped_router` / `sn` / `router` | `60` | `ORPAH_ALERT_RL_SEC` |
+| `ratelimit` | `warn` | 最近 N 秒内出现过**限频丢弃**（**两侧合并**，无论哪条防线）→ **只陈述事实、不归因**（大流量 ≠ 攻击）；数据带 `which` / `dropped_sn` / `dropped_router` / `sn` / `router` | `60` | `ORPAH_ALERT_RL_SEC` |
 
 ⚠ **默认值分两类，别看混**：
 - **演示压缩时间**（客户端 2s 一包，为了现场能看到效果）：`no_report` 30s（升级 300s）、

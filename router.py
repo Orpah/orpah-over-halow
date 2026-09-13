@@ -41,10 +41,11 @@ from host_bus import HostBus
 from orpah_proto import (ORPAH_UDP_PORT, MAC_BCAST, MSG_REQ_CONNECT,
                          MSG_REPORT, MSG_TRACKING_STATUS, MSG_LOST_TABLE,
                          MSG_ERROR, MSG_ID_REPORT,
-                         parse_eth_frame, decode_msg, encode_msg,
+                         parse_eth_frame, eth_src_mac, decode_msg, encode_msg,
                          build_access_info, build_eth_frame,
                          build_lost_table_req, build_found, new_rid,
                          ST_NOT_TRACKED)
+import ratelimit as rl_mod              # 限频（§5.8 的 Router 两行）
 
 LOG = True
 
@@ -60,7 +61,7 @@ class RouterBridge:
     def __init__(self, ap_port, server_port=ORPAH_UDP_PORT,
                  ap_host="127.0.0.1", server_host="127.0.0.1",
                  self_mac=None, on_up=None, on_down=None, on_found=None,
-                 on_up_id=None):
+                 on_up_id=None, rl=None, on_ratelimit=None):
         self.ap = HostBus(host=ap_host, port=ap_port, name="router")
         self.server_addr = (server_host, server_port)
         self.up_count = 0
@@ -71,6 +72,19 @@ class RouterBridge:
         self.on_down = on_down              # callable(msg) 下行注入（回 Client）
         self.on_found = on_found            # callable(msg) 发现走失上报
         self.on_up_id = on_up_id            # callable(msg) 上行转发（ID-REPORT）
+        # 限频（§5.8 的 Router 两行，2026-09-13）：
+        #   · 已签/业务上报**转发** → 按 SN 限（保护空口与 Router→Server 那段带宽）；
+        #   · 未签名的 REQ-CONNECT（相当于 probe）→ 按**源 MAC** 限。
+        # 默认参数比 server 侧**宽**（见 ratelimit.RTR_* 注释）：Router 侧是带宽保护，
+        # Server 侧才是 CPU 保护；两边都做窄会让“到底哪道防线拦的”失去分辨力。
+        self.rl = rl if rl is not None else rl_mod.RateLimiter.from_env(
+            rl_mod.RTR_PREFIX, sn_rate=rl_mod.RTR_SN_RATE,
+            sn_burst=rl_mod.RTR_SN_BURST, router_rate=rl_mod.RTR_MAC_RATE,
+            router_burst=rl_mod.RTR_MAC_BURST)
+        self.on_ratelimit = on_ratelimit    # callable(rec)：被本机限频丢弃（供 UI 记事件）
+        self.rl_dropped = 0                 # 本机丢弃总数（转发侧 + probe 侧）
+        # 最近被丢弃的（最新在前；与 server.rl_drops 对称，供 UI/演示看“哪条防线”）
+        self.rl_drops = collections.deque(maxlen=20)
         # 本地走失缓存（Server LOST-TABLE 下发）：sn -> tracked(bool)
         self.lost_cache = {}
         # 本 Router 的 MAC（下行帧 src；缺省给个演示值）
@@ -136,6 +150,16 @@ class RouterBridge:
             if not self._synced:
                 self.sync(timeout=1.5)
             tracked = bool(self.lost_cache.get(str(sn), {}).get("tracked"))
+            # 限频（§5.8 Router 行 1）：未签名的 REQ-CONNECT 相当于 probe →
+            # **只按源 MAC 限**（sn=None，不吃该设备的“转发额度”）。
+            # **命中走失表的不限**：那条路径会顺便产生 ORPAH-FOUND（业务告警），
+            # 限掉它等于漏报“发现走失”（与 server 侧“FOUND 不限频”同一条理由）。
+            mac = eth_src_mac(eth)
+            if not tracked:
+                dec = self.rl.check(sn=None, router=mac, kind="req-connect")
+                if not dec.ok:
+                    self._rl_drop("req-connect", sn, mac, dec)
+                    return
             status = ST_NOT_TRACKED if not tracked else "TRACKED"
             info = build_access_info(sn, tracked=tracked, server_ok=True,
                                      status=status)
@@ -146,6 +170,17 @@ class RouterBridge:
                 self._announce_found(sn)
             return
         if mtype == MSG_REPORT:
+            # 限频（§5.8 Router 行 2）：上报**转发**按 SN 限 → 超限就地丢弃，
+            # 不占空口与 Router→Server 那段带宽。
+            # **只按 SN**（不传 mac）：规范这一行就是 per-SN；源 MAC 那只桶是给未签名的
+            # REQ-CONNECT（probe）用的，两者混用会把“探针额度”当成“转发额度”吃掉
+            # —— 2026-09-13 实测踩过：demo_spoof 连发 13 条被 MAC 桶（1/s）当 probe 限掉。
+            # 注意：被限的**不**进 Server，所以 server 侧计数看不到它们（本机计数为准）。
+            mac = eth_src_mac(eth)
+            dec = self.rl.check(sn=sn, kind="report")
+            if not dec.ok:
+                self._rl_drop("report", sn, mac, dec)
+                return
             self.up_count += 1
             try:
                 # Server 应答要回到本 Router 的 UDP socket → 用同一 socket 发
@@ -162,6 +197,13 @@ class RouterBridge:
             # 已签 orpah-id-report：Router 只透传（不改 hdr/payload/sig），
             # Server 侧验签（§9.3）。不占 REPORT 上行计数（up_count），
             # 但它是真实进 UDP 的帧 → 单独计 id_up_count（UI 把 UDP 段按内容分色显示）。
+            # 限频（§5.8 Router 行 2）：转发前按 SN 限（与 REPORT 共一个桶：同一台设备的总上行量）。
+            # 同 REPORT：**只按 SN**（源 MAC 桶留给 probe 那一行）。
+            mac = eth_src_mac(eth)
+            dec = self.rl.check(sn=sn, kind="id-report")
+            if not dec.ok:
+                self._rl_drop("id-report", sn, mac, dec)
+                return
             try:
                 self.udp.sendto(encode_msg(msg), self.server_addr)
             except OSError as e:
@@ -175,6 +217,24 @@ class RouterBridge:
             return
         # 其它类型（一般不会经 Router 上行）——记录
         log(f"收到上行类型 {mtype} sn={sn}，忽略")
+
+    def _rl_drop(self, kind, sn, mac, dec):
+        """被 Router 侧限频丢弃：计数 + 留痕（**不**记成 server 侧丢弃）+
+        可选回调（ui_server 用它写 `ratelimit` 事件，`side=router`）。
+
+        `which`：`sn` = 转发按 SN 限住（带宽）；`router` = probe 按源 MAC 限住。
+        """
+        which = dec.which or "-"
+        retry = dec.retry_after
+        rec = {"t": time.strftime("%H:%M:%S"), "side": "router", "mtype": kind,
+               "sn": sn or "-", "router": mac or "-", "which": which,
+               "retry_after": None if retry == float("inf") else round(retry, 2)}
+        self.rl_dropped += 1
+        self.rl_drops.appendleft(rec)
+        log(f"限频丢弃（Router 侧）[{self.rl_dropped}] {kind} sn={rec['sn']} "
+            f"mac={rec['router']}（{which} 防线，{rec['retry_after']}s 后可再试）")
+        if self.on_ratelimit:
+            self.on_ratelimit(rec)
 
     def _announce_found(self, sn):
         """本 Router 检测到走失 sn（REQ-CONNECT 命中本地缓存）→ 上报 ORPAH-FOUND。

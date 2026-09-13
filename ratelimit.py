@@ -36,6 +36,11 @@ ENV（全都可选；非法值一律回退默认，不抛异常 —— 起不来
     ORPAH_RL_ROUTER_BURST   整数  单 Router 桶容量（默认 60）
     ORPAH_RL_MAX_KEYS       整数  桶表的 key 上限（默认 4096，超出淘汰最久未用）
 
+  Router 侧（§5.8 的两行，`ORPAH_RLR_*`，同一套后缀）：
+    ORPAH_RLR_ENABLE / _SN_RATE（默认 5.0）/ _SN_BURST（40）/ _ROUTER_RATE（1.0，按源 MAC）
+    / _ROUTER_BURST（5）/ _MAX_KEYS。
+  **两边默认值不同是有意的**：Router 侧限带宽、Server 侧限 CPU（详见下面 `RTR_*` 注释）。
+
 默认值怎么来的（**演示/开发配置，不是实测标定**）：
   - 正常流量 = 每台设备 ~1 条/秒（`ui_server` 的 2s 会话周期 + 1s ID 周期）→
     `SN_RATE=2.0` 留 1 倍余量，长期 1 条/秒**永远不会被限**；
@@ -82,6 +87,17 @@ SN_BURST = _env_int("ORPAH_RL_SN_BURST", 20)
 ROUTER_RATE = _env_float("ORPAH_RL_ROUTER_RATE", 20.0)
 ROUTER_BURST = _env_int("ORPAH_RL_ROUTER_BURST", 60)
 MAX_KEYS = _env_int("ORPAH_RL_MAX_KEYS", 4096)
+
+# Router 侧（网口上行限频，§5.8 的两行）默认值：**比 server 侧宽**，这是有意的 ——
+#   · Router 侧限的是**带宽**（空口 + Router→Server 那段）；Server 侧限的是 **CPU**（ECDSA 验签）。
+#     两边都做窄 → 报文死在 Router，页面/审计上就只看得到“转发侧丢弃”，
+#     「到底哪道防线拦的」失去分辨力（本项存在的意义之一就是能说清这一点）。
+#   · 所以 Router 侧允许得宽一点，让 Server 侧仍是“正常流量”的分水岭：
+#       转发按 SN：5 条/秒、桶容量 40（server 侧 2/s、20）；
+#       未签名的 REQ-CONNECT（相当于 probe）：按**源 MAC** 1 条/秒、桶容量 5。
+RTR_SN_RATE, RTR_SN_BURST = 5.0, 40
+RTR_MAC_RATE, RTR_MAC_BURST = 1.0, 5
+RTR_PREFIX = "ORPAH_RLR_"               # Router 侧参数名前缀（与 Server 的 ORPAH_RL_ 分开）
 
 
 class TokenBucket:
@@ -238,14 +254,21 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     @classmethod
-    def from_env(cls):
-        """按环境变量构造（每次调用重读环境 → 测试可改 env 后重建）。"""
-        return cls(enabled=_env_bool("ORPAH_RL_ENABLE", ENABLE),
-                   sn_rate=_env_float("ORPAH_RL_SN_RATE", SN_RATE),
-                   sn_burst=_env_int("ORPAH_RL_SN_BURST", SN_BURST),
-                   router_rate=_env_float("ORPAH_RL_ROUTER_RATE", ROUTER_RATE),
-                   router_burst=_env_int("ORPAH_RL_ROUTER_BURST", ROUTER_BURST),
-                   max_keys=_env_int("ORPAH_RL_MAX_KEYS", MAX_KEYS))
+    def from_env(cls, prefix="ORPAH_RL_", enable=ENABLE, sn_rate=SN_RATE,
+                 sn_burst=SN_BURST, router_rate=ROUTER_RATE,
+                 router_burst=ROUTER_BURST, max_keys=MAX_KEYS):
+        """按环境变量构造（每次调用重读环境 → 测试可改 env 后重建）。
+
+        `prefix` 让**两个侧**各用一套参数名（默认那套 = Server 侧 `ORPAH_RL_*`；
+        Router 侧用 `ORPAH_RLR_*`，并把 `RTR_*` 值作为默认值传进来）——
+        免得两边共用一个名字，改了 Server 的阈值把 Router 也一起改了。
+        """
+        return cls(enabled=_env_bool(prefix + "ENABLE", enable),
+                   sn_rate=_env_float(prefix + "SN_RATE", sn_rate),
+                   sn_burst=_env_int(prefix + "SN_BURST", sn_burst),
+                   router_rate=_env_float(prefix + "ROUTER_RATE", router_rate),
+                   router_burst=_env_int(prefix + "ROUTER_BURST", router_burst),
+                   max_keys=_env_int(prefix + "MAX_KEYS", max_keys))
 
     def check(self, sn=None, router=None, now=None, kind=""):
         """判定一条入站报文是否放行。

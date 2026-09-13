@@ -8,18 +8,21 @@
 **真的**连发报文，在 Server 侧断言：
 
   ① 正常速率（1 条/秒）**一条都不丢** —— 限频不能把好设备挡在门外；
-  ② 同一 SN 连发 200 条 → 只有桶容量那点被接受，其余在**验签之前**被丢（省 CPU），
-     且拒绝原因明说是 **per-SN 防线**；
+  ② 同一 SN 连发 200 条 → **两侧各拦一段**：Router 侧（带宽，per-SN 桶 40）先砍掉大半，
+     剩下的在 Server 侧**验签之前**被丢（CPU，per-SN 桶 5）—— 批次数必须能全量对账；
   ③ **限频不是封禁**：等桶回补后，正常上报立刻恢复（不是"拉黑"）；
   ④ 轮换 SN 连发（源地址不变）→ per-SN 桶**形同虚设**（每个新 SN 都是满桶），
      由 **per-Router 桶**兜住 —— 这就是"为什么必须有两条防线"的现场证据；
-  ⑤ 发现走失（ORPAH-FOUND）**不受限**（漏一条 = 一个人没被找到）。
+  ⑤ 未签名的 REQ-CONNECT（相当于 probe）连发 → Router 侧**按源 MAC** 限（§5.8 行 1）；
+  ⑥ 但**命中走失表的 REQ-CONNECT 不限**（那条路径会顺便产生 ORPAH-FOUND，
+     漏一条 = 一个人没被找到）→ 它产生的 FOUND 一条不丢。
 
 运行：C:\\Python313\\python.exe demo_ratelimit.py
 端口：99xx / 19947（与 demo_l1..l4、demo_spoof、ui_server 错开）
 依赖的 `OrpahServer` 接口（本脚本是“外部调用方”，改了这些名字记得同步这里）：
   · `rl`（注入的 `RateLimiter`，共用同一实例）、`rl_dropped`（累计丢弃数）、
     `rl_drops`（最近丢弃的 deque，看 `which` 用）
+  · `RouterBridge.rl` / `rl_dropped` / `rl_drops`（Router 侧限频，同样读法）
   · `mark_tracked(sn)` / `found_count`（第 5 阶段要制造 FOUND）
   · `id_report_total`（被接受的 ID 上报数）、`start()` / `stop()`
   不直接用 `_handle`（那是 `test_ratelimit.py` 的离线用法）；本脚本一律**走真链路**。"""
@@ -115,8 +118,10 @@ def main():
     print("  限频（§5.8）端到端演示")
     print("=" * 74)
     print(f"  链路        : Client→STA→空口→AP→Router→UDP:{UDP_SRV}→Server")
-    print(f"  per-SN 桶   : burst={rl.sn.burst:.0f} rate={rl.sn.rate:.1f}/s")
-    print(f"  per-Router 桶: burst={rl.router.burst:.0f} rate={rl.router.rate:.1f}/s")
+    print(f"  Server 侧  : per-SN burst={rl.sn.burst:.0f}/{rl.sn.rate:.1f}s "
+          f"· per-Router burst={rl.router.burst:.0f}/{rl.router.rate:.1f}s")
+    print(f"  Router 侧  : per-SN burst={RL.RTR_SN_BURST}/{RL.RTR_SN_RATE:.1f}s（转发）"
+          f" · per-MAC burst={RL.RTR_MAC_BURST}/{RL.RTR_MAC_RATE:.1f}s（probe）")
     print()
 
     coreA = sim.Core("Router-AP", "AP", CONSOLE_A, LINK_A, None, host_port=HOST_A)
@@ -131,6 +136,7 @@ def main():
     if not router.start():
         print("  Router 连不上 AP host 口，退出")
         return 2
+    rtr = router.rl          # Router 侧限频器（与 server 侧是两个实例、两套参数）
     client = ClientHost(sta_port=HOST_B, sn=dev.sn)
     if not client.connect():
         print("  Client 连不上 STA host 口，退出")
@@ -156,26 +162,37 @@ def main():
               got and sink.count() - n0 == 5 and srv.rl_dropped == d0,
               f"接受 {sink.count() - n0} / 丢 {srv.rl_dropped - d0}")
 
-        # ---- ② 同一 SN 连发 ------------------------------------------------
-        print(f"\n[2] 同一 SN 连发 {args.flood} 条 → 只放行桶容量那点，其余在验签前被丢")
+        # ---- ② 同一 SN 连发（两侧各拦一段）----------------------------------
+        print(f"\n[2] 同一 SN 连发 {args.flood} 条 → Router 侧砍带宽、Server 侧砍 CPU")
         srv.rl.reset_counters()
+        rl_d0, rtr_d0 = srv.rl_dropped, router.rl_dropped
         n1 = sink.count()
         for _ in range(args.flood):
             client.send_id_report(dev.report())
-        # 判据：服务端**处理完**这批（接受的 + 丢弃的 >= 本次条数），不是猜次数
-        done = wait_until(lambda: (sink.count() - n1 + srv.rl_dropped) >= args.flood,
-                          timeout=20.0, interval=0.02)
+        # 判据：**两侧合计**把这批处理/丢弃完（Router 侧丢的不会到 Server，不能只看 server）。
+        # 2026-09-13 实测踩过：只等 server 侧计数，Router 侧一开就永远等不到。
+        done = wait_until(
+            lambda: (sink.count() - n1) + (srv.rl_dropped - rl_d0)
+            + (router.rl_dropped - rtr_d0) >= args.flood,
+            timeout=30.0, interval=0.02)
         acc = sink.count() - n1
-        dropped = srv.rl_dropped
-        check("服务端确实处理完了这批（超时可见地失败，不静默）", done,
-              f"处理 {acc + dropped}/{args.flood}")
-        check("被丢 > 0（洪水被限住）", dropped > 0, f"丢 {dropped} 条")
-        check("放行条数 ≈ per-SN 桶容量（不是'全通'也不是'全封'）",
-              rl.sn.burst <= acc <= rl.sn.burst + 5,
-              f"接受 {acc}（桶容量 {rl.sn.burst:.0f}）")
-        rec_which = {r["which"] for r in srv.rl_drops}
-        check("拒绝原因明说是 per-SN 防线（不只是'被拒了'）",
-              rec_which == {"sn"}, f"which={sorted(rec_which)}")
+        d_srv = srv.rl_dropped - rl_d0
+        d_rtr = router.rl_dropped - rtr_d0
+        check("这批被两侧合计对账完（超时可见地失败，不静默）", done,
+              f"接受 {acc} + 丢(Router {d_rtr} / Server {d_srv}) "
+              f"= {acc + d_rtr + d_srv}/{args.flood}")
+        check("Router 侧先砍带宽（第一道，§5.8 行 2）", d_rtr > 0,
+              f"Router 丢 {d_rtr} 条（per-SN 桶容量 {rtr.sn.burst:.0f}）")
+        check("Server 侧也拦下一段（两条线都动，这才叫分层）", d_srv > 0,
+              f"Server 丢 {d_srv} 条（per-SN 桶容量 {rl.sn.burst:.0f}）")
+        check("两侧拒绝原因都明说是 per-SN 防线（不只是'被拒了'）",
+              {r["which"] for r in srv.rl_drops} == {"sn"}
+              and {r["which"] for r in router.rl_drops} == {"sn"},
+              f"server={sorted({r['which'] for r in srv.rl_drops})} "
+              f"router={sorted({r['which'] for r in router.rl_drops})}")
+        check("Server 侧计数只含**真的到达它**的那部分（没把 Router 丢的算到自己头上）",
+              acc + d_srv < args.flood,
+              f"server 侧看到 {acc + d_srv} / 全量 {args.flood}")
 
         # ---- ③ 限频不是封禁：回补后立刻恢复 -------------------------------
         print("\n[3] 限频不是封禁：等桶回补后正常上报立刻恢复")
@@ -203,8 +220,30 @@ def main():
               done and rl.dropped_router > 0,
               f"router 防线丢 {rl.dropped_router} 条")
 
-        # ---- ⑤ 发现走失不受限 ----------------------------------------------
-        print("\n[5] ORPAH-FOUND（发现走失）**不受限** —— 漏一条 = 一个人没被找到")
+        # ---- ⑤ 未签名 REQ-CONNECT（相当于 probe）→ Router 侧按源 MAC 限 ---------
+        #       （§5.8 行 1；此时 SN 还没立案，所以**会**走这条线）
+        print("\n[5] 未签名 REQ-CONNECT 连发 → Router 侧按**源 MAC** 限（§5.8 行 1）")
+        sent_rc = 12
+        rc0, rtr_d1 = client.recv, router.rl_dropped
+        sn0, mac0 = rtr.dropped_sn, rtr.dropped_router      # 计数是**累计**的 → 本阶段要看增量
+        for _ in range(sent_rc):
+            client.send_req_connect()
+        got = wait_until(lambda: router.rl_dropped - rtr_d1 >= 5,
+                         timeout=8.0, interval=0.02)
+        dropped_rc = router.rl_dropped - rtr_d1
+        replies = client.recv - rc0
+        check("probe 桶拦下了多余的 REQ-CONNECT", got,
+              f"Router 丢 {dropped_rc}/{sent_rc}（mac 桶容量 {rtr.router.burst:.0f}）")
+        check("被拦的那些**真的没回 ACCESS-INFO**（不是只记了个数）",
+              replies < sent_rc,
+              f"收到下行 {replies} 条 < 发出 {sent_rc} 条")
+        check("probe 走**源 MAC** 那条防线（which=router），且不吃该设备的转发额度",
+              rtr.dropped_router - mac0 > 0 and rtr.dropped_sn == sn0,
+              f"本阶段 router 防线丢 {rtr.dropped_router - mac0} 条 / "
+              f"sn 防线丢 {rtr.dropped_sn - sn0} 条")
+
+        # ---- ⑥ 但**命中走失表的 REQ-CONNECT 不限**（FOUND 一条都不能丢）-------
+        print("\n[6] ORPAH-FOUND（发现走失）**不受限** —— 漏一条 = 一个人没被找到")
         srv.rl.reset_counters()
         srv.mark_tracked(dev.sn, note="demo-rl")       # 立案 → 推给 Router
         synced = wait_until(
@@ -213,11 +252,16 @@ def main():
         check("Router 已拿到走失表（否则下面的 FOUND 根本不会发生）", synced,
               f"lost_cache={router.lost_cache}")
         f0 = srv.found_count
+        rtr_d2 = router.rl_dropped
         for _ in range(12):
             client.send_req_connect()      # 命中走失表 → Router 每条都上报 FOUND
         got = wait_until(lambda: srv.found_count >= f0 + 12, timeout=8.0, interval=0.02)
-        check("12 条 FOUND 全部到达（一条都没被限频吞掉）",
-              got, f"收到 {srv.found_count - f0}/12，本阶段限频丢 {rl.dropped()}")
+        check("12 条 FOUND 全部到达（一条都没被限频吞掉）", got,
+              f"收到 {srv.found_count - f0}/12")
+        check("这一阶段 Router 侧一条都没丢（命中走失表 → 不走限频）",
+              router.rl_dropped == rtr_d2,
+              f"Router 丢 {router.rl_dropped - rtr_d2} 条 —— 按上面 [5] 的桶容量，"
+              f"若走限频必然要丢")
     finally:
         stop.set()
         for fn in (client.close, router.stop, srv.stop):
