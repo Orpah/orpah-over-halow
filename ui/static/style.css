@@ -248,6 +248,14 @@ tr.new { animation: rowin .4s; }
   .link-label, .link-split, .node-row.small, .hint, .chip { font-size: 12px; }
   /* 两列信息网格在窄屏改单列（不然每列 150px 都不到，数字/单位会拆行） */
   .id-grid { grid-template-columns: 1fr; }
+  /* 各页 `<style>` 里定义的局部两列网格（案件表单 / 指标卡 / 签名 JSON / 防线条 / 校验演示）：
+     它们在文档流里**晚于** style.css，同优先级下会赢过本文件（有没有媒体查询都一样）——
+     所以这里加 `body ` 前缀提高一级优先级，把窄屏规则仍然收在**这一个文件**里，
+     不必每页各写一份（写多份迟早漂移）。判据：900px 以下每列不足 ~150px，
+     数字/单位会拆行、textarea 只剩几十 px。 */
+  body .grid, body .json-grid, body .demo-grid { grid-template-columns: 1fr; }
+  body .bars .brow { grid-template-columns: 1fr; gap: 2px; align-items: start; }
+  body .bars .bnum { text-align: left; }      /* 数字单独一行后右对齐会看着“飘在外面” */
   /* 长串（SN / base64 密钥 / URL）允许断行，不靠横向滚动 */
   td, th, .mono, code, .id-row code { overflow-wrap: anywhere; }
   table { table-layout: auto; }

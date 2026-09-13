@@ -145,6 +145,47 @@ def check_hierarchy():
     check("首页长表用了 .scroll-y", idx.count('class="scroll-y"') >= 2, idx.count('class="scroll-y"'))
 
 
+def check_narrow_grids():
+    """窄屏：页面内 `<style>` 里定义的**多列网格**必须被收成单列（UI ⑤）。
+
+    为什么这条容易漏：这些网格写在**各页自己的 `<style>`** 里，而 `<style>` 在文档流里
+    **晚于** `style.css` → 同优先级下它会赢过样式表（有没有媒体查询都一样）。
+    所以 `style.css` 的窄屏档必须用 `body ` 前缀提高一级优先级才盖得住 ——
+    这一条不看的话，手机上两列各 ~150px，数字/单位会拆行、textarea 只剩几十 px。
+    """
+    print("== 窄屏：页面局部多列网格要收成单列 ==")
+    css = strip_comments(open(CSS, encoding="utf-8").read())
+    narrow = ""
+    for m in re.finditer(r"@media\s*\(max-width:\s*(\d+)px\)\s*\{(.*?)\n\}", css, re.S):
+        if int(m.group(1)) == 900:                 # 档位固定 900px（见 check_css）
+            narrow += m.group(2)
+    # 窄屏档里的规则拆成 (selector, body)，才能处理「一条规则盖多个类」的写法
+    narrow_rules = [(m.group(1).strip(), m.group(2))
+                    for m in re.finditer(r"([^{}]+)\{([^}]*)\}", narrow)]
+    miss = []
+    for p in sorted(glob.glob(os.path.join(STATIC, "*.html"))):
+        name = os.path.basename(p)
+        html = open(p, encoding="utf-8").read()
+        for m in re.finditer(r"([^{}]+)\{([^}]*)\}", html):
+            body = m.group(2)
+            g = re.search(r"grid-template-columns:\s*([^;]+)", body)
+            if not g:
+                continue
+            val = g.group(1).strip()
+            # 单列（`1fr` / `100%` / 单个值）不算多列；`repeat(auto-fit…)` 算
+            if val in ("1fr", "100%") or ("repeat" not in val and len(val.split()) < 2):
+                continue
+            for cls in set(re.findall(r"\.([A-Za-z0-9_-]+)", m.group(1))):
+                ok = any(re.search(r"\.%s\b" % re.escape(cls), sel)
+                         and "grid-template-columns: 1fr" in rbody
+                         and "body " in sel      # 必须有 `body ` 前缀：否则盖不住页面内的 `<style>`
+                         for sel, rbody in narrow_rules)
+                if not ok:
+                    miss.append((name, cls, val[:40]))
+    check("每个页面局部多列网格，在 style.css 的 900px 档里都有单列覆盖（且带 `body ` 前缀）",
+          not miss, miss)
+
+
 def css_rule(css, sel):
     m = re.search(re.escape(sel) + r"\s*\{([^}]*)\}", css)
     return m.group(1) if m else ""
@@ -221,6 +262,7 @@ def main():
     check_pages()
     check_nav()
     check_hierarchy()
+    check_narrow_grids()
     if FAILS:
         print(f"UI 样式守卫：有问题（{len(FAILS)} 处）")
         return 1
