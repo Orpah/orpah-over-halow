@@ -34,11 +34,16 @@ const TILE_PROVIDERS = {
           attr: "© Esri", note: "tile_note_esri", labels: "none" },
   custom: { i18nName: "tk_tile_custom", url: "", attr: "",
             note: "tile_note_custom", labels: "user" },
+  /* 野外包（本地 XYZ 瓦片目录）：url 不是常量而是**拼出来的**（`/maps/<包名>/…`，见 packTileUrl）。
+     服务端读取逻辑在 `maps.py`（形状校验/路径安全都在那儿，单测在 `test_mapjs.py`）。 */
+  pack: { i18nName: "tk_tile_pack", url: "", attr: "",
+          note: "tile_note_pack", labels: "user" },
 };
 /* 顺序 = 列表顺序，第一项即本语言的默认。
-   CartoDB Voyager 已移除：其栅格端点现在必须 API key，实测整图是 "API KEY REQUIRED" 水印。 */
-const TILE_ORDER = { zh: ["osm", "opentopo", "esri", "custom"],
-                     en: ["esri", "osm", "opentopo", "custom"] };
+   CartoDB Voyager 已移除：其栅格端点现在必须 API key，实测整图是 "API KEY REQUIRED" 水印。
+   野外包放最后：它不是“网上某个源”，而是现场自己放上去的本地目录（默认不选它）。 */
+const TILE_ORDER = { zh: ["osm", "opentopo", "esri", "custom", "pack"],
+                     en: ["esri", "osm", "opentopo", "custom", "pack"] };
 function tileLabel(key) {
   const p = TILE_PROVIDERS[key];
   let s = p.i18nName ? T(p.i18nName) : p.name;
@@ -68,6 +73,97 @@ function refreshTileNote() {
   if (!el) return;
   const p = TILE_PROVIDERS[$("tileSrc").value] || TILE_PROVIDERS.custom;
   el.textContent = T(p.note);
+}
+
+/* ---- 野外包（本地 XYZ 瓦片目录；服务端读取逻辑见 `maps.py`）----
+
+   现场没网时的底图：把**自建**的 XYZ 瓦片目录放到 `ui/static/maps/<包名>/`，
+   在这里选它。三条如实口径（状态行里也写着，不靠使用者猜）：
+   ① 包**不入库**（`.gitignore`），而且只在**跑 ui_server 的那台机器**上可见 ——
+      浏览器是去服务端要瓦片的（笔记本上放包、server 在另一台机器上 → 那台也得有）；
+   ② 必须**自建/自托管**：`tile.openstreetmap.org` 政策明文禁止离线/预取/打包（ROADMAP §七），
+      拿它做包不合规；
+   ③ 包缺失/瓦片不全时**不假装成功**：没选到包 → URL 为空 → 直接走离线回落；
+      选了但瓦片 404 → `addBaseLayer()` 的「连续 4 张失败」判据接住 → 本地网格底图 + 提示。
+
+   路径形状必须与 `maps.resolve_tile()` 一致（`/maps/<包名>/<z>/<x>/<y>.png`）：
+   改一边不改另一边 = 一律 404，而 404 会被当成「离线」→ 看着像包坏了。两侧都有守卫。 */
+const PACK_KEY = "orpah.pack.v1";
+const PACK_TPL = "/maps/{name}/{z}/{x}/{y}.png";
+let packList = [];
+let packErr = null;            // 取列表失败的原因（**不**与“没有包”混为一谈）
+function packName() { const s = $("packSel"); return s ? (s.value || "") : ""; }
+function packTileUrl() {
+  const n = packName();
+  return n ? PACK_TPL.replace("{name}", encodeURIComponent(n)) : "";
+}
+function packStoreRead() {
+  try { return window.localStorage.getItem(PACK_KEY) || ""; } catch (e) { return ""; }
+}
+function packStoreWrite(name) {
+  try { window.localStorage.setItem(PACK_KEY, name || ""); } catch (e) { /* 存不了就下次重选 */ }
+}
+/* 状态行：当前用哪个包、有多大、以及那三条口径。**失败与“没有包”分开说**。 */
+function packNoteRender() {
+  const el = $("packNote");
+  if (!el) return;
+  const p = packList.filter((x) => x.name === packName())[0];
+  let s;
+  if (packErr) s = T("map_pack_fail") + packErr;
+  else if (!packList.length) s = T("map_pack_none");
+  else if (!p) s = T("map_pack_unknown");
+  else s = T("map_pack_status").replace("{name}", p.name)
+            .replace("{zooms}", (p.zooms || []).join("/") || "?")
+            .replace("{n}", String(p.tiles)) + (p.truncated ? T("map_pack_trunc") : "");
+  el.textContent = s + " — " + T("map_pack_hint");
+}
+/* 拉包列表 → 填 `#packSel` → 套用上次选的那个。返回 Promise（页面可在它后面重画地图）。 */
+async function loadPacks() {
+  const sel = $("packSel");
+  if (!sel) return [];
+  const keep = sel.value || packStoreRead();
+  packErr = null;
+  try {
+    const r = await fetch("/api/maps").then((x) => x.json());
+    packList = (r && r.packs) || [];
+  } catch (e) {
+    packList = [];
+    packErr = (e && e.message) ? e.message : String(e);
+  }
+  sel.innerHTML = "";
+  for (const p of packList) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = p.name;
+    sel.appendChild(o);
+  }
+  if (packList.some((p) => p.name === keep)) sel.value = keep;
+  else if (packList.length) sel.value = packList[0].name;
+  else {
+    const o = document.createElement("option");        // 空列表也给一项：选择框不会看着像“坏了”
+    o.value = "";
+    o.textContent = T("map_pack_none_opt");
+    sel.appendChild(o);
+  }
+  packNoteRender();
+  return packList;
+}
+/* 接线（换包记住选择 / 重新扫描按钮）。**必须在页面自己的 `$` 定义之后调** ——
+   `map.js` 是先于页面的内联脚本加载的，那时候 `$` 还不存在（踩过：在这里直接
+   `$("packSel")` 会让整页报 `$ is not defined`）。
+   `onChange` = “底图得重建了”的回调（**图层生命周期各页自己管**，见文件头）——
+   `baseInit(cb)` 同一个套路：map.js 只负责记住选择 + 状态行 + 通知页面。 */
+function packInit(onChange) {
+  if (!$("packSel")) return false;
+  const changed = () => { if (typeof onChange === "function") onChange(); };
+  $("packSel").addEventListener("change", () => {
+    packStoreWrite(packName());
+    packNoteRender();
+    changed();
+  });
+  // 「重新扫描」：现场放好/删掉包之后用；**扫完也重建一次**（否则列表变了地图还是旧瓦片）
+  if ($("btnPackReload")) $("btnPackReload").onclick = () => loadPacks().then(changed);
+  return true;
 }
 function baseLat() { return parseFloat($("baseLat").value); }
 function baseLng() { return parseFloat($("baseLng").value); }
@@ -282,6 +378,7 @@ function toLatLng(x, y) {
 }
 function currentTileUrl() {
   const key = $("tileSrc").value;
+  if (key === "pack") return packTileUrl();       // 野外包：本地 XYZ 目录（没选到包 = 空 → 直接离线）
   return key === "custom" ? $("tileUrl").value.trim() : TILE_PROVIDERS[key].url;
 }
 
@@ -299,9 +396,18 @@ const BASE_ERR_LIMIT = 4;
 
 function addBaseLayer(map) {
   baseMap = map;
+  /* ★上一次判定离线留下的**网格/提示/标志必须一起收掉**（2026-09-13 实测发现）：
+     换底图（重建地图、换源、重新扫描野外包）时会再调到这里，而旧代码只重置了计数：
+     ① `baseOffline` 会一直说谎（明明在显示真瓦片，`baseOfflineNow()` 却说离线）；
+     ② 更实的：`tileerror` 里那句 `if (baseOffline) return;` → **新底图再挂也不会回落** →
+        地图空白且无提示（野外包瓦片不全时非常容易碰上）。
+     `remove()` 对已经不在任何地图上的图层是安全的（Leaflet 内部会先判 `_map`）。 */
+  if (baseGrid) { baseGrid.remove(); baseGrid = null; }
+  if (baseNote) { baseNote.remove(); baseNote = null; }
+  baseOffline = false;
   baseErr = 0; baseOk = 0;
   const url = currentTileUrl();
-  if (!url) { goOffline(); return; }            // 自定义源没填 URL：不用等失败
+  if (!url) { goOffline(); return; }            // 自定义源没填 URL / 没选到野外包：不用等失败
   const p = TILE_PROVIDERS[$("tileSrc").value] || TILE_PROVIDERS.custom;
   baseTiles = L.tileLayer(url, { attribution: p.attr || "", maxZoom: 19 });
   baseTiles.on("tileerror", () => {

@@ -20,7 +20,10 @@
 7. **页面守卫**：两页的 `value=` 必须与 `BASE_DEFAULT` 一致（单一源）、两页都必须调
    `baseApplyStored()` + `baseInit()`，且两页都要有那几个元素（否则只有一页能用导入）；
 8. **口径守卫**：`base_hint` 双语都要写明「只接受 WGS84、不做坐标系转换、存在本机浏览器」，
-   `base_src_default` 必须写明**不是现场值**。
+   `base_src_default` 必须写明**不是现场值**；
+9. **野外包（2026-09-13）**：`maps.py`（本地 XYZ 瓦片目录）的列包/数瓦片/上限截断、
+   `resolve_tile()` 的**路径穿越与扩展名白名单**（逐条试）、**前端模板 ↔ 服务端解析器同形状**、
+   以及「填选项 / 记住选择 / 没有包 / 取不到列表 / 包消失」五种状态都**可见且分得清**。
 
 运行：C:\\Python313\\python.exe test_mapjs.py     （需要 node 在 PATH 上）
 """
@@ -30,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import quote
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -48,10 +52,25 @@ const fs = require("fs");
 const EXPORT = ["BASE_DEFAULT", "basePick", "baseCheck", "baseParse", "baseImport",
                 "baseExportText", "baseSource", "baseApplyStored", "baseStoreRead",
                 "baseStoreWrite", "baseStoreClear", "baseErrText", "toLatLng",
-                "baseLat", "baseLng", "baseInit"];
+                "baseLat", "baseLng", "baseInit",
+                "PACK_KEY", "PACK_TPL", "TILE_PROVIDERS", "TILE_ORDER",
+                "packName", "packTileUrl", "loadPacks", "packNoteRender",
+                "packStoreRead", "packStoreWrite", "currentTileUrl", "packInit",
+                "addBaseLayer", "baseOfflineNow", "goOffline"];
 /* ---- 桩：DOM/存储 ---- */
+/* `E(id)` 现在也当得了 <select>：`innerHTML=""` 清选项、`appendChild` 收选项（第一个自动选中，
+   与浏览器的默认行为一致）—— 野外包列表要往 select 里填项，不铺这层就没法测。 */
 const els = {};
-function E(id) { return els[id] || (els[id] = { id, value: "", textContent: "", files: [] }); }
+function E(id) {
+  if (els[id]) return els[id];
+  const o = { id, value: "", textContent: "", files: [], _opts: [],
+              set innerHTML(v) { o._opts.length = 0; },
+              get innerHTML() { return ""; },
+              appendChild(node) { o._opts.push(node); if (o._opts.length === 1) o.value = node.value; },
+              addEventListener(type, fn) { (o._ev = o._ev || {}); (o._ev[type] = o._ev[type] || []).push(fn); } };
+  els[id] = o;
+  return o;
+}
 global.$ = (id) => E(id);
 global.T = (k) => k;                       // 文案只需存在性，不求内容
 global.OrpahI18n = { lang: "zh" };
@@ -68,6 +87,26 @@ global.document = { createElement: () => ({ style: {}, click() {} }),
                     body: { appendChild() {}, removeChild() {} } };
 global.Blob = function () {}; global.URL = { createObjectURL: () => "blob:x", revokeObjectURL() {} };
 global.FileReader = function () {}; global.setTimeout = (f) => f();
+/* 最小 Leaflet 桩：只够跑「底图图层 + 离线回落」的逻辑（不校验地图渲染）。
+   陷阱：`L.control()` 返回的控制对象要能被赋值 onAdd（goOffline 会挂离线提示）。 */
+function layerStub() { return { on() { return this; }, addTo() { return this; }, remove() { return this; } }; }
+/* 注意：`L.control` 既是函数（`L.control({position})`）又带静态方法（`L.control.scale(...)`）——
+   两处都会用到，桩得两个都给，否则 goOffline() 里 `L.control.scale is not a function`。 */
+const controlFn = () => ({ addTo() { return this; }, remove() { return this; } });
+controlFn.scale = () => layerStub();
+global.L = {
+  tileLayer: () => layerStub(),
+  GridLayer: { extend: () => function () { return layerStub(); } },
+  control: controlFn,
+  DomUtil: { create: () => ({ style: {}, appendChild() {} }) },
+  DomEvent: { disableClickPropagation() {} },
+};
+/* fetch 桩：`fetchReply = null` 表示“取不到”（网络类错误）—— 野外包那种“取不到 vs 没有”要分开测 */
+let fetchReply = { packs: [] };
+global.fetch = async () => {
+  if (!fetchReply) throw new Error("boom");
+  return { json: async () => fetchReply };
+};
 const src = fs.readFileSync(process.argv[2], "utf8")
           + "\nmodule.exports = {" + EXPORT.join(",") + "};\n";
 const m = { exports: {} };
@@ -252,6 +291,111 @@ ck("baseInit 不炸（元素齐全时挂上三个入口）", (P.baseInit(() => {
 
 /* 页面守卫用的记号（Python 侧读这行） */
 console.log("  PAGE_GUARD_READY");
+
+/* ================= 7 · 野外包（本地 XYZ 瓦片目录） =================
+   与 maps.py 是一对：**URL 形状必须两边一致**（这里拼、那边解），下面最后一条就是锁这个。 */
+ck("野外包在瓦片源列表里（中英两套都有）",
+   P.TILE_ORDER.zh.indexOf("pack") >= 0 && P.TILE_ORDER.en.indexOf("pack") >= 0);
+ck("野外包放最后（它是本地目录，不是“网上某个源”，默认不选）",
+   P.TILE_ORDER.zh[P.TILE_ORDER.zh.length - 1] === "pack");
+ck("野外包有条款提示键（合规口径必须在源列表里）",
+   P.TILE_PROVIDERS.pack.note === "tile_note_pack"
+   && P.TILE_PROVIDERS.pack.i18nName === "tk_tile_pack",
+   JSON.stringify(P.TILE_PROVIDERS.pack));
+ck("★URL 形状与 maps.resolve_tile() 一致（改一边不改另一边 = 一律 404）",
+   P.PACK_TPL === "/maps/{name}/{z}/{x}/{y}.png", P.PACK_TPL);
+E("packSel").value = "region";
+ck("选中包 → 拼出本地瓦片 URL", P.packTileUrl() === "/maps/region/{z}/{x}/{y}.png", P.packTileUrl());
+ck("包名做 URL 编码（现场目录名可能带空格/中文）",
+   (function () { E("packSel").value = "区域 A";
+      const u = P.packTileUrl(); E("packSel").value = "region";
+      return u === "/maps/" + encodeURIComponent("区域 A") + "/{z}/{x}/{y}.png"; })());
+E("tileSrc").value = "pack";
+ck("currentTileUrl()：tileSrc=pack → 野外包 URL",
+   P.currentTileUrl() === "/maps/region/{z}/{x}/{y}.png", P.currentTileUrl());
+E("packSel").value = "";
+ck("没选到包 → 空 URL（addBaseLayer 直接判离线，不向服务端发一堆无意义 404）",
+   P.currentTileUrl() === "");
+E("tileSrc").value = "osm";
+ck("currentTileUrl()：非 pack 源不受野外包影响",
+   P.currentTileUrl().indexOf("tile.openstreetmap.org") >= 0);
+
+/* 三种加载结果都要**分得清**（这正是现场最容易看错的地方）。
+   ★必须包在 async IIFE 里：本 harness 是 node 的 CJS 脚本（`require`），**没有顶层 await**。
+   结尾打 ASYNC_DONE —— Python 侧检它，防“异步段静默截断却看着全绿”。 */
+(async () => {
+fetchReply = { packs: [{ name: "region", tiles: 12, zooms: [10, 11], truncated: false }] };
+await P.loadPacks();
+ck("loadPacks：填选项（包名）",
+   E("packSel").value === "region" && P.packName() === "region",
+   JSON.stringify([E("packSel").value, E("packSel")._opts.map((o) => o.value)]));
+/* 状态行的**代入**要真验：桩 T 只回键名（不含占位符）→ 临时换成带占位符的桩，
+   确认 {name}/{zooms}/{n} 全被换掉（否则用户会看到生占位符）。 */
+const T0 = global.T;
+global.T = (k) => (k === "map_pack_status" ? "包 {name}：{zooms} 级 / {n} 张" : k);
+P.packNoteRender();
+const statusText = E("packNote").textContent;
+global.T = T0;
+ck("loadPacks：状态行写了包名/层级/张数（能看出这个包大不大）",
+   statusText.indexOf("region") >= 0 && statusText.indexOf("12") >= 0
+   && statusText.indexOf("10/11") >= 0 && statusText.indexOf("{") < 0,
+   statusText);
+ck("loadPacks：状态行带上「包不入库 / 只有跑 ui_server 的这台机器可见」的口径",
+   E("packNote").textContent.indexOf("map_pack_hint") >= 0, E("packNote").textContent);
+/* 记住选择：下次开页直接回到同一个包 */
+P.packStoreWrite("region");
+E("packSel").value = "";
+await P.loadPacks();
+ck("记住的包在列表里 → 自动选回它（现场不用每次重选）",
+   E("packSel").value === "region", E("packSel").value);
+/* 一个包都没有：空列表选不中任何包，但**不静默** —— 得说清怎么做 */
+fetchReply = { packs: [] };
+await P.loadPacks();
+ck("★没有包 → 占位选项 + 状态行说“放哪里、然后重新扫描”（不是空白）",
+   E("packSel").value === "" && E("packSel")._opts.length === 1
+   && E("packNote").textContent.indexOf("map_pack_none") === 0,
+   JSON.stringify([E("packSel").value, E("packNote").textContent]));
+/* 取不到列表（服务端挂了/网络错）**不能**说成“没有包” */
+fetchReply = null;
+await P.loadPacks();
+ck("★取不到包列表 ≠ 没有包：状态行给的是失败原因",
+   E("packNote").textContent.indexOf("map_pack_fail") === 0, E("packNote").textContent);
+/* 包被删了 / 重新扫描后列表里没了：**不能**与「本来就没放包」混为一谈（处置不同：
+   一个是“去看包去哪了”，一个是“去放包”）。先让列表里有东西，才分得出这两种。 */
+fetchReply = { packs: [{ name: "other", tiles: 1, zooms: [10] }] };
+await P.loadPacks();
+E("packSel").value = "gone";
+P.packNoteRender();
+ck("包被删了/重扫后消失 → 状态行说“服务器上没有了”（仍可回落网格）",
+   E("packNote").textContent.indexOf("map_pack_unknown") === 0, E("packNote").textContent);
+/* 接线入口：map.js 先于页面脚本加载（那时 `$` 还不存在）→ 顶层不能碰 DOM，必须靠 packInit()
+   （踩过：在顶层写 `$("packSel")` 让整页 `$ is not defined`）。
+   ★回调必须真的被叫：换包了不重建图层 = 地图上还是旧瓦片（且不报错）。 */
+let cbN = 0;
+P.packInit(() => { cbN++; });
+ck("packInit 不炸，并挂上「重新扫描」", typeof E("btnPackReload").onclick === "function");
+E("packSel").value = "region";
+E("packSel")._ev.change.forEach((f) => f());
+ck("★换包会通知页面重建底图，并把选择记进 localStorage",
+   cbN === 1 && P.packStoreRead() === "region", JSON.stringify([cbN, P.packStoreRead()]));
+await E("btnPackReload").onclick();
+ck("★「重新扫描」扫完也通知一次（否则列表变了地图还是旧瓦片）", cbN === 2, cbN);
+/* ★离线回落态必须被**下一次** addBaseLayer 清掉（2026-09-13 实测发现的真 bug）：
+   旧代码只重置计数 → 换源/重建地图后 `baseOffline` 仍然为 true：
+   ① 状态说谎；② `tileerror` 里的 `if (baseOffline) return;` 让**新的**底图再挂也不回落
+   → 地图空白 + 无提示（野外包瓦片不全时最容易碰）。 */
+E("tileSrc").value = "pack";
+E("packSel").value = "";                    // 没选到包 → 空 URL → 直接判离线
+P.addBaseLayer({});
+ck("没选到包 → 直接判离线（不发无意义请求）", P.baseOfflineNow() === true);
+P.addBaseLayer({});                          // 换了有效的包再来一次（页面重建图层就是这条路）
+ck("包没变（仍空 URL）→ 仍离线", P.baseOfflineNow() === true);
+E("packSel").value = "region";
+P.addBaseLayer({});
+ck("★有包了 → 离线标志被清掉（否则地图空白也无提示）", P.baseOfflineNow() === false,
+   String(P.baseOfflineNow()));
+console.log("  ASYNC_DONE");
+})();
 """
 
 
@@ -270,6 +414,9 @@ def run_node():
                            encoding="utf-8", errors="replace", timeout=120)
         out = (r.stdout or "") + (r.stderr or "")
         print(out.rstrip())
+        if "ASYNC_DONE" not in out:          # 异步段没跑完（顶层 await 被拆、或 promise 挂了）→ 不能算绿
+            print("  FAIL node 侧异步段没跑完（没看到 ASYNC_DONE）—— 野外包那几条其实是没测")
+            return 1
         n_ok, n_bad = out.count("  OK "), out.count("  FAIL ")
         print(f"  （map.js 检查 {n_ok} 条通过 / {n_bad} 条失败）")
         if r.returncode != 0 or "FAIL" in out:
@@ -345,6 +492,113 @@ def i18n_guard():
     return bad
 
 
+def pack_guard():
+    """野外包（本地 XYZ 瓦片目录）：`maps.py` 的逻辑 + 两侧接线。
+
+    用**临时目录**造小包 —— 不碰真实的 `ui/static/maps/`（现场可能真放了包，测试不能依赖它、
+    更不能往里写东西）。重点是 `resolve_tile()`：它是**路径穿越的唯一防线**，所以逐条试。
+    """
+    sys.path.insert(0, HERE)
+    import maps                                          # noqa: E402
+    bad = 0
+
+    def ck(name, cond, extra=""):
+        nonlocal bad
+        if cond:
+            print(f"  OK   {name}")
+        else:
+            print(f"  FAIL {name}" + (f"   {extra}" if extra else ""))
+            bad += 1
+
+    root = tempfile.mkdtemp(prefix="packtest_")
+    try:
+        def put(rel):
+            p = os.path.join(root, rel.replace("/", os.sep))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n")            # 内容无所谓，只看路径解析
+            return p
+
+        put("packA/10/1/2.png")
+        put("packA/11/3/4.png")
+        put("区域A/10/1/2.png")                          # 中文包名（现场目录名就是中文）
+        put(".hidden/10/0/0.png")                        # 隐藏目录不算包
+        os.makedirs(os.path.join(root, "empty"))         # 空目录不算包
+        with open(os.path.join(root, "note.txt"), "w") as f:
+            f.write("说明")                              # 顶层文件不是包
+
+        packs = maps.list_packs(root)
+        names = sorted(p["name"] for p in packs)
+        ck("列出包：只算有瓦片的目录（空目录/隐藏目录/顶层文件都不是包）",
+           names == sorted(["packA", "区域A"]), names)
+        a = [p for p in packs if p["name"] == "packA"][0]
+        ck("包信息：瓦片数 + 用到的 zoom 层级",
+           a["tiles"] == 2 and a["zooms"] == [10, 11] and a["truncated"] is False, a)
+        t = maps.list_packs(root, cap=1)
+        ck("数到上限就停并标 truncated（不为一个显示用的数字走完整个包）",
+           all(p["truncated"] and p["tiles"] == 1 for p in t), t)
+        ck("目录不存在 → 空列表（没放包是正常状态，不是异常）",
+           maps.list_packs(os.path.join(root, "nope")) == [])
+
+        # ---- 只允许 <包名>/<z>/<x>/<y>.<白名单扩展名> 一种形状 ----
+        ok_p, ok_ct = maps.resolve_tile("packA/10/1/2.png", root)
+        ck("合法路径 → 绝对路径 + Content-Type",
+           ok_p == os.path.join(root, "packA", "10", "1", "2.png") and ok_ct == "image/png",
+           (ok_p, ok_ct))
+        ck("中文包名（浏览器会 percent-encode）也能解析",
+           maps.resolve_tile("区域A/10/1/2.png", root)[0] is not None
+           and maps.resolve_tile(quote("区域A") + "/10/1/2.png", root)[0] is not None)
+        ck("大写扩展名不差分（.PNG 当 .png）",
+           maps.resolve_tile("packA/10/1/2.PNG", root)[1] == "image/png")
+        for label, rel, why in [
+            ("穿越：..", "../10/1/2.png", "pack"),
+            ("穿越：包里再爬一层", "packA/../../10/1/2.png", "shape"),
+            ("穿越：绝对路径", "/etc/passwd.png", "shape"),
+            ("隐藏目录（. 开头）", ".hidden/10/0/0.png", "pack"),
+            ("层级不够（缺 y）", "packA/10/1", "shape"),
+            ("层级多一层", "packA/10/1/2/3.png", "shape"),
+            ("扩展名不在白名单（.svg）", "packA/10/1/2.svg", "ext"),
+            ("扩展名不在白名单（.txt）", "packA/10/1/2.txt", "ext"),
+            ("x 不是数字", "packA/10/x/2.png", "nums"),
+            ("z 越界（>24）", "packA/99/1/1.png", "nums"),
+            ("x/y 超出该 zoom 的格子范围", "packA/10/2048/1.png", "nums"),
+        ]:
+            p, got = maps.resolve_tile(rel, root)
+            ck(f"拒绝：{label}", p is None and got == why, f"→ {p} / {got}")
+
+        # ---- 与前端同一形状（服务端解析器 vs map.js 的 URL 模板）----
+        js = open(MAP_JS, encoding="utf-8").read()
+        m = re.search(r'PACK_TPL\s*=\s*"([^"]+)"', js)
+        ck("map.js 里有唯一的 URL 模板常量 PACK_TPL", bool(m))
+        if m:
+            tpl = m.group(1)
+            rel = (tpl[len("/maps/"):].replace("{name}", "区域A")
+                   .replace("{z}", "10").replace("{x}", "1").replace("{y}", "2"))
+            p, why = maps.resolve_tile(rel, root)
+            ck("★前端模板拼出的路径，服务端解析器必须认得（改一边不改另一边 = 一律 404）",
+               p is not None, f"{tpl} → {why}")
+
+        # ---- 接线守卫 ----
+        srv = open(os.path.join(HERE, "ui_server.py"), encoding="utf-8").read()
+        ck("ui_server 提供 /api/maps（页面列表源）", '"/api/maps"' in srv)
+        ck("ui_server 提供 /maps/… 瓦片路由，且走 maps.resolve_tile()",
+           '"/maps/"' in srv and "maps.resolve_tile(" in srv)
+        git_ignore = open(os.path.join(HERE, ".gitignore"), encoding="utf-8").read()
+        ck("★野外包**不入库**（.gitignore 有 ui/static/maps/）",
+           "ui/static/maps/" in git_ignore)
+        for page in ("track.html", "replay.html"):
+            html = open(os.path.join(HERE, "ui", "static", page), encoding="utf-8").read()
+            miss = [k for k in ('id="packSel"', 'id="packNote"', 'id="btnPackReload"')
+                    if k not in html]
+            ck(f"{page}：野外包选择框/状态行/重新扫描都在", not miss, miss)
+            ck(f"{page}：开页拉包列表（loadPacks）", "loadPacks(" in html)
+            ck(f"{page}：调 packInit(cb) 接线（map.js 顶层碰不了 DOM；换包要重建图层）",
+               bool(re.search(r"packInit\(\s*[^)\s]", html)))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    return bad
+
+
 def main():
     print("== 基点导入/换算/存储（map.js 原文，node 跑） ==")
     fail = run_node()
@@ -352,6 +606,8 @@ def main():
     fail += page_guard()
     print("== 口径守卫（WGS84 / 不做转换 / 本机存储 / 不是现场值） ==")
     fail += i18n_guard()
+    print("== 野外包（本地 XYZ 目录）：maps.py 逻辑 + 两侧接线 ==")
+    fail += pack_guard()
     if fail:
         print(f"地图共享件：有问题（{fail} 处）")
         return 1

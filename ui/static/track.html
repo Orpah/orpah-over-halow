@@ -85,8 +85,13 @@
       <select id="tileSrc"></select>
     </label>
     <label><span data-i18n="tk_tile_url">自定义瓦片 URL</span> <input id="tileUrl" style="width:340px" placeholder="https://…/{z}/{x}/{y}.png"></label>
+    <!-- 野外包（本地 XYZ 瓦片目录）：选项与状态行都由 map.js 填（单一源；服务端读取见 maps.py） -->
+    <label><span data-i18n="map_pack_label">野外包</span>
+      <select id="packSel" style="min-width:140px"></select></label>
+    <button class="btn" id="btnPackReload" data-i18n="map_pack_reload">重新扫描</button>
   </div>
   <p class="hint" id="tileNote"></p>
+  <p class="hint" id="packNote"></p>
   <div class="row" style="margin-top:8px">
     <label><span data-i18n="tk_base_lat">基点纬度</span> <input id="baseLat" type="number" step="any" value="40.0777583"></label>
     <label><span data-i18n="tk_base_lng">基点经度</span> <input id="baseLng" type="number" step="any" value="117.2688556"></label>
@@ -690,6 +695,9 @@ $("baseLng").onchange = onBaseChange;
    开页时先套用存储里的基点（**在建地图之前**，否则地图会先按默认值定一次位）。 */
 baseApplyStored();
 baseInit(onBaseChange);
+/* 野外包：换包/重新扫描 = 换底图数据源 → 由本页重建图层（同 tileSrc；接线与状态行在 map.js） */
+packInit(() => { if (lmap) { lmap.remove(); lmap = null; mapSig = ""; }
+                 if ($("view").value === "map") applyView(); });
 
 /* ---- 真实上报模式（IoTDB 时序）---- */
 function fmtTime(ms) {
@@ -1318,6 +1326,8 @@ async function loadConfig() {
 /* 初始画面 */
 OrpahI18n.apply();
 buildTileOptions();      // 必须早于任何 ensureMap：它决定本语言的默认瓦片源
+/* 野外包列表：**异步**，所以拿到后如果当前就是野外包，重画一帧（否则首帧会用空 URL 落成网格） */
+loadPacks().then(() => { if ($("tileSrc").value === "pack" && $("view").value === "map") applyView(); });
 /* 带 `?sn=` 来（告警弹窗跳转）→ **直接切「真实上报」模式**：SN 选择器只在真实模式下显示，
    留在模拟模式的话 URL 里的 SN 根本看不到（用户会以为跳错了）。
    `applyMode()` 内部会 `refreshSnList().then(loadReal)`，所以不要再重复调 refreshSnList。 */

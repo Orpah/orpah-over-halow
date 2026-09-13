@@ -1,6 +1,10 @@
 # 运行时上传的照片（本地上传，不随仓库提交）
 ui/static/uploads/
 
+# 野外包（本地 XYZ 瓦片目录，见 maps.py / README「野外包」一节）：
+# 运行时素材，自建/自托管才有合规性，且可能几十 MB —— **不入库**（做法写在文档里）。
+ui/static/maps/
+
 # SQLite 数据库（运行时持久化，不随仓库提交）
 # 连 rollback journal / WAL 临时文件一起忽略（事务中会短暂出现）
 orpah.db

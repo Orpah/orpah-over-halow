@@ -560,7 +560,7 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 `ORPAH_NOTIFY_RETRY`（首次失败后再试几次，`2`；0 = 不重试）/ `ORPAH_NOTIFY_BACKOFF`（`1,5,30` 秒，
 次数多于序列就用最后一个值）/ `ORPAH_NOTIFY_QUEUE_MAX`（`20`，满则丢最旧）/ 
 `ORPAH_NOTIFY_PER_STEP`（`3`，每 tick 最多试几条 —— 防端点挂掉时把后台巡视线程卡住）。
-运行时可在页面上改 URL/级别（`POST /api/ctl`，见 §14），**不重启**。
+运行时可在页面上改 URL/级别（`POST /api/ctl` 的 `notify_set`，动作清单见 `ui_server.py` 的 `cmd()`），**不重启**。
 
 `notify_set` 的两个副作用（容易忘）：换地址/关通知会**丢掉待重试队列**（那些条目属于旧端点，
 往新地址重发是错的通知）并计 `dropped`；**不改** `seen`（换接收端不会把已推过的告警重推一遍）。
@@ -1087,6 +1087,44 @@ why`（+ 页面用的 `every_s`）。横轴上限取 `max(2×当前采集, 0.5mW
 
 两个事实（级别 + 电量）**都在签名预像内** → 攻击者既不能把“密钥坏了”伪装成“没电了”，
 也不能反过来。`test_server.TestIdReport.test_id_report_energy_fields` 锁住这条推导。
+
+## 14. `/api/maps` + `/maps/…`（野外包：本地 XYZ 瓦片目录，2026-09-13）
+
+现场没网时的底图。**包不入库**（`.gitignore` 有 `ui/static/maps/`）—— 目录形状：
+
+```
+ui/static/maps/<包名>/<z>/<x>/<y>.png        # 也支持 .jpg/.jpeg/.webp
+```
+
+### GET `/api/maps` → `{"ok":true,"dir":"…ui/static/maps","packs":[…]}`
+
+```json
+{"ok": true, "dir": "F:/git/orpah-over-halow/ui/static/maps",
+ "packs": [{"name": "现场A", "tiles": 128, "truncated": false, "zooms": [12, 13, 14]}]}
+```
+
+- **空列表是正常状态**（仓库不带包）→ 页面译成「没有找到野外包 + 怎么做」，不是错误。
+- 只列**有瓦片的目录**（空目录/`.` 开头的隐藏目录/顶层散文件都不算包）。
+- `tiles` 数到 `maps.COUNT_CAP`（现 20000）就停并标 `truncated: true` ——
+  不为一个显示用的数字走完整个包。
+- 目录不存在同样返回 `[]`（不抛异常）。
+
+### GET `/maps/<包名>/<z>/<x>/<y>.<ext>` → 瓦片本体
+
+- **只认这一种形状**（`maps.resolve_tile()` 是路径穿越的**唯一防线**）：
+  包名不得含 `/`、`\\`、`..`、不以 `.` 开头（允许中文，percent-encoded 后再校验）；
+  层级必须十进制、`z ≤ 24` 且 `x/y < 2^z`；扩展名白名单 `png/jpg/jpeg/webp`。
+  其余一律 **404**（路径穿越、隐藏目录、`.svg`/`.txt` 都在内）。
+- 包或瓦片不在 → **404**（页面据此走「连续失败 → 回落网格底图」，**不留白**）。
+- **不支持 `Range`（206）**：只整文件发。这是 PMTiles 方案（单文件 + Range）未做的原因；
+  用户 2026-09-13 选「野外包 = XYZ 目录」这个最小方案，做法留在 `ROADMAP.md` §二。
+- `Cache-Control: no-store`（现场可能换包；本地磁盘重读不值一提）。
+- **只有跑 ui_server 的那台机器上的包可见** —— 浏览器是去服务端要瓦片的。
+- 合规：包必须**自建/自托管**（OSM 官方瓦片政策明文禁止离线/预取/打包，见 `ROADMAP.md` §七）。
+
+前端一侧（`ui/static/map.js`）：瓦片源选「野外包（本地）」时 URL 才拼成
+`/maps/<包名>/{z}/{x}/{y}.png`（与上面同一形状，`test_mapjs.py` 两侧都有守卫）；
+没选到包 → 空 URL → **直接判离线**（不向服务端发无意义请求）。
 
 
 

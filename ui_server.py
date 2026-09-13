@@ -62,6 +62,7 @@ import notify as ntf                      # noqa: E402  告警通知（出站 We
 import downlink as down                   # noqa: E402  下行真实性（F-14 B）：Server 签名 / Router 验签
 import clock as clk                       # noqa: E402  设备时钟偏移/漂移估计（纯计算）
 import metrics                            # noqa: E402  指标面板纯计算（/api/metrics）
+import maps                               # noqa: E402  野外包（本地 XYZ 瓦片目录，/api/maps + /maps/…）
 import energy as en                       # noqa: E402  能量轴（免电池客户端模型，纯计算）
 import ratelimit as rl_mod                # noqa: E402  限频（§5.8）：令牌桶 + 计数 + 快照
 import tsdb                               # noqa: E402  Apache IoTDB 时序库
@@ -1395,6 +1396,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if body:
             self.wfile.write(body)
 
+    def _pack_tile(self):
+        """野外包瓦片：`/maps/<包名>/<z>/<x>/<y>.png`（形状与路径安全见 `maps.resolve_tile()`）。
+
+        只允许那一种形状 → 路径穿越 / 隐藏目录 / 奇怪扩展名一律 **404**；
+        包或瓦片不在也是 404 —— 页面据此走「连续失败 → 回落网格底图」（`map.js`），
+        所以**不留白、也不静默**。
+        **不整文件之外的任何东西**：不支持 `Range`（那是 PMTiles 方案的前提，未做，见 maps.py 头）。
+        """
+        rel = self.path.split("?", 1)[0].lstrip("/")[len("maps/"):]
+        p, _why = maps.resolve_tile(rel.strip("/"))
+        if not p or not os.path.isfile(p):
+            self._send(404, b"tile not found", "text/plain")
+            return
+        ctype = maps.TILE_EXT[os.path.splitext(p)[1].lower()]
+        with open(p, "rb") as f:
+            self._send(200, f.read(), ctype, {"Cache-Control": "no-store"})
+
     def do_GET(self):
         global APP
         if self.path == "/api/status":
@@ -1423,6 +1441,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # 通知推的必须是同一份判定，否则会出现「页面红点亮了但没通知」这类对不上。
             self._send(200, json.dumps(APP.alert_view()).encode())
             return
+        if self.path == "/api/maps":
+            # 野外包（本地 XYZ 瓦片目录）列表：页面「瓦片源 = 野外包」的选项来源。
+            # 列表为空是**正常状态**（仓库不带包，见 maps.py 头注释）——页面译成
+            # 「没有找到野外包 + 怎么做」，不是错误。
+            self._send(200, json.dumps({"ok": True, "dir": maps.MAPS_DIR,
+                                        "packs": maps.list_packs()}).encode())
+            return
         if self.path.startswith("/api/energy"):
             self._send(200, json.dumps(APP.energy_view()).encode())
             return
@@ -1446,6 +1471,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/api/events":
             self._sse()
+            return
+        if self.path.startswith("/maps/"):
+            self._pack_tile()
             return
         rel = self.path.lstrip("/")
         if "?" in rel:

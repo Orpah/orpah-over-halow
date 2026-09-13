@@ -124,8 +124,13 @@
     <label><span data-i18n="tk_tiles">瓦片源</span><select id="tileSrc"></select></label>
     <label><span data-i18n="tk_tile_url">自定义瓦片 URL</span>
       <input id="tileUrl" style="width:280px" placeholder="https://…/{z}/{x}/{y}.png"></label>
+    <!-- 野外包（本地 XYZ 瓦片目录）：选项与状态行都由 map.js 填（单一源；服务端读取见 maps.py） -->
+    <label><span data-i18n="map_pack_label">野外包</span>
+      <select id="packSel" style="min-width:140px"></select></label>
+    <button class="btn" id="btnPackReload" data-i18n="map_pack_reload">重新扫描</button>
   </div>
   <p class="hint" id="tileNote"></p>
+  <p class="hint" id="packNote"></p>
   <div class="row">
     <label><span data-i18n="tk_base_lat">基点纬度</span>
       <input id="baseLat" type="number" step="any" value="40.0777583"></label>
@@ -1474,6 +1479,7 @@ function resetMap() {
    开页时先套用存储里的基点（**在建地图之前**，否则地图会先按默认值定位一次）。 */
 baseApplyStored();
 baseInit(resetMap);
+packInit(resetMap);      // 野外包：换包/重新扫描 → 由本页重建图层（接线与状态行在 map.js）
 /* 宽度变化（窗口缩放、时钟文字变长变短、字体加载）就重画：
    否则像素缓冲宽度会滞后于显示宽度 → 颜色位置错位 */
 if (window.ResizeObserver) {
@@ -1510,6 +1516,7 @@ async function loadConfig() {
   $("rpTo").value = dateTimeOf(now);
   $("rpFrom").value = dateTimeOf(now - 30 * 60000);
   buildTileOptions();          // 必须早于任何 ensureMap：它决定本语言的默认瓦片源
+  await loadPacks();           // 野外包列表（早于首次建房：否则选了野外包会先用空 URL 落成网格）
   OrpahI18n.apply();
   await loadConfig();          // 早于首次 loadReplay：它决定距离换算
   await loadSnList();

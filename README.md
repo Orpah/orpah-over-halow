@@ -52,7 +52,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | 告警（长未上报 / 案件超时 / 处置超时 / 验签失败率 / 降级上报 / 设备时钟 / **能力声明不一致** / **RSSI 突变** / **校验位连败** / 电量 / 限频丢弃） | `alerts.py` | `test_alerts.py`、`test_levels.py` |
 | **告警通知（出站 Webhook + 页面弹窗，可点击跳转 + 可选声音）** | `notify.py`（边沿触发 + 有界重试/退避，至少一次语义，队列在内存） + `ui_server._alert_watch` + `app.js`（`ALERT_LINK` 单一源） | `test_notify.py`（42 条）、`test_appjs.py` |
 | **限频（§5.8，三层）**：Server 侧 per-SN + per-Router（验签之前，限 CPU）；Router 侧转发按 SN / 探针按源 MAC（限带宽）；**设备侧自愿自限频**（`ORPAH_SELF_*`：延后而非丢弃，不占满空口/不撞上游桶；**不是防线**，被改的设备不做） | `ratelimit.py`（`RateLimiter` + `DeviceLimiter` 复用同一令牌桶）+ `client.ClientHost._gate` | `test_ratelimit.py`、`test_selflimit.py`、`demo_ratelimit.py` |
-| **地图单一源 + 离线回落 + 基点导入/导出**：底图源列表与条款、本地坐标↔经纬度换算、瓦片取不到时切本地网格底图；基点支持导入/导出 JSON（含 GeoJSON Point，**注意 [经度,纬度]**）、范围校验与**可见错误码**（不静默回落）、存本机浏览器、来源三态显示 | `ui/static/map.js` | `test_mapjs.py`（57 项 node + 页面/口径守卫 10 项） |
+| **地图单一源 + 离线回落 + 基点导入/导出 + 野外包（本地 XYZ 瓦片目录）**：底图源列表与条款、本地坐标↔经纬度换算、瓦片取不到时切本地网格底图；基点支持导入/导出 JSON（含 GeoJSON Point，**注意 [经度,纬度]**）、范围校验与**可见错误码**（不静默回落）、存本机浏览器、来源三态显示；**野外包**入 `ui/static/maps/<包名>/<z>/<x>/<y>.png` → 页面选「野外包（本地）」即用（包**不入库**、必须自建/自托管） | `ui/static/map.js` + `maps.py`（服务端列包/路径解析） | `test_mapjs.py`（node 73 项 + 页面/口径/**野外包**守卫） |
 | 指标面板（验签失败率·算法分布 / 平均 RSSI / 处置时长） | `metrics.py` | `test_metrics.py` |
 | 定位：多路由器观测 → 三边/WLS + 95% 椭圆 + 卡尔曼平滑 + 回放 + **误差 CDF（仅模拟环境有真值）** + **补站位建议（几何不行时给可执行坐标）** + **报文流时间轴（序号缺口=丢包证据）** | `motion.py` / `stations.py` / `ui/static/pos.js` | `test_motion.py`、`test_posjs.py`（61 条 + 2 条页面守卫，套件自己报数） |
 | 时钟可信：①无 RTC 设备 `ts=0` → 服务器接收时刻（唯一入口）②设备时钟**偏移/漂移估计**（只估计不改数据；长基线才给漂移，原因可见：基线不足/噪声）③**设备自报能力位 `cap.rtc`**（三态；已签声明防篡改；无 RTC ⇒ 一律服务器时刻且不喂估计器；声明有 RTC 却给不出可用时间 → `id_cap_mismatch` 告警） | `orpah_proto`（`effective_ts`/`cap_of`/`rtc_of`） / `clock.py`（`ClockTracker`） | `test_clock.py`（88 条）+ `test_server.py`（28 条）+ `test_alerts.py` + `demo_clock.py` + 首页「上报控制」能力下拉/ts 置 0 |
@@ -90,7 +90,8 @@ POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/�
 | 文件 | 作用 | 谁用 |
 |---|---|---|
 | `ui/static/pos.js` | 定位纯函数：RSSI↔距离、三边、WLS、椭圆、质量（GDOP/残差）、观测归集、卡尔曼、**报文流判定（缺口/回退/帧间隔）** | `track.html`、`replay.html` |
-| `ui/static/map.js` | 底图源列表与条款、本地坐标→经纬度、离线回落、**基点导入/导出/记忆**（单一源） | `track.html`、`replay.html` |
+| `ui/static/map.js` | 底图源列表与条款、本地坐标→经纬度、离线回落、**基点导入/导出/记忆**、**野外包选择/状态行**（单一源） | `track.html`、`replay.html` |
+| `maps.py` | 野外包（本地 XYZ 瓦片目录）的服务端逻辑：`/api/maps` 列包 + `/maps/…` 瓦片解析（路径穿越的唯一防线）；`ui/static/maps/` **不入库** | `ui_server.py`、`test_mapjs.py` |
 | `ui/static/app.js` | 首页逻辑：拓扑/计数/报文流/告警渲染（**转义口径见下**） | `index.html` |
 | `ui/static/ui_i18n.js` | **文案字典**（zh/en，本项目自持一份，2026-09-12 从共享一份拆出） | orpah 各页（见 `test_i18n.py`） |
 | `ui/static/style.css` | 样式与配色变量（告警红 / 上行蓝 / ID 橙 / 发现灰，色弱校验过） | orpah 各页 |
@@ -98,6 +99,37 @@ POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/�
 > ⚠ **模型参数（路径损耗 A/n、噪声）以服务端为准**：`motion.py` 是**唯一源** → `GET /api/config` →
 > `track`/`rssi`/`replay` 开页取默认值（输入框仍可手改）。页面 HTML 里的 `value=` 只是**离线兜底**；
 > `test_motion.py` §8 有「单源守卫」断言兜底值 == 常量、且页面确实去取接口。
+
+### 野外包（离线底图，2026-09-13）
+
+现场没网时用**本地 XYZ 瓦片目录**当底图（不要拔网线演示离线，可把「自定义瓦片 URL」填成不可达地址）。
+
+**怎么放**（包**不入库**，`.gitignore` 里有 `ui/static/maps/`）：
+
+```
+ui/static/maps/<包名>/<z>/<x>/<y>.png          # 自建/自托管的 XYZ 瓦片
+例：ui/static/maps/现场A/16/53600/26300.png
+```
+
+拿自建的瓦片生成一个目录（示例，具体参数按你的数据源）：
+
+```bash
+# 用自建/自托管的瓦片集，或允许离线的供应商数据；**不得**用 tile.openstreetmap.org 的瓦片打包
+# （其 Tile Usage Policy 明文禁止离线/预取/打包，见 ROADMAP 第二/七节）
+gdal2tiles.py --profile=mercator -z 12-17 --xyz source.tif ui/static/maps/现场A
+```
+
+**怎么用**：`track.html` / `replay.html` 的「底图」卡 → 瓦片源选 `野外包（本地）` → 选包（选过就记住）→
+顶多一个「重新扫描」（放了新包不用重启服务端）。瓦片取不到时按**既有规则回落本地网格底图** + 提示。
+
+**四条边界（如实，别当成“离线地图已完成”）**：
+
+| 边界 | 说明 |
+|---|---|
+| 只有 **服务端那台机器** 上的包可见 | 浏览器是去 `ui_server` 要瓦片的；包放笔记本上而 server 在另一台机器 → 那台也得有 |
+| 必须**自建/自托管** | OSM 官方瓦片禁止离线/预取/打包；拿它做包不合规（条款文案写在页面上） |
+| **不带 Range（206）** | 只整文件发；PMTiles（单文件 + Range）**未做**（用户 2026-09-13 选最小方案，做法留在 ROADMAP §二） |
+| 五种状态分得清 | 有包 / 没有包 / 取不到列表 / **选中的包消失了** / 没选到包（空 URL → 直接离线）—— 各有各的文案，不合为一句 |
 
 ## 走一遍完整剧本（入网 → 移动 → 走失 → 发现 → 定位 → 找回 → 结案）
 
