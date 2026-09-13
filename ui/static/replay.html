@@ -72,7 +72,7 @@
   <h3 data-i18n="rp_sec0">0 · 数据源与时间段</h3>
   <div class="row">
     <label><span data-i18n="rp_sn">设备 SN</span>
-      <select id="rpSn" style="min-width:260px"></select></label>
+      <select id="rpSn" class="w-md"></select></label>
     <label><span data-i18n="rp_from">起始</span>
       <input id="rpFrom" type="datetime-local" step="1"></label>
     <label><span data-i18n="rp_to">结束</span>
@@ -123,10 +123,10 @@
       </select></label>
     <label><span data-i18n="tk_tiles">瓦片源</span><select id="tileSrc"></select></label>
     <label><span data-i18n="tk_tile_url">自定义瓦片 URL</span>
-      <input id="tileUrl" style="width:280px" placeholder="https://…/{z}/{x}/{y}.png"></label>
+      <input id="tileUrl" class="w-lg" placeholder="https://…/{z}/{x}/{y}.png"></label>
     <!-- 野外包（本地 XYZ 瓦片目录）：选项与状态行都由 map.js 填（单一源；服务端读取见 maps.py） -->
     <label><span data-i18n="map_pack_label">野外包</span>
-      <select id="packSel" style="min-width:140px"></select></label>
+      <select id="packSel" class="w-md"></select></label>
     <button class="btn" id="btnPackReload" data-i18n="map_pack_reload">重新扫描</button>
   </div>
   <p class="hint" id="tileNote"></p>

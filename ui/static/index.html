@@ -83,7 +83,7 @@
   <div class="config-row id-ctl">
     <label><span data-i18n="notify_url">Webhook 地址</span>
       <input id="notifyUrl" type="text" spellcheck="false"
-             style="min-width:320px"
+             class="w-lg"
              placeholder="http://127.0.0.1:8899/hook"></label>
     <button class="btn" id="btnNotifySave" data-i18n="btn_apply">应用</button>
     <label><span data-i18n="notify_level">最低推送级别</span>
@@ -217,7 +217,7 @@
   </div>
   <div class="config-row id-ctl">
     <label><span data-i18n="id_level_mode">降级演示</span>
-      <select id="idLevelMode" style="min-width:260px"></select></label>
+      <select id="idLevelMode" class="w-md"></select></label>
     <span class="hint" data-i18n="id_level_hint">切换「哪个环节坏了」→ 下一条 ID 上报按 §8.2 自动选级（L1 签名失败 / L2 SE 不可用 / L3 无可用密钥）；L2 出 warn、L3 出 crit 告警。</span>
   </div>
   <div class="config-row id-ctl">
@@ -228,7 +228,7 @@
   </div>
   <div class="config-row id-ctl">
     <span class="hint" data-i18n="spoof_title">防 spoof（空口无认证）</span>
-    <select id="idSpoofKind" style="min-width:230px"></select>
+    <select id="idSpoofKind" class="w-md"></select>
     <button class="btn" id="btnIdSpoof" data-i18n="btn_spoof">注入伪造上报</button>
     <button class="btn" id="btnIdSpoofAll" data-i18n="btn_spoof_all">跑全部攻击</button>
     <button class="btn" id="btnIdSpoofStop" data-i18n="btn_stop" style="display:none">停止</button>

@@ -62,7 +62,7 @@
       </select>
     </label>
     <label><span data-i18n="tk_dev">设备 SN</span>
-      <select id="dsSn" style="min-width:280px"></select>
+      <select id="dsSn" class="w-md"></select>
     </label>
     <label><span data-i18n="tk_recent_a">最近</span> <input id="dsLimit" type="number" step="50" value="200" min="10" style="width:80px"> <span data-i18n="tk_recent_b">点</span></label>
     <label><input id="dsAuto" type="checkbox" checked> <span data-i18n="tk_auto">自动刷新 2s</span></label>
@@ -84,10 +84,10 @@
       <!-- 选项由 buildTileOptions() 按界面语言生成（中/英两套列表 + 默认项不同）；CartoDB 已移除 -->
       <select id="tileSrc"></select>
     </label>
-    <label><span data-i18n="tk_tile_url">自定义瓦片 URL</span> <input id="tileUrl" style="width:340px" placeholder="https://…/{z}/{x}/{y}.png"></label>
+    <label><span data-i18n="tk_tile_url">自定义瓦片 URL</span> <input id="tileUrl" class="w-lg" placeholder="https://…/{z}/{x}/{y}.png"></label>
     <!-- 野外包（本地 XYZ 瓦片目录）：选项与状态行都由 map.js 填（单一源；服务端读取见 maps.py） -->
     <label><span data-i18n="map_pack_label">野外包</span>
-      <select id="packSel" style="min-width:140px"></select></label>
+      <select id="packSel" class="w-md"></select></label>
     <button class="btn" id="btnPackReload" data-i18n="map_pack_reload">重新扫描</button>
   </div>
   <p class="hint" id="tileNote"></p>

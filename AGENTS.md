@@ -312,7 +312,7 @@
     `CREATE TABLE IF NOT EXISTS` **不给老表补列** → `_init_db` 里用 `PRAGMA table_info` + `ALTER TABLE`
     兜迁移（否则老 `orpah.db` 写库报 `no such column`）。`test_alerts.py` 里的假 `Case` 必须带 `handler`
     （缺属性→测试直接崩；多给属性→掩盖真 AttributeError，两种都踩过）。
-  - **一键回归 = `run_checks.py`**（2026-09-12）：跑 `test_*.py` 全部离线套件（现 21 个）+
+  - **一键回归 = `run_checks.py`**（2026-09-12）：跑 `test_*.py` 全部离线套件（现 24 个）+
     批量合规用例（`checks_batch.py`，表驱动：黄金样本/SN 边界/parse_sn/报文编解码），
     报告写到 `checks_report.md`（**入库**，同 `host/test_results.txt` 惯例）。
     **改完任何 orpah 代码先跑它**。两条硬规则：① 判定 = 退出码 0 **且** 输出无 `FAIL`/`Traceback`
@@ -459,6 +459,19 @@
     比例尺 + 提示（含「重试底图」）。判据 = **连续 4 张失败且成功数为 0**（个别 404 不误判）；
     自定义源空 URL 直接判离线。演示离线不用拔网线：把自定义瓦片 URL 填成不可达地址。
     PMTiles 区域包（A 方案）**仍未做**，做法/合规约束见 ROADMAP §二。
+  - **UI / 窄屏硬规则（2026-09-13）**：这套 UI 是给**现场找人**用的 —— 手机/平板看定位、案件、
+    台账是常见场景，所以布局规则不是审美问题：
+    - **不许给 `body` 设固定 `min-width`**（曾写 `min-width: 1180px`，只为让首页拓扑单行不折行；
+      实测 390px 手机上页面宽 1180px → **整站要横向拖 3 屏**）。改成「**谁的宽谁自己滚**」：
+      拓扑（`.topo { width: max-content }` + `#topology { overflow-x: auto }`）与宽内容各在自己
+      的容器里滚，页面本身按视口自适应。
+    - **窄屏档位固定 900px**（`style.css` 末尾）：卡片留白收窄、副标题隐去、控件 `min-height: 40px`
+      （触屏可点）、字号下限 12px、两列网格改单列、长串（SN/base64）允许断行。
+    - **宽控件用 `.w-sm/.w-md/.w-lg`，不写内联宽度**：内联 `style="min-width:320px"` 优先级**高于**
+      样式表 → 窄屏必然把卡片撑宽。新增控件照这三个类来。
+    - **`.btn` 一律 `white-space: nowrap`**（窄屏上「回放」曾被挤成两行）。
+    - 守卫 = `test_uicss.py`（离线、不需浏览器）锁上面几条 —— **布局坏是“看不见的回归”**：
+      排版塌了不会让任何测试变红，所以用最笨的文本检查钉住。
   - **野外包 = 本地 XYZ 瓦片目录（2026-09-13，用户选“最小方案”）**：现场没网时的底图。
     - **完整路径**：`ui/static/maps/<包名>/<z>/<x>/<y>.png` → `maps.py`（列包/路径解析单一源）→
       `ui_server.py` 的 `/maps/…` 路由（**只整文件发，无 Range**）→ `map.js` 从 `GET /api/maps` 取列表、

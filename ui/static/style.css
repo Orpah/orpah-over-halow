@@ -13,11 +13,13 @@
   --found: #c9d1d9;
 }
 * { box-sizing: border-box; }
-html, body { overflow-x: auto; }
+html, body { overflow-x: hidden; }
 body {
   margin: 0; background: var(--bg); color: var(--txt);
-  /* 拓扑（5 节点 + 4 连线）单行排开需要的最小宽度：窄视口时横向滚动，不折行挤乱 */
-  min-width: 1180px;
+  /* ★2026-09-13 改：以前这里写 `min-width: 1180px`（为了让「拓扑单行不折行」），
+     代价是**整站**在窄窗口/平板上要横向拖（现场用手机看定位 = 基本废）。
+     现在改成“**谁的宽谁自己滚**”：拓扑与宽表格各自在自己的可滚动容器里滚（见 .card/.topo），
+     页面本身按视口宽度自适应；断点 900px（见文件末尾）。 */
   font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 header {
@@ -63,21 +65,34 @@ a.snlink.lost { color: var(--red); }
 .btn {
   background: #21262d; color: var(--txt); border: 1px solid var(--bd);
   border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px;
+  white-space: nowrap;             /* 按钮文字不换行（窄屏上「回放」曾被挤成两行） */
 }
 .btn:hover { background: #30363d; }
 .btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
 a.btn { text-decoration: none; display: inline-block; }
+
+/* 宽控件：**把尺寸集中在这里**（以前写在各页内联 style 上，窄屏时 min-width 会赢过卡片宽度 → 把整页撑宽） */
+input, select, textarea { max-width: 100%; }
+.w-sm { width: 80px; }
+.w-md { width: 240px; max-width: 100%; }
+.w-lg { width: 320px; max-width: 100%; }
+select.w-md, select.w-lg { min-width: 0; }
 .card {
   background: var(--card); border: 1px solid var(--bd); border-radius: 8px;
   margin: 14px 18px; padding: 14px 18px;
 }
+/* 只有「内容确实不是宽度自适应」的卡片才当横向滚动容器（如拓扑：5 节点 + 4 连线恒单行）。
+   **别给所有卡片加**：overflow 会创建滚动上下文，卡内 `position: sticky` 的表头（damm32 的
+   32×32 表）就不贴视口了。宽表格走「文字换行 + 长串断行」（见末尾窄屏规则），不靠滚动。 */
+#topology, .card.scrollx { overflow-x: auto; }
 .card h3 { margin: 0 0 10px; font-size: 15px; }
 .hint { color: var(--mut); font-size: 12px; font-weight: 400; }
 
 /* ---- 拓扑 ---- */
 .topo {
   display: flex; align-items: stretch; justify-content: center; gap: 6px;
-  flex-wrap: nowrap;               /* 拓扑恒单行，宽度靠页面 min-width 保证 */
+  flex-wrap: nowrap;               /* 拓扑恒单行（不折行挤乱）；窄屏靠 .card 横向滚 */
+  width: max-content; margin: 0 auto;   /* 居中不再依赖父容器宽度（横向滚动时不会切左边缘） */
 }
 .node {
   background: #0d1117; border: 1px solid var(--bd); border-radius: 8px;
@@ -110,9 +125,9 @@ a.btn { text-decoration: none; display: inline-block; }
 .link-flow .link-unit { color: var(--mut); font-weight: 400; font-size: 11px; }
 .link-flow.active .arr { animation: arrpulse 1s infinite; }
 @keyframes arrpulse { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
-.link-label { font-size: 10px; color: var(--mut); white-space: nowrap; }
+.link-label { font-size: 11px; color: var(--mut); white-space: nowrap; }
 /* 链路段「按内容」拆行：标签弱化、数值用该类内容的颜色（与节点行、悬停说明一致） */
-.link-split { font-size: 10px; color: var(--mut); white-space: nowrap; }
+.link-split { font-size: 11px; color: var(--mut); white-space: nowrap; }
 .link-split .s-l2 b { color: var(--acc); }
 .link-split .s-id b { color: var(--id); }
 .link-split .s-found b { color: var(--found); }
@@ -163,4 +178,32 @@ tr.new { animation: rowin .4s; }
 }
 .id-stream { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--bd); }
 .id-ctl { margin-top: 10px; }
+
+/* ---- 窄屏（现场手机 / 平板）--------------------------------------------------
+   为什么要有这一档：这套 UI 是给**现场找人**用的 —— 手机/平板看定位、案件、台账是常见场景，
+   而以前 body 写死 `min-width: 1180px`，窄屏只能横向拖整页（实测 390px 手机上页面宽
+   1180px = 拖 3 屏）；控件普遍 28px 高、小于触屏可点尺寸，10~11px 的字在强光下也很难认。
+   断点 900px：这是“卡片内两列还放得下”的临界宽度（再窄就开始拆行难看）。
+   注意：内联 style 的 `min-width` 会赢过普通样式 —— 页面里的固定宽控件已改成 `.w-sm/.w-md/.w-lg`
+   （见上），新增控件别再写内联宽度。 */
+@media (max-width: 900px) {
+  .card { margin: 10px; padding: 10px 12px; }
+  header { padding: 8px 10px; gap: 6px; }
+  .brand { font-size: 16px; }
+  .brand .sub { display: none; }              /* 副标题在窄屏只占地方（标题已经说清了页面） */
+  /* 控件抬到可点尺寸（触屏通行下限 ~44px，这里 40px：既够点，又不至于把页面拉得很长） */
+  .btn, select, input:not([type="checkbox"]), .menu-list a { min-height: 40px; }
+  .btn { display: inline-flex; align-items: center; padding: 8px 12px; }
+  a.btn { display: inline-flex; }
+  .menu-list a { display: flex; align-items: center; padding: 10px 14px; }
+  /* 固定/最小宽的内联宽控件改在这里满宽（`.w-*` 的 width 被 max-width:100% 兑住） */
+  .w-md, .w-lg { width: 100%; }
+  /* 字号下限：10~11px 的标签/小字抬到 12px */
+  .link-label, .link-split, .node-row.small, .hint, .chip { font-size: 12px; }
+  /* 两列信息网格在窄屏改单列（不然每列 150px 都不到，数字/单位会拆行） */
+  .id-grid { grid-template-columns: 1fr; }
+  /* 长串（SN / base64 密钥 / URL）允许断行，不靠横向滚动 */
+  td, th, .mono, code, .id-row code { overflow-wrap: anywhere; }
+  table { table-layout: auto; }
+}
 

@@ -94,7 +94,7 @@ POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/�
 | `maps.py` | 野外包（本地 XYZ 瓦片目录）的服务端逻辑：`/api/maps` 列包 + `/maps/…` 瓦片解析（路径穿越的唯一防线）；`ui/static/maps/` **不入库** | `ui_server.py`、`test_mapjs.py` |
 | `ui/static/app.js` | 首页逻辑：拓扑/计数/报文流/告警渲染（**转义口径见下**） | `index.html` |
 | `ui/static/ui_i18n.js` | **文案字典**（zh/en，本项目自持一份，2026-09-12 从共享一份拆出） | orpah 各页（见 `test_i18n.py`） |
-| `ui/static/style.css` | 样式与配色变量（告警红 / 上行蓝 / ID 橙 / 发现灰，色弱校验过） | orpah 各页 |
+| `ui/static/style.css` | 样式与配色变量（告警红 / 上行蓝 / ID 橙 / 发现灰，色弱校验过）+ **窄屏档位（900px）**：谁的宽谁自己滚、控件 40px 可点、字号下限 12px | orpah 各页 |
 
 > ⚠ **模型参数（路径损耗 A/n、噪声）以服务端为准**：`motion.py` 是**唯一源** → `GET /api/config` →
 > `track`/`rssi`/`replay` 开页取默认值（输入框仍可手改）。页面 HTML 里的 `value=` 只是**离线兜底**；
@@ -280,7 +280,7 @@ python demo_l1.py --n 3        # 进程内建 AP+STA 模拟器 + Server/Router/C
 ### 方式 3：一键跑全部检查 + 出报告（推荐做回归时用）
 
 ```bash
-python run_checks.py            # 15 个离线套件（各模块自检 + 批量合规 + 抓包解析 + 时钟漂移 + 能量轴 + pos.js 内核 + 文案字典），约 2 秒
+python run_checks.py            # 24 个离线套件（各模块自检 + 批量合规 + 抓包解析 + 时钟漂移 + 能量轴 + pos.js 内核 + 文案字典 + UI 窄屏守卫），约 5 秒
 python run_checks.py --e2e      # 再加 5 个端到端 demo（L1/L2/L3/L3b/防 spoof），1-3 分钟
 ```
 - 报告写到 `checks_report.md`（含 git HEAD、每套件结果/耗时/关键输出、失败详情）。
@@ -359,7 +359,7 @@ orpah-over-halow/                      # 本项目（ORPAH 业务全链路；纯
 ├── demo_spoof.py       # 【验收】防 spoof 真·端到端（攻击注入空口，Server 侧断言）
 ├── demo_id.py          # 【验收】Orpah ID 22 用例（四级降级签名 + 篡改/重放/超窗/坏 CHECK/撤销）
 ├── demo_hw1.py         # 【验收·未真机验证】阶段二真机自检：代次/族、关联、跨空口 UDP、raw 0x88B5
-├── run_checks.py       # 【测试台】15 个离线套件一键跑 + 出报告（--e2e 再加 5 个 demo）
+├── run_checks.py       # 【测试台】24 个离线套件一键跑 + 出报告（--e2e 再加 6 个 demo）
 ├── test_*.py           # 【测试台】各模块自检：motion / keys / spoof / alerts / metrics / clock /
 │                       #   energy / tsdb_audit / server / levels / capture / posjs（node 跑原文）/ i18n
 ├── capture.py          # 【工具】pcap → ORPAH 报文解析 + 双源对照（真机抓包在网口侧；见文件头）
@@ -417,7 +417,7 @@ L2 报文类型：`ORPAH-REQ-CONNECT`{sn,mac?,hw?}、`ORPAH-ACCESS-INFO`{sn,trac
 6. 真机（阶段二，**需硬件**）：按 `docs/real-hw-stage2.md` 的五组清单上机；`demo_hw1.py`
    负责能自动判的部分（固件代次/族、关联状态、跨空口 UDP、raw `0x88B5` 透传）。
    **两者均未经真机验证**，烧录/上机由用户执行。
-7. **一键回归**：`python run_checks.py`（14 个离线套件，~2s）→ `checks_report.md`；
+7. **一键回归**：`python run_checks.py`（24 个离线套件，~5s）→ `checks_report.md`；
    加 `--e2e` 跑 5 个端到端 demo（**需先停 orpah-ui**，否则端口串扰；脚本会自己拒绝）。
    ⚠ 报告口径是全量的：离线单跑会把它覆盖成 9/9（e2e 行消失），详见「方式 3」。
 

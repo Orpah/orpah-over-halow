@@ -59,6 +59,7 @@ SUITES = [
     ("Router 下行路径（来源校验）", "test_router.py", []),
     ("下行真实性（F-14 B：签名/重放/时间窗）", "test_downlink.py", []),
     ("文案字典（zh/en 一致 + 页面引用无缺失）", "test_i18n.py", []),
+    ("UI 样式/窄屏守卫", "test_uicss.py", []),
 ]
 # 端到端 demo：会起模拟器/占端口，默认不跑
 E2E = [
