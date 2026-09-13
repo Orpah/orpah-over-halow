@@ -241,6 +241,24 @@ function renumber() {
   document.querySelectorAll("#anchorBody tr").forEach((tr, i) => { tr.children[0].textContent = i + 1; });
 }
 
+/* 默认测点（模拟模式）：**以服务端站位表为唯一源**（GET /api/stations）—— 开页取一次填进表格。
+   为什么不让页面自己写死一份：演示站位在 `ui_server.DEMO_STATIONS` 与这里各写一份时，
+   加/改站位页面不会跟着变，而且**不报错**（2026-09-13 实测：后台已 4 台，页面仍显示 3 台）。
+   `ANCHORS_FALLBACK` 只是**离线兜底**（服务端不可达时用）；它与服务端种子的一致性由
+   `test_motion.py` 的单源守卫锁住（同 A/n 那套做法）。 */
+const ANCHORS_FALLBACK = [[30, 0], [-15, 26], [-15, -26], [-20, 0]];
+async function loadAnchorDefaults() {
+  let list = ANCHORS_FALLBACK;
+  try {
+    const r = await (await fetch("/api/stations")).json();
+    if (r && r.ok && Array.isArray(r.stations) && r.stations.length) {
+      list = r.stations.map(s => [s.x, s.y]);
+    }
+  } catch (e) { /* 服务端不可达：用兜底列表 */ }
+  for (const [x, y] of list) addRow(x, y);
+  draw(); updateStat(null);
+}
+
 /* ---- 客户端移动 ---- */
 function moveClient() {
   const step = parseFloat($("step").value) || 3;
@@ -1060,13 +1078,13 @@ async function loadConfig() {
   } catch (e) { /* 服务端不可达：保留 HTML 兜底值 */ }
 }
 
-/* 默认：3 个测点 + 初始画面 */
-addRow(30, 0); addRow(-15, 26); addRow(-15, -26);
+/* 初始画面 */
 OrpahI18n.apply();
 buildTileOptions();      // 必须早于任何 ensureMap：它决定本语言的默认瓦片源
 refreshSnList();
 draw(); updateStat(null);
 loadConfig();            // A/n 默认值取自服务端标定（异步；填完会重画一帧）
+loadAnchorDefaults();    // 默认测点取自服务端站位表（单一源；异步；取不到用 ANCHORS_FALLBACK）
 </script>
 </body>
 </html>

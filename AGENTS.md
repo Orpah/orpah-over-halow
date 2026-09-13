@@ -242,6 +242,10 @@
   后起的那个 `router_up` 在涨、**`server_recv` 却恒为 0**（数据报被先起的收走）→
   它写不出任何观测（`routers.<sid>.<sn>` 全是旧数据）。要并存必须先把那几个常量改成另一套
   （临时脚本里改 `ui_server.CONSOLE_A/HOST_A/…/UDP_SRV` 再 `OrpahApp(...)` 起，见验证脚本的做法）。
+  - **页面默认值必须来自服务端单一源**：A/n ← `GET /api/config`；**默认测点 ← `GET /api/stations`**。
+    页面里只留一份**离线兜底**，且兜底与服务端种子的一致性由 `test_motion.py` 守卫锁住
+    （别在页面里再抄一份"当前演示场景" —— 2026-09-13 实测：后台已 4 台站位、页面仍显示 3 台，
+    而且**不报错**，只是少一台、定位看着还挺正常）。
 - **Orpah ID SN 硬规则（2026-09-10 用户定）**：
   ① CC = ISO 3166-1 alpha-2，**不套 Crockford 限制**（可含 I/L/O/U，正则 `[A-Z]{2}`）；
   ② **校验位只算 `ORG-UNIQUE`（不含 CC）**——`damm32.py` / `orpah_id.py` / `c/damm32.c`

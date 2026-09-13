@@ -217,6 +217,24 @@ for _page, (_ida, _idn) in PAGES.items():
        _va == motion.RSSI_A and _vn == motion.RSSI_N, f"A={_va} n={_vn}")
     ck(f"{_page} 开页取 /api/config（HTML 里的只是兜底）", '"/api/config"' in _txt)
 
+# ---- 默认测点也是「多份副本」的高危区 -------------------------------------
+# 演示站位在 `ui_server.DEMO_STATIONS` 与 `track.html` 的兜底列表各写一份 —— 2026-09-13 实测踩过：
+# 后台已加到 4 台，页面仍显示 3 台，而且**不报错**（只是少一台，定位看着还挺正常）。
+# 和 A/n 一样，这里把“两份副本必须一致”变成会红的断言。
+_uitxt = open(os.path.join(HERE, "ui_server.py"), encoding="utf-8").read()
+_trktxt = open(os.path.join(STATIC, "track.html"), encoding="utf-8").read()
+_mseed = re.search(r"DEMO_STATIONS = \((.*?)\)\n", _uitxt, re.S)
+_uipts = [(float(a), float(b)) for a, b in
+          re.findall(r'\(\s*"[^"]+",\s*([-\d.]+),\s*([-\d.]+)\)', _mseed.group(1))] \
+    if _mseed else []
+_mfb = re.search(r"ANCHORS_FALLBACK = \[(.*?)\];", _trktxt, re.S)
+_trkpts = [(float(a), float(b)) for a, b in
+           re.findall(r"\[\s*([-\d.]+),\s*([-\d.]+)\]", _mfb.group(1))] if _mfb else []
+ck("track.html 兜底测点与 ui_server.DEMO_STATIONS 逐点一致（改站位就得同步改兜底）",
+   _uipts and _uipts == _trkpts, f"ui={_uipts} page={_trkpts}")
+ck("track.html 开页取 /api/stations 当默认测点（兜底列表只是离线后备）",
+   "loadAnchorDefaults" in _trktxt and '"/api/stations"' in _trktxt)
+
 # ---- 真值轨迹采样（`/api/truth` 的逻辑，单一源在 motion.truth_samples）----------
 # 口径：地面真值**只有演示环境有**（真机没有）→ 这组只服务“演示里量定位误差”。
 _w = motion.Walk()
