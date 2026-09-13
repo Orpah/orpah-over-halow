@@ -119,16 +119,32 @@
 - **防 spoof（空口无认证）演示（2026-09-12，P1）**：前提是 ORPAH 空口**开放/无认证** ——
   任何人都能往空口里丢一条 ORPAH-ID-REPORT。防线顺序：**格式 → SN 校验位（Damm32/mod97）
   → 时间窗/nonce 去重 → 吊销表 → 设备公钥验签**。
-  - 攻击构造**只有一份**：`spoof.py`（13 种，含 1 条合法对照；含 2026-09-13 新增的
-    **能力降级** `cap_downgrade` = 改已签声明的 `cap.rtc`）——
-    `demo_spoof.py`（真链路端到端）、`test_spoof.py`（离线逐条）、页面（index 选类型注入）共用，
+  - 攻击构造**只有一份**：`spoof.py`（14 条用例 = 13 种攻击 + 1 条合法对照；含 2026-09-13 新增的
+    **能力降级** `cap_downgrade` = 改已签声明的 `cap.rtc`，以及**格式非法** `bad_format` = 改报文头 `typ`，
+    后者是为了让第一道防线（格式）也有用例——此前 13 条里没有一条会被它拦下）——
+    `demo_spoof.py`（真链路端到端）、`test_spoof.py`（离线逐条）、页面（index 选类型注入 / `attack.html` 面板）共用，
     否则“演示的”与“测的”会漂移。
-  - 页面入口：index 的 Orpah ID 卡片 →「注入伪造上报」/「跑全部攻击」（走真空口链路，落 `id_reject`）。
+  - 页面入口：index 的 Orpah ID 卡片 →「注入伪造上报」/「跑全部攻击」（走真空口链路，落 `id_reject`）；
+    或 **`attack.html` 攻击流量独立面板**（见下条）。
+  - **攻击流量独立面板（`attack.html` + `attack.js`，2026-09-13）**：以前攻击结果只能混在首页的
+    「签名上报流 + 事件历史」里看（正常周期上报与攻击报文排在一起，读者要自己猜哪条是哪条）。
+    现在服务端按 **nonce 认领**攻击报文（`ui_server._spoof_claim` / `_spoof_track`，`/api/status.spoof`），
+    攻击流量是**一条独立的流**：`id_reports` 照旧混排，`spoof.recent` 只装攻击。
+    - **三种结果必须分开数**：与期望一致 / 与期望不一致 / **未等到结果**（`state=lost`，`ok=null`）。
+      最后一种不是“被拒”也不是“通过” —— 攻击报文同样受 §5.8 限频约束，而限频在验签之前，
+      注入太密时它**根本走不到验签**（实测正是如此），写成“被拒”会让人以为防线抓住了。
+    - **「是哪道防线拦的」只有一份映射**：`spoof.DEFENSES` / `defense_of()`（页面按错误码查它，
+      没登记过的码显示「未归类」，不瞎猜）。顺序按 `verify_report` 的**实际评估顺序**（代码里
+      SN 校验位在 nonce 去重**之后**，别照文档那句概述写）。`test_attack.py` 会从 `orpah_id.py`
+      抽出所有 `_reject("<码>")` 逐个验证映射完备 —— 加新防线忘了登记就当场发现。
+    - **页面不许写第二份**：`attack.js` 里出现攻击类型名或拒绝码字面量会被 `test_attack.py` 拦下
+      （清单/说明/防线名全部从 `/api/status.spoof_kinds`、`.spoof.defenses` 取）。
   - **已知边界（必须如实展示，不要包装成“防住了”）**：`xport`（路由器侧观测）**不在签名预像里**，
     篡改它验签照样通过；而定位数据恰恰来自路由器侧测量 → **能冒充路由器就能伪造定位**。
     已记 ROADMAP 开放问题，动手补前先与用户对齐。
   - ⚠ `spoof.CASES` 里 `revoked` **会改密钥库状态，必须放最后**；且 `unrevoke` 会把各代转成
-    retired（之后验签就 `unknown_device`）—— 页面因此把 `revoked` 排除在 `UI_KINDS` 之外。
+    retired（之后验签就 `unknown_device`）—— 页面因此把 `revoked` 排除在 `UI_KINDS` 之外
+    （面板上「吊销表」那道防线因此显示 0 条，并标注「本页无对应用例」，不假装跑过）。
 - **等待一律用 `waiting.py`（2026-09-12，review 反馈起）**：
   - **禁止** `for _ in range(N): time.sleep(0.05)` 这种「猜次数」等待 —— 机器快慢/负载一变
     就误判（等太短=假失败，等太久=白等），且循环次数与语义无关，读者无法判断够不够。
@@ -362,6 +378,7 @@
   ④ 工具页（主页头部入口）：`track.html`（定位与轨迹：多路由器持续测 RSSI → 实时定位 +
      轨迹绘制，纯前端模拟）、`rssi.html`（RSSI→距离→2/3/多点定位，canvas 可视化）、
      `sig.html`（ES256/HS256/none 签名验签，后端 `/api/sig`）、
+     `attack.html`（防 spoof 攻击流量独立面板，见 §0「防 spoof」条）、
      `checksum.html`（SN 校验码，Damm32/Luhn32/Mod97 三 tab）、
      `damm32.html`（Damm32 构造/验证，计算器在最顶端）。
      checksum/damm32 的 CC 用下拉框（`<datalist>`）+ 支持直接输入 + 提示，CC 输入框回车

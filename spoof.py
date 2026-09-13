@@ -13,9 +13,11 @@
     ④ 吊销表                            ← 已作废的钥匙不能再验过
     ⑤ **设备公钥验签**（最后一道，也是唯一能证明"这条报文确实出自该设备"的）← 多代轮换逐代试签
 
-**为什么要单独一个模块**：`demo_spoof.py`（自包含端到端脚本）与
-`ui_server.py`（`/api/ctl action=spoof` 真的把攻击报文注入空口，页面看 `id_reject`）
+**为什么要单独一个模块**：`demo_spoof.py`（自包含端到端脚本）、`ui_server.py`
+（`/api/ctl action=spoof` 真的把攻击报文注入空口）与 **攻击流量面板**（`ui/static/attack.html`）
 必须用**同一份攻击构造**，否则"演示的"和"测的"会漂移。
+同理，「**是哪一道防线拦的**」也只有一份映射：本模块的 `DEFENSES` / `defense_of()`
+（页面按错误码查它；没映射过的码显示成「未归类」，不瞎猜）。
 
 **已知边界（演示会如实展示）**：`xport`（路由器侧附加的观测，`attach_xport`）**不在签名预像里** ——
 它由路由器在转发时追加，签名只覆盖设备自己的声明（`payload.seen_routers`）。
@@ -30,70 +32,169 @@ import orpah_id as oid
 SEEN_ROUTERS = [{"bssid": "AA:BB:CC:DD:EE:FF", "ssid": "ORPAHID_ZONE_A",
                  "rssi": -42}]
 
-# kind → (中文名, 英文名, 期望结果, 说明)
+# kind → (中文名, 英文名, 期望结果, (中文说明, 英文说明))
 # 期望结果 = None 表示"应被接受"，否则为 verify_report 的拒绝码之一
+#
+# 说明文字是 (zh, en) 两套：`case_info()` 仍只回中文那一份（历史调用方不变），
+# 页面用 `case_note(kind, lang)` 按当前语言取。**说明里不许写 Markdown**（页面上会把
+# `**` 原样显示成星号，见 AGENTS §0「文案不得写 Markdown」）——本模块的文案会直接上页面。
 CASES = [
     ("legit", "对照组：合法签名上报", "control: properly signed report",
      None,
-     "设备用自己那把钥匙签，服务器验签通过 —— 没有它，下面的'拒绝'说明不了任何问题"),
+     ("设备用自己那把钥匙签，服务器验签通过 —— 没有它，下面的「拒绝」说明不了任何问题",
+      "The device signs with its own key and the server verifies it — without this row the "
+      "rejections below would prove nothing")),
+    # 补上第一道防线的用例（2026-09-13）：此前 13 种里**没有一条**会被「格式」拦下，
+    # 攻击流量面板的防线分布里那条永远是 0 → 看不出第一道防线是活的。
+    ("bad_format", "格式非法（改报文头 typ）", "malformed header (bad typ)",
+     "bad_typ",
+     ("把报文头的 typ 改成别的值（不再是 orpah-id-report）—— 第一道防线就拦下，连密钥都不查",
+      "The header typ is changed to something else (no longer orpah-id-report) — the first "
+      "line blocks it before any key is looked up")),
     ("sig_foreign", "伪造签名（用别人的钥匙）", "forged signature (foreign key)",
      "signature_invalid",
-     "攻击者自己生成一对钥匙，签一条**声称是被冒充设备 SN** 的报文 —— "
-     "服务器拿被冒充设备的公钥验，过不了"),
+     ("攻击者自己生成一对钥匙，签一条声称是被冒充设备 SN 的报文 —— "
+      "服务器拿被冒充设备的公钥验，过不了",
+      "The attacker generates its own key pair and signs a report claiming the impersonated "
+      "device SN — the server verifies with that device's public key, so it fails")),
     ("ts_tamper", "篡改时间戳", "tampered timestamp",
      "signature_invalid",
-     "把 ts 挪到时间窗**内**（仍在 300 s 窗口里）→ 说明拦住它的不是时间窗，而是签名"),
+     ("把 ts 挪到时间窗内（仍在 300 s 窗口里）→ 说明拦住它的不是时间窗，而是签名",
+      "ts is moved but stays inside the 300 s window → what blocks it is the signature, "
+      "not the time window")),
     ("obs_tamper", "篡改设备自报观测", "tampered device-reported observation",
      "signature_invalid",
-     "改 payload.seen_routers（设备声称的 RSSI）—— 攻击者想让服务器以为它在别处"),
+     ("改 payload.seen_routers（设备声称的 RSSI）—— 想让服务器以为它在别处",
+      "payload.seen_routers (the device-claimed RSSI) is changed — an attempt to make the "
+      "server think it is somewhere else")),
     ("level_downgrade", "降级攻击（改 hdr）", "header downgrade",
      "signature_invalid",
-     "把 hdr 改成 level=1/alg=HS256（想骗服务器用弱算法）—— hdr 在预像里，签名随即失效"),
+     ("把 hdr 改成 level=1/alg=HS256（想骗服务器用弱算法）—— hdr 在预像里，签名随即失效",
+      "hdr is changed to level=1/alg=HS256 to get a weaker algorithm accepted — hdr is part "
+      "of the preimage, so the signature breaks")),
     ("cap_downgrade", "能力降级（改 payload.cap）", "capability downgrade",
      "signature_invalid",
-     "设备已签声明「有 RTC」，攻击者把 payload.cap.rtc 改成 false —— 想让服务端把\n"
-     "“有 RTC 设备的异常时钟”当成“无 RTC 的正常设备”而不告警。cap 在 JCS 预像里 → 签名失效"),
+     ("设备已签声明「有 RTC」，把 payload.cap.rtc 改成 false —— 想让服务端把「有 RTC 设备的"
+      "异常时钟」当成「无 RTC 的正常设备」而不告警。cap 在 JCS 预像里 → 签名失效",
+      "The device had signed \"has RTC\"; cap.rtc is flipped to false so that an abnormal "
+      "clock reads as \"no RTC, normal\" and never alerts. cap is inside the JCS preimage → "
+      "the signature breaks")),
     ("alg_none", "免签冒充（alg=none）", "alg=none impersonation",
      "none_requires_level3",
-     "声明 alg=none 且想去掉签名冒充 level0 —— 只允许 level3（仅覆盖发现，不做人员确认）"),
+     ("声明 alg=none 且想去掉签名冒充 level0 —— 只允许 level3（仅覆盖发现，不做人员确认）",
+      "Claims alg=none with the signature dropped, to impersonate level 0 — none is only "
+      "allowed at level 3 (coverage only, no identity confirmation)")),
     ("bad_check", "SN 校验位错", "bad SN check digit",
      "bad_check",
-     "拿 valid 格式但**校验位错**的 SN（Damm32/mod97）—— 不查库就能挡掉"),
+     ("拿格式合法但校验位错的 SN（Damm32/mod97）—— 不查库就能挡掉",
+      "An SN whose format is valid but whose check digit is wrong (Damm32/mod97) — blocked "
+      "without touching the key store")),
     ("unknown_sn", "未登记的 SN", "unregistered SN",
      "unknown_device",
-     "格式与校验位都合法，但密钥库里没有这台设备"),
+     ("格式与校验位都合法，但密钥库里没有这台设备",
+      "Format and check digit are both valid, but the key store has no such device")),
     ("replay", "重放已用过的报文", "replay of a used report",
      "replay_detected",
-     "原样重发一条**已经通过过**的合法报文 → nonce 去重拦下"),
-    ("stale", "陈旧报文本（超窗）", "stale report (outside window)",
+     ("原样重发一条已经通过过的合法报文 → nonce 去重拦下",
+      "A previously accepted valid report is resent unchanged → nonce dedup blocks it")),
+    ("stale", "陈旧报文（超窗）", "stale report (outside window)",
      "timestamp_out_of_window",
-     "合法签名但 ts 超窗（演示 1 小时前）"),
+     ("合法签名但 ts 超窗（演示 1 小时前）",
+      "Properly signed, but ts is outside the window (one hour old in this demo)")),
     ("xport_tamper", "篡改路由器侧观测（已知边界）", "tampered router-side xport (known gap)",
      None,
-     "xport 由路由器追加、**不进签名预像** → 验签通过。如实展示：防 spoof 只保护设备声明，"
-     "路由器侧测量需要路由器身份来保护（见 ROADMAP 开放问题）"),
+     ("xport 由路由器追加、不进签名预像 → 验签照样通过。如实展示：本项只保护设备声明，"
+      "路由器侧测量要靠多观测一致性来判（见 SPEC §8 原则 P-1）",
+      "xport is appended by the router and is not part of the signature preimage → "
+      "verification still passes. Honest boundary: this defence covers device claims only; "
+      "router-side measurements are judged by multi-observation consensus (SPEC §8 P-1)")),
     # ⚠ 此用例会改**密钥库状态**（revoke）：用**活密钥库**的调用方（`demo_spoof.py` 的 server、
     #   页面 /api/ctl）必须把它排在最后 —— `unrevoke` 会把各代置成 retired，
     #   而 retired 不参与验签 → 之后的用例会集体变成 `unknown_device`。
     #   离线自检 `spoof.run()` 对该用例用**临时库**，与顺序无关（见该函数说明）。
     ("revoked", "已吊销设备", "revoked device",
      "revoked",
-     "被撤销的 SN 用**仍然正确**的签名上报 → 吊销表拦下（不靠签名）"),
+     ("被撤销的 SN 用仍然正确的签名上报 → 吊销表拦下（不靠签名）",
+      "A revoked SN reports with a signature that is still correct → the revocation list "
+      "blocks it (not the signature)")),
 ]
 
 KINDS = [c[0] for c in CASES]
 
-# UI（网页下拉）可用子集：排除会改服务端密钥库状态的用例 ——
+# UI（网页）可用子集：排除会改服务端密钥库状态的用例 ——
 # 网页用的是**活的**密钥库，跑一次 revoked 会把在跑的设备搞成验不过。
 UI_KINDS = [k for k in KINDS if k != "revoked"]
 
+# ---------------------------------------------------------------------------
+# 防线（**单一源**）：错误码 → 是哪一道防线拦的
+# ---------------------------------------------------------------------------
+# 顺序 = `orpah_id.verify_report` 的**实际评估顺序**（不是文档里那句概述的顺序 ——
+# 代码里 SN 校验位排在 nonce 去重**之后**，这里以代码为准，免得演示与实现说两套）。
+# 页面/脚本/文档都从这里取，别再各写一份（`test_attack.py` 会拦漏映射的错误码）。
+DEFENSES = [
+    ("format", "格式（typ/ver/alg/level/ts/sn/nonce）",
+     "format (typ/ver/alg/level/ts/sn/nonce)"),
+    ("level", "级别策略（alg=none 只允许 L3）",
+     "level policy (alg=none is L3 only)"),
+    ("time", "时间窗（±300 s）", "time window (±300 s)"),
+    ("nonce", "nonce 去重（重放）", "nonce dedup (replay)"),
+    ("check", "SN 校验位（Damm32/mod97）", "SN check digit (Damm32/mod97)"),
+    ("revoke", "吊销表", "revocation list"),
+    ("keys", "密钥库（未登记 / 无可用钥 / 缺签名）",
+     "key store (unknown device / no usable key / missing sig)"),
+    ("sig", "设备公钥验签", "device public-key signature"),
+    ("accept", "未被拦（接受）", "not blocked (accepted)"),
+]
+LINE_OF = {
+    "bad_format": "format", "bad_typ": "format", "bad_ver": "format",
+    "bad_alg": "format", "bad_level": "format", "bad_ts": "format",
+    "bad_sn": "format", "bad_nonce": "format",
+    "none_requires_level3": "level",
+    "timestamp_out_of_window": "time",
+    "replay_detected": "nonce",
+    "bad_check": "check",
+    "revoked": "revoke",
+    "unknown_device": "keys", "missing_sig": "keys", "no_hmac_key": "keys",
+    "signature_invalid": "sig",
+}
+LINE_IDS = [d[0] for d in DEFENSES]
+
+
+def defense_of(err):
+    """拒绝码 → 防线 id；None（通过）→ "accept"；没映射过的码 → "other"。
+
+    没映射时不抛异常也不瞎猜（页面显示成「未归类」比显示成某道防线更诚实）。
+    """
+    if err is None:
+        return "accept"
+    return LINE_OF.get(err, "other")
+
+
+def defense_info(line_id):
+    """防线 id → (zh, en)；未知 → ("未归类", "unclassified")。"""
+    for lid, zh, en in DEFENSES:
+        if lid == line_id:
+            return zh, en
+    return "未归类", "unclassified"
+
 
 def case_info(kind):
-    """→ (zh, en, expect, note)；未知 kind 回落到 legit。"""
+    """→ (zh, en, expect, note)；未知 kind 回落到 legit。
+
+    `note` 是**中文**说明（历史调用方用这个签名）；要按语言取用 `case_note()`。
+    """
     for k, zh, en, exp, note in CASES:
         if k == kind:
-            return zh, en, exp, note
-    return CASES[0][1:]
+            return zh, en, exp, note[0]
+    return CASES[0][1], CASES[0][2], CASES[0][3], CASES[0][4][0]
+
+
+def case_note(kind, lang="zh"):
+    """→ 该用例的说明文字（lang = "zh"/"en"，其它值回落到 zh）。"""
+    for k, _zh, _en, _exp, note in CASES:
+        if k == kind:
+            return note[1] if lang == "en" else note[0]
+    return CASES[0][4][1] if lang == "en" else CASES[0][4][0]
 
 
 def _legit(dev, now, ts=None, nonce=None):
@@ -115,6 +216,14 @@ def build_case(kind, dev, now, attacker=None, used_nonce=None):
 
     if kind == "legit":
         return _legit(dev, now), expect, note
+
+    if kind == "bad_format":
+        # 报文头 typ 不是 orpah-id-report → 第一道防线（格式）拦下。
+        # 注意：**外层信封**仍是合法的 ORPAH-ID-REPORT（`orpah_proto.build_id_report`），
+        # 所以链路照常把它送到 server 的验签入口 —— 被拒的是**里面那条已签报文**的格式。
+        r = _legit(dev, now)
+        r["hdr"]["typ"] = "orpah-id-report-x"
+        return r, expect, note
 
     if kind == "sig_foreign":
         atk = attacker or oid.Device(cc="CN", org="WH01")

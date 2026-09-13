@@ -46,7 +46,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | L3c 发现走失上报 `ORPAH-FOUND` | `router._announce_found` | `demo_l3.py` + 首页「发现记录」 |
 | Orpah ID：码号/CHECK/签名/防重放/密钥多代轮换吊销 | `orpah_id.py` / `keystore.py` | `demo_id.py`、`test_keys.py` |
 | 降级策略（§8）：按环节坏在哪自动选级 L0→L3；L2 告警、L3 只做覆盖发现（不当人员出现） | `orpah_id.pick_level()` / `counts_as_presence()` + `alerts.id_degraded` | `test_levels.py` + 首页「降级演示」下拉 |
-| 无认证空口防 spoof（13 种攻击端到端） | `spoof.py` | `demo_spoof.py`、`test_spoof.py` |
+| 无认证空口防 spoof（14 条用例 = 13 种攻击 + 1 条合法对照，端到端） | `spoof.py`（含防线映射单一源） | `demo_spoof.py`、`test_spoof.py`、`test_attack.py` |
 | 设备清册 / 走失案件（立案→发现→找回·撤销→结案，含接手人） | `registry.py` / `cases.py` | 页面 + `test_server.py` |
 | 告警（长未上报 / 案件超时 / 处置超时 / 验签失败率 / 降级上报 / 设备时钟 / **能力声明不一致**） | `alerts.py` | `test_alerts.py`、`test_levels.py` |
 | 指标面板（验签失败率·算法分布 / 平均 RSSI / 处置时长） | `metrics.py` | `test_metrics.py` |
@@ -70,6 +70,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | `rssi.html` | 路径损耗教学计算器（2/3/多点定位） | `/api/config` | 无状态 |
 | `replay.html` 回放 | 时间窗回放、逐帧定位、平滑、有效时段分色、事件时间线、**报文流时间轴（序号缺口/回退/帧间隔）**、轨迹导出 GPX/GeoJSON/**CSV**（含**真值对照**）、**误差 CDF（仅模拟环境）** | `/api/replay`、`/api/stations`、`/api/registry`、`/api/config`、`/api/truth` | **只读** IoTDB |
 | `metrics.html` 指标面板 | 四项指标 + 各案件处置时长 | `/api/metrics`、`/api/status` | 只读（IoTDB + SQLite） |
+| `attack.html` 攻击流量 | 防 spoof **独立面板**：13 条用例的注入与裁决（期望 vs 实际 vs 未等到结果）+ 各道防线拦下条数 + 只装攻击报文的流量流 | `/api/status`（`spoof_kinds`/`spoof`）、`/api/ctl`（`spoof`/`spoof_reset`） | 计数只在内存（**重启归零**）；裁决落 IoTDB 事件（`id_report`/`id_reject`） |
 | `keys.html` 密钥管理 | 生成→分发→轮换→吊销→退役（多代并存） | `/api/keys` | SQLite `keys`/`key_revocations` + IoTDB 审计 |
 | `sig.html` 签名工具 | ES256/HS256 签名与验签演示 | `/api/sig` | 无状态（临时密钥对） |
 | `checksum.html` / `damm32.html` | SN 校验位算法（Mod97/Luhn32/Damm32、拟群表、穷举） | `/api/checksum` | 无状态（算法只调 `damm32.py`/`luhn32.py`/`mod97.py`） |
@@ -109,7 +110,7 @@ POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/�
 | 8 | 回放 | 选 SN + 时间窗（快捷 `30` 分钟）→ `▶ 播放` | 轨迹/距离环/椭圆逐帧推进；进度条 **绿(≥2 台可定位)/橙(仅 1 台)/灰(无观测)**、`跳过无效段`；**报文流时间轴**（点行跳该帧）；`导出轨迹` GPX/GeoJSON/CSV（含 **对照：真值+原始+平滑**，缺口断开成段）；**误差 CDF**（仅模拟环境） |
 | 9 | 指标面板 | 打开（窗口 15 分钟–24 小时 + SN） | 验签失败率与算法分布、平均 RSSI、各案件处置时长（时长不可用会标 `invalid`，不给负数） |
 | 10 | 首页 | `暂停上报` 后等一会儿 | 「告警」卡出现「设备 X 无上报 · 持续 …」+ 顶部 ⚠ 计数（阈值见 `alerts.py` 的 `ORPAH_ALERT_*` 环境变量） |
-| 11 | 首页 | `注入伪造上报` / `跑全部攻击`（Orpah ID 卡） | 「期望 X · 实际 Y」对照（`signature_invalid` / `replay_detected` / `unknown_device`…），验签失败率随之上升并触发告警 |
+| 11 | 首页 / 攻击流量 | `注入伪造上报` / `跑全部攻击`（Orpah ID 卡），或打开 **`attack.html` 独立面板** | 「期望 X · 实际 Y」对照（`signature_invalid` / `replay_detected` / `unknown_device`…），验签失败率随之上升并触发告警；面板上还能看**每条被哪道防线拦下**、各道防线拦了多少条，以及**只装攻击报文**的流量流（正常周期上报不在里面） |
 
 **自检（黄金样本一键）**：`python run_checks.py` 会把上面的算法/协议断言全跑一遍 ——
 含黄金样本 SN（`damm32=B` / `luhn32=E` / `mod97=21`）、SN 边界 28 条、报文/以太网帧边界、
@@ -294,7 +295,7 @@ orpah-over-halow/                      # 本项目（ORPAH 业务全链路；纯
 ├── damm32.py           # 【身份】SN 校验位算法**单一源**（与 luhn32.py / mod97.py 同；前后端都调它）
 ├── luhn32.py           # 【身份】同上（Luhn mod 32）
 ├── mod97.py            # 【身份】同上（Mod 97 两位）
-├── spoof.py            # 【安全】攻击构造**单一源**（13 种 + 合法对照），脚本与页面共用
+├── spoof.py            # 【安全】攻击构造**单一源**（13 种攻击 + 合法对照 = 14 条用例）
 ├── registry.py         # 【业务】人员↔设备台账（SQLite persons/devices，写穿透 + 首启播种）
 ├── cases.py            # 【业务】案件状态机（立案→发现→找回/撤销→结案；handler 与 status 正交）
 ├── alerts.py           # 【业务】告警规则（无存储、按快照重算；阈值走 ORPAH_ALERT_* 环境变量）

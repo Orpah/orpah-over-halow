@@ -108,7 +108,8 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 | `id_revoked` | 当前设备是否已吊销（按钮文案随之切换） |
 | `id_cap_rtc` | 当前设备**声明的有无 RTC**：`true`=有 / `false`=无 / `null`=未声明（三态，页面下拉回显） |
 | `id_ts_broken` | 演示开关：设备自报 `ts` 一律置 0（“没有可用时钟”，页面复选框回显） |
-| **`spoof_kinds`** | **防 spoof 演示的攻击清单** `[{kind, zh, en, expect}]`（来自 `spoof.UI_KINDS`，脚本/页面同一份）。页面按当前语言取 `zh`/`en` 生成下拉，`expect` 用于「期望 vs 实际」对比——**后端不返回本地化文案，只给两种语言让页面挑**，避免中英混排 |
+| **`spoof_kinds`** | **防 spoof 演示的攻击清单** `[{kind, zh, en, expect, line, note_zh, note_en}]`（来自 `spoof.UI_KINDS`，脚本/页面/文档同一份）。页面按当前语言取 `zh`/`en` 生成下拉与清单表，`expect` 用于「期望 vs 实际」对比，`line` = 它**期望**被哪道防线拦（`spoof.DEFENSES` 的 id，`None` 期望 → `accept`）——**后端不返回本地化文案，只给两种语言让页面挑**，避免中英混排 |
+| **`spoof`** | **攻击流量面板（`attack.html`）状态**，2026-09-13：`{injected, lost, wait, waiting[], results{}, recent[], defenses[]}`。`results` = **每种用例最近一次结果**（`{kind, nonce, t, epoch, expect, got, state, ok, line, sn, alg, level, trust}`），`state ∈ accepted/blocked/lost`，**`lost`（没等到结果）时 `ok=null`**（不假装判定过）。**只装攻击报文**：与 `id_reports`（正常上报 + 攻击混排）**分开**，靠 **nonce 认领**（注入时记下、验签回来时对上）—— 正常周期上报永远进不了这张表（实测：`id_report_total` 继续涨，`spoof.injected` 与 `recent` 不动）。`defenses` 随视图下发，页面**不写死**防线清单 |
 | **`ratelimit`** | **限频（§5.8）状态 —— Server 侧**：`{on, params:{sn_rate,sn_burst,router_rate,router_burst,max_keys}, allowed, dropped:{sn,router,total}, sn_table, router_table, top_sn, recent[≤5], since}`。**参数以服务端为单一源**（页面不写死）；`recent` 只 5 条、**不含全表**（桶表可能几千 key，不该每秒重传）|
 | **`ratelimit_rtr`** | **限频状态 —— Router 侧**（§5.8 的行 1/2）：同 `ratelimit` 的形状（`params.sn_*` = 转发按 SN、`params.router_*` = REQ-CONNECT 按源 MAC），另加 `dropped_total` 与 `recent`。**必须与 `ratelimit` 分开报**：两侧参数不同（Router 侧更宽）、丢的后果也不同（砍带宽 vs 砍 CPU），合成一个数就说不清“报文死在哪一段”—— 而且 **Server 侧计数里不含 Router 丢掉的报文** |
 | **`router_down_rejected`** | **被下行来源校验丢掉的下行报文数**（A 方案，2026-09-13）：下行只接受来自 Server 源地址（IP+端口）的报文，别的在**解析之前**就丢。非 0 意味着“有东西不是在从 Server 发包给 Router”—— 页面 Router 行有显示与 tooltip；**它只挡来源，不等于真实性**（同源伪造仍能过，真解要下行带 HMAC/签名，见 SPEC §8 威胁 4 / F-14）|
@@ -198,11 +199,20 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 - 服务端用 `spoof.build_case()` 造一条攻击报文，**经既有空口链路注入**
   （client→STA→空口→AP→Router→UDP→Server），不是离线自演 —— 验签结果由 server 回
   `_on_id_report` → `id_demo`/`id_reports`/`id_reject` 事件/签名失败率告警都能看到。
-- 返回 `{ok:true, kind, zh, en, expect, note}`；`kind` 非法 → `{ok:false, err:"bad_kind", kinds:[...]}`。
+- 返回 `{ok:true, kind, zh, en, nonce, sn, expect, note, note_en}`；`kind` 非法 → `{ok:false, err:"bad_kind", kinds:[...]}`。
+- **`nonce` 是攻击流量面板的认领凭据**（见下面 `spoof_reset` 与 `/api/status.spoof`）：注入时服务端记下它，
+  验签结果回来时按它认领 —— 所以响应里必须带出来（页面靠它等“这一条”的结果，不靠顺序猜）。
 - `kind` 取自 `spoof.UI_KINDS`（**排除 `revoked`**：页面用的是活密钥库，跑一次会把在跑的设备搞成验不过；
   撤销场景用现有的 `revoke`/`unrevoke` 按钮演示）。
 - `replay` 用**最近一条上报的 nonce**（一定已被 server 记过）→ 必被 nonce 去重拦下。
-- 攻击清单与「是哪道防线拦下的」见 `ROADMAP.md` §四；端到端脚本 `demo_spoof.py`、自检 `test_spoof.py`。
+- 攻击清单与「是哪道防线拦下的」见 `ROADMAP.md` §四；端到端脚本 `demo_spoof.py`、自检 `test_spoof.py`
+  与 `test_attack.py`（面板认领逻辑 + 单一源 + 页面守卫）。
+
+**新增 `spoof_reset`（攻击流量面板清空，2026-09-13）**：`{action:"spoof_reset"}`
+
+- 清空面板上的计数与结果（`injected`/`lost`/`results`/`recent`/等待队列），返回 `{ok:true}`。
+- **只清“面板上的数”，不清“防线本身”**：密钥库、限频桶、nonce 缓存一律不动 —— 与 `rl_reset` 同一取舍，
+  否则“清一下再跑”就等于把演示变成假的（前一批的非 nonce 仍被记得、桶也没回满）。
 
 **新增 `flood` / `rl_reset`（限频演示，2026-09-13，§5.8）**：
 

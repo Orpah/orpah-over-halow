@@ -186,6 +186,15 @@ class OrpahApp:
         self.id_report_total = 0
         self._last_id_report = None        # 最近一条已签上报（供“重放”演示）
         self.id_attacker = None            # 防 spoof 演示：攻击者设备（自造钥匙，未登记）
+        # ---- 攻击流量面板（2026-09-13）：攻击报文与**正常**签名上报流分开记 ----
+        # 为什么要分开：`id_reports` 是两者混在一起的，旧做法只能让页面从公用的签名上报流里
+        # 「猜」哪条是攻击（ROADMAP §四「攻击流量的 UI 独立面板」未做项的由来）。
+        # 认领靠 **nonce**：注入时记下 nonce → 验签结果回来时对上，就是这一条。
+        self.spoof_pending = {}            # nonce → {"kind","t"(epoch),"expect","sn"}
+        self.spoof_results = {}            # kind → 最近一次结果行（刷新页面不丢）
+        self.spoof_events = deque(maxlen=60)   # 攻击流量流（最新在前）
+        self.spoof_injected = 0            # 累计注入条数（页面的分母）
+        self.spoof_lost = 0                # 注入了但没等到结果的条数（见 _spoof_sweep）
         # ---- 限频（§5.8，2026-09-13）：与 server 共用同一实例（页面要读它的计数） ----
         self.rl = rl_mod.RateLimiter.from_env()
         self.rl_events = []                # 最近被丢弃的（最新在前，供卡片展示）
@@ -238,6 +247,11 @@ class OrpahApp:
                      ("路由器B", -15.0, 26.0),
                      ("路由器C", -15.0, -26.0),
                      ("路由器D", -20.0, 0.0))
+
+    # 攻击流量面板：注入后等多久算「没等到结果」（秒）。
+    # 这条链路上一条报文往返是毫秒级，本机上 15 s 足够宽松；超了就说明它根本没走到验签
+    # （最可能是被 §5.8 限频挡在验签之前）→ 面板照实标「未等到结果」，不当成「被拒」。
+    SPOOF_WAIT = 15.0
 
     def _ensure_demo_stations(self):
         """确保演示站位都在（**幂等，且不覆盖用户改动**）。
@@ -602,6 +616,7 @@ class OrpahApp:
 
     def _id_tick(self):
         """周期生成真实签名的 orpah-id-report 并经既有链路上行（Server 验签）。"""
+        self._spoof_sweep()      # 顺手把「注入后一直没等到结果」的攻击条目标出来
         try:
             self._send_id_report()
         except Exception as e:  # 无 cryptography 时退化为错误展示
@@ -651,6 +666,9 @@ class OrpahApp:
         走的就是真实链路（client→STA→AP→router→server），验签结果由 server 回
         `_on_id_report` → 页面/`id_reject` 事件都能看到，不是“离线自说自话”。
         攻击构造与 `demo_spoof.py` 共用 `spoof.py`，两边不会漂移。
+
+        返回值里带 `nonce`：**攻击流量面板**靠它把「注入的这一条」与「回来的那条验签结果」
+        对上（`id_reports` 里正常上报与攻击是混着排队的，不能靠顺序认）。
         """
         if kind not in spoof.UI_KINDS:
             return False, {"err": "bad_kind", "kinds": spoof.UI_KINDS}
@@ -667,10 +685,115 @@ class OrpahApp:
                 attacker=self.id_attacker, used_nonce=used_nonce)
         except Exception as e:
             return False, {"err": str(e)}
+        nonce = (report.get("payload") or {}).get("nonce") or ""
+        sn = (report.get("payload") or {}).get("sn") or ""
+        self._spoof_track(nonce, kind, expect, sn)
+        self.spoof_injected += 1
         self._inject_id(report)
         zh, en, _, _ = spoof.case_info(kind)
-        return True, {"kind": kind, "zh": zh, "en": en,
-                      "expect": expect, "note": note}
+        return True, {"kind": kind, "zh": zh, "en": en, "nonce": nonce, "sn": sn,
+                      "expect": expect, "note": note,
+                      "note_en": spoof.case_note(kind, "en")}
+
+    def _spoof_track(self, nonce, kind, expect, sn=""):
+        """记下「这条攻击报文的 nonce」，等它的验签结果回来认领（见 `_spoof_claim`）。
+
+        上限 64 条：键是攻击者可选的 nonce，只增不减会攒着；丢掉最老的（那条本来也
+        等不到结果，`_spoof_sweep` 已把它记进 `spoof_lost`）。
+        """
+        self.spoof_pending[nonce] = {"kind": kind, "t": time.time(),
+                                     "expect": expect, "sn": sn}
+        while len(self.spoof_pending) > 64:
+            self.spoof_pending.pop(next(iter(self.spoof_pending)))
+
+    def _spoof_row(self, kind, nonce, epoch, expect, state, rec=None, sn=""):
+        """构造一行**攻击流量**记录（面板与 `spoof_events` 共用同一种形状）。
+
+        state：`blocked`（被某道防线拒）/ `accepted`（没被拦）/ `lost`（没等到结果）。
+        `ok` = 实际裁决与期望是否一致；没等到结果时**不为真**（`ok=None`，如实留空）。
+        """
+        got = None if state == "accepted" else (rec or {}).get("error")
+        if state == "lost":
+            got = None
+        return {
+            "kind": kind, "nonce": nonce,
+            "t": time.strftime("%H:%M:%S", time.localtime(epoch)),
+            "epoch": int(epoch), "expect": expect, "got": got, "state": state,
+            "ok": None if state == "lost" else (got == expect),
+            "line": "wait" if state == "lost" else spoof.defense_of(got),
+            "sn": (rec or {}).get("sn", sn),
+            "alg": (rec or {}).get("alg"), "level": (rec or {}).get("level"),
+            "trust": (rec or {}).get("trust"),
+            "accepted": (rec or {}).get("accepted"),
+        }
+
+    def _spoof_claim(self, rec):
+        """验签结果回来 → 认领它是不是**我们注入的攻击流量**（按 nonce）。
+
+        只有认得下的（nonce 在 pending 里）才进攻击流量流/结果表 ——
+        正常周期上报、页面上的重放/超窗演示都不受影响（它们照旧只进 `id_reports`）。
+        """
+        nonce = rec.get("nonce") or ""
+        p = self.spoof_pending.pop(nonce, None)
+        if p is None:
+            return
+        state = "accepted" if rec.get("accepted") else "blocked"
+        row = self._spoof_row(p["kind"], nonce, time.time(), p["expect"], state,
+                              rec=rec, sn=p.get("sn", ""))
+        self.spoof_results[p["kind"]] = row
+        self.spoof_events.appendleft(row)
+
+    def _spoof_sweep(self):
+        """把**注入了却一直没等到结果**的攻击条目标出来（由 `_id_tick` 每秒调一次）。
+
+        为什么会有这种条目：攻击报文走的是**真**链路，也可能死在验签**之前** ——
+        §5.8 限频（Server 侧 per-SN/per-Router、Router 侧转发）就在验签之前。
+        那种条永远不会出现在 `_on_id_report` 里。**如实标「未等到结果」**：
+        既不写成「被拒」（会让人以为防线抓住了），也不写成「通过」（会让人以为拦不住）。
+        """
+        if not self.spoof_pending:
+            return
+        now = time.time()
+        for nonce, p in list(self.spoof_pending.items()):
+            if now - p["t"] <= self.SPOOF_WAIT:
+                continue
+            # 用 pop 而不是 del：`_spoof_claim` 在 **server 的线程**里跑，
+            # 正好在“拷一份待查列表”与“删它”之间把它认领走时，del 会抛 KeyError。
+            # （本方法与 HTTP 请求线程共用一个 dict，只靠 GIL 的原子性不够。）
+            if self.spoof_pending.pop(nonce, None) is None:
+                continue
+            self.spoof_lost += 1
+            row = self._spoof_row(p["kind"], nonce, p["t"], p["expect"], "lost",
+                                  sn=p.get("sn", ""))
+            self.spoof_results[p["kind"]] = row
+            self.spoof_events.appendleft(row)
+
+    def spoof_view(self):
+        """攻击流量面板的视图（`/api/status.spoof`）。
+
+        `defenses` 一并给出，页面**不写死**防线清单（单一源 = `spoof.DEFENSES`）——
+        与 `spoof_kinds` 同一个做法：后端把中英文都给出来，页面按当前语言挑。
+        """
+        return {
+            "injected": self.spoof_injected,
+            "lost": self.spoof_lost,
+            "wait": self.SPOOF_WAIT,
+            "waiting": [dict(kind=p["kind"], nonce=n, sn=p.get("sn", ""),
+                             expect=p["expect"], epoch=int(p["t"]))
+                        for n, p in list(self.spoof_pending.items())],
+            "results": dict(self.spoof_results),
+            "recent": list(self.spoof_events),
+            "defenses": [{"id": lid, "zh": zh, "en": en}
+                         for lid, zh, en in spoof.DEFENSES],
+        }
+
+    def spoof_reset(self):
+        """清空攻击流量面板的计数与结果（演示用；**不**动密钥库/限频桶，见 `rl_reset`）。"""
+        self.spoof_pending.clear()
+        self.spoof_results.clear()
+        self.spoof_events.clear()
+        self.spoof_injected = 0
+        self.spoof_lost = 0
 
     def rl_alert_view(self):
         """给告警引擎的限频视图（`alerts.evaluate(ratelimit=…)`）。
@@ -773,6 +896,9 @@ class OrpahApp:
         self.id_report_total += 1
         self.id_reports.appendleft(rec)
         self._emit("id_report", rec)
+        # 攻击流量面板：这条验签结果是不是我们注入的攻击流量（按 nonce 认领）——
+        # 认得下就进**攻击流量流**，正常周期上报不受影响（两条流分开，页面不用再猜）。
+        self._spoof_claim(rec)
         # 「最近见」只由**能当人员出现**的结果刷新（§8.3）：`orpah_id.counts_as_presence`
         # = accepted 且非 coverage_only → L0/L1/L2 算，**被拒的（含伪造）与 L3 不算**。
         # 2026-09-12 实测踩过：原来无条件 touch，一条验签失败的伪造上报就把 last_seen 从
@@ -969,10 +1095,17 @@ class OrpahApp:
                 dropped_total=self.router.rl_dropped if self.router else 0,
                 recent=list(self.router.rl_drops)[:5] if self.router else []),
             # 防 spoof 演示的攻击清单（脚本/UI 同一份，见 spoof.py；页面按语言取 zh/en）
+            # `line` = 它**期望**被哪道防线拦（`spoof.DEFENSES` 单一源；None=应被接受）
             "spoof_kinds": [{"kind": k, "zh": spoof.case_info(k)[0],
                              "en": spoof.case_info(k)[1],
-                             "expect": spoof.case_info(k)[2]}
+                             "expect": spoof.case_info(k)[2],
+                             "line": spoof.defense_of(spoof.case_info(k)[2]),
+                             "note_zh": spoof.case_note(k, "zh"),
+                             "note_en": spoof.case_note(k, "en")}
                             for k in spoof.UI_KINDS],
+            # 攻击流量（2026-09-13，独立面板 `attack.html`）：**只含攻击报文**——
+            # 与上面混排的 `id_reports` 分开，页面不用再从签名上报流里猜哪条是攻击。
+            "spoof": self.spoof_view(),
             "id_revoked": (self.id_ks.is_revoked(self.client.sn)
                            if self.client else False),
         }
@@ -1038,6 +1171,11 @@ class OrpahApp:
             return dict({"ok": bool(ok)}, **info)
         elif action == "flood":
             return self.flood(n=n, rotate=bool(rotate))
+        elif action == "spoof_reset":
+            # 攻击流量面板：清计数与结果（**不**动密钥库、不动限频桶 —— 与 rl_reset 同一取舍：
+            # 只清"面板上的数"，不清"防线本身"，否则就把演示变成假的了）
+            self.spoof_reset()
+            return {"ok": True}
         elif action == "rl_reset":
             # 演示用：清零计数后重新刷量，页面上的数字才对得上（**不**清桶本身 ——
             # 清了就等于“把限频关一下”，会把演示变成假的）

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-i18n-doc-title="doc_attack">
+<head>
+<meta charset="utf-8">
+<title>攻击流量 — ORPAH-over-HaLow</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css?v=20260913a">
+<style>
+  .back { margin-left: 10px; }
+  .mono { font-family: "Cascadia Code", Consolas, "Courier New", monospace; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .stat { display: flex; gap: 22px; flex-wrap: wrap; margin: 6px 0 12px; }
+  .stat .cell { display: flex; flex-direction: column; gap: 2px; }
+  .stat .k { color: var(--mut); font-size: 12px; }
+  .stat .v { font-size: 16px; font-variant-numeric: tabular-nums; }
+  .v-ok { color: var(--grn); } .v-bad { color: var(--red); } .v-mut { color: var(--mut); }
+  /* 防线分布：单色条（颜色不承载分类，长度承载条数；不靠颜色区分谁是谁） */
+  .bars { margin-top: 4px; }
+  .bars .brow { display: grid; grid-template-columns: 260px 46px 1fr; gap: 8px;
+                align-items: center; font-size: 12px; margin: 3px 0; }
+  .bars .bname { color: var(--txt); }
+  .bars .bnum { color: var(--mut); text-align: right; font-variant-numeric: tabular-nums; }
+  .bars .btrack { height: 10px; background: #0d1117; border: 1px solid var(--bd);
+                  border-radius: 5px; overflow: hidden; }
+  .bars .bfill { height: 100%; background: var(--acc); }
+  .bars .brow.zero .bname { color: var(--mut); }
+  .bars .bnote { color: var(--mut); }
+  table td.case .nm { font-size: 13px; }
+  table td.case .nt { color: var(--mut); font-size: 11px; line-height: 1.5; }
+  table td.case .kid { color: var(--mut); font-size: 11px; }
+  .mark { font-weight: 600; }
+  .mark.ok { color: var(--grn); } .mark.bad { color: var(--red); }
+  .mark.wait { color: var(--org); } .mark.none { color: var(--mut); }
+  code.c { color: var(--acc); background: #0d1117; border: 1px solid var(--bd);
+           border-radius: 4px; padding: 0 4px; font-size: 11px; }
+  ul.bd { margin: 6px 0 0; padding-left: 18px; }
+  ul.bd li { font-size: 12px; color: var(--txt); margin: 5px 0; }
+  ul.bd li b { color: var(--org); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <a href="index.html" data-i18n-title="nav_home_title" title="返回主页"><img class="brand-logo" src="orpah-logo.png" alt="orpah"></a>
+    <span class="brand-name" data-i18n="nav_attack">攻击流量</span>
+    <span class="sub" data-i18n="at_sub">防 spoof（空口无认证）：攻击报文真的注入空口，看服务器哪道防线拦下</span>
+    <a class="btn back" href="index.html" data-i18n="nav_home">← 返回主页</a>
+    <a class="btn back" href="keys.html" data-i18n="nav_keys">密钥管理</a>
+    <a class="btn back" href="replay.html" data-i18n="nav_replay">回放</a>
+    <button class="btn" id="langBtn" title="中文 / English"></button>
+  </div>
+</header>
+
+<!-- ============ 0 · 概览 ============ -->
+<section class="card">
+  <h3 data-i18n="at_sec0">0 · 概览</h3>
+  <div class="stat">
+    <div class="cell"><span class="k" data-i18n="at_stat_inj">累计注入</span><span class="v" id="atInj">-</span></div>
+    <div class="cell"><span class="k" data-i18n="at_stat_ok">与期望一致</span><span class="v v-ok" id="atOk">-</span></div>
+    <div class="cell"><span class="k" data-i18n="at_stat_bad">与期望不一致</span><span class="v v-bad" id="atBad">-</span></div>
+    <div class="cell"><span class="k" data-i18n="at_stat_lost">未等到结果</span><span class="v v-mut" id="atLost">-</span></div>
+    <div class="cell"><span class="k" data-i18n="at_stat_cover">已用例覆盖</span><span class="v" id="atCover">-</span></div>
+  </div>
+  <div class="pub-head" data-i18n="at_bars_head">各道防线拦下的条数（每种用例取最近一次结果）</div>
+  <div class="bars" id="atBars"></div>
+  <p class="hint" data-i18n="at_hint_route">注入走的是真链路（client → STA → 空口 → AP → router → UDP → server），不是离线自说自话；每一条结果都是服务器验签链的裁决。</p>
+</section>
+
+<!-- ============ 1 · 攻击清单 ============ -->
+<section class="card">
+  <h3 data-i18n="at_sec1">1 · 攻击清单（脚本与页面同一份）</h3>
+  <div class="row">
+    <button class="btn primary" id="atAll" data-i18n="at_run_all">跑全部攻击</button>
+    <button class="btn" id="atStop" data-i18n="btn_stop" style="display:none">停止</button>
+    <button class="btn" id="atReset" data-i18n="at_reset">清空面板</button>
+    <span class="hint" id="atMsg" data-i18n="at_idle">尚未注入。每行右侧「注入」只跑一条，或按「跑全部攻击」按清单依次跑。</span>
+  </div>
+  <table id="atTable">
+    <thead><tr>
+      <th data-i18n="at_tbl_case">用例</th>
+      <th data-i18n="at_tbl_expect">期望裁决（防线）</th>
+      <th data-i18n="at_tbl_got">实际裁决</th>
+      <th data-i18n="at_tbl_line">被哪道防线</th>
+      <th data-i18n="at_tbl_res">最近结果</th>
+      <th data-i18n="th_time">时间</th>
+      <th data-i18n="at_tbl_ops">操作</th>
+    </tr></thead>
+    <tbody id="atList"></tbody>
+  </table>
+</section>
+
+<!-- ============ 2 · 攻击流量 ============ -->
+<section class="card">
+  <h3 data-i18n="at_sec2">2 · 攻击流量（最近注入的报文，最新在前）</h3>
+  <table id="atFlow">
+    <thead><tr>
+      <th data-i18n="th_time">时间</th>
+      <th data-i18n="at_tbl_case">用例</th>
+      <th data-i18n="th_sn">序列号</th>
+      <th data-i18n="id_level">级别</th>
+      <th data-i18n="at_tbl_got">实际裁决</th>
+      <th data-i18n="at_tbl_line">被哪道防线</th>
+    </tr></thead>
+    <tbody id="atRecent"></tbody>
+  </table>
+  <p class="hint" data-i18n="at_hint_sep">这一栏只装攻击报文：正常周期上报、页面上的「重放 / 超窗」演示都不在这里（它们照旧只进首页的签名上报流）。区分靠 nonce —— 注入时记下、验签结果回来时对上，不靠排序猜。</p>
+</section>
+
+<!-- ============ 3 · 边界与口径 ============ -->
+<section class="card">
+  <h3 data-i18n="at_sec3">3 · 边界与口径</h3>
+  <ul class="bd">
+    <li data-i18n="at_hint_notproof">「被拒」只说明这一条没通过那道校验，不等于「防住了」—— 单条被拒不构成结论，任何一道防线都不能被写成“防住了攻击”。</li>
+    <li data-i18n="at_hint_xport">已知边界：路由器侧观测 xport 不在签名预像里 → 篡改它验签照样通过（清单里那条会显示“与期望一致：接受”）。而定位用的正是路由器侧测量 → 能冒充或控制一台路由器的人可以伪造定位；对策是多观测一致性判定（SPEC §8 原则 P-1、pos.js 的 consensus()）。</li>
+    <li data-i18n="at_hint_ratelimit">攻击报文同样受 §5.8 限频约束，而限频在验签之前 → 注入太密时可能被挡在验签之前；那种条会显示「未等到结果」（可能死在限频/链路上），既不记成「被拒」也不记成「通过」。</li>
+    <li data-i18n="at_hint_revoked">本页不含「已吊销设备」用例：页面用的是活密钥库，跑一次会把在跑的设备搞成验不过 → 它只在离线 demo_spoof.py / test_spoof.py 里覆盖（故上一栏「吊销表」显示 0 条）。</li>
+    <li data-i18n="at_hint_src">清单、说明、防线名与「错误码 → 哪道防线」全部取自 spoof.py（CASES / DEFENSES / defense_of），页面不另写一份，脚本与页面不会漂移。</li>
+    <li data-i18n="at_hint_terms">口径：本页「攻击」指我们主动注入的测试报文（构造见 spoof.py）；真实链路上的异常一律只陈述「与预期不一致 / 与其余观测对不上」，不归因 —— 偏差成因不唯一（遮挡与多径、天线与接头、元件老化、标定漂移，也包括被改装或冒充）。</li>
+  </ul>
+</section>
+
+<script src="ui_i18n.js"></script>
+<script src="attack.js"></script>
+</body>
+</html>
