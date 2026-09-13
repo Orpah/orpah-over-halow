@@ -22,6 +22,7 @@ if HERE not in sys.path:
 
 import orpah_id as oid
 import orpah_proto as op
+import downlink
 from server import OrpahServer
 
 ADDR = ("127.0.0.1", 12345)
@@ -109,6 +110,70 @@ class TestLostTableReq(unittest.TestCase):
         msg = op.decode_msg(srv.sock.sent[0][0])
         self.assertNotIn("rid", msg)
         self.assertEqual(msg["type"], op.MSG_LOST_TABLE)
+
+
+class TestDownlinkSigning(unittest.TestCase):
+    """下行签名（F-14 B 方案，2026-09-13）：**在唯一出口 `_reply` 上签**。
+
+    为什么盯着这一处：Server 有多个地方发下行（拉表应答、变更推送、回执、错误），
+    靠“每个调用点自己记得签”迟早漏一个 —— 而漏签的后果是 Router **直接拒收**（fail-closed），
+    表现为“某个功能莫名其妙不工作了”。所以签名放在 `_reply` 里，这里断言它确实生效。
+    """
+
+    def test_reply_is_signed_and_verifies(self):
+        priv, pub = downlink.demo_pair()
+        srv = make_srv(down_key=priv)
+        srv._reply(ADDR, op.build_lost_table([]))
+        msg = op.decode_msg(srv.sock.sent[0][0])
+        self.assertIn(downlink.DSIG_FIELD, msg)
+        self.assertIn(downlink.DTS_FIELD, msg)
+        self.assertTrue(downlink.verify(msg, pub)["ok"])
+        self.assertEqual(srv.down_signed, 1)
+        self.assertEqual(srv.downlink_view()["on"], True)
+
+    def test_signed_covers_entries(self):
+        """签名后改 entries → 验不过（预像盖住整条报文；与 Router 侧同一约束）。"""
+        priv, pub = downlink.demo_pair()
+        srv = make_srv(down_key=priv)
+        srv._reply(ADDR, op.build_lost_table([{"sn": "A", "tracked": True}]))
+        msg = op.decode_msg(srv.sock.sent[0][0])
+        msg["entries"] = []
+        self.assertEqual(downlink.verify(msg, pub)["err"], downlink.ERR_BAD_SIG)
+
+    def test_dn_is_monotonic_and_stops_replay(self):
+        priv, pub = downlink.demo_pair()
+        srv = make_srv(down_key=priv)
+        for _ in range(3):
+            srv._reply(ADDR, op.build_lost_table([]))
+        dns = [op.decode_msg(d)["dn"] for d, _ in srv.sock.sent]
+        self.assertEqual(dns, [1, 2, 3])
+        m1 = op.decode_msg(srv.sock.sent[0][0])
+        m3 = op.decode_msg(srv.sock.sent[2][0])
+        self.assertTrue(downlink.verify(m3, pub)["ok"])
+        # 回头再收第 1 条（重放）→ 拒
+        self.assertEqual(downlink.verify(m1, pub, last=(m3["dts"], m3["dn"]))["err"],
+                         downlink.ERR_REPLAY)
+
+    def test_tracking_status_and_error_are_signed_too(self):
+        """三类下行（LOST-TABLE / 回执 / ERROR）都走 `_reply` → 都带签名，一个都不能漏。"""
+        priv, pub = downlink.demo_pair()
+        srv = make_srv(down_key=priv)
+        srv._reply(ADDR, op.build_tracking_status("CN-WH01-9AF3C1D2", op.ST_NOT_TRACKED))
+        srv._reply(ADDR, op.build_error(op.ERR_FORMAT, sn="CN-WH01-9AF3C1D2"))
+        for data, _ in srv.sock.sent:
+            msg = op.decode_msg(data)
+            self.assertTrue(downlink.verify(msg, pub)["ok"], msg.get("type"))
+        self.assertEqual(srv.down_signed, 2)
+
+    def test_without_key_is_unsigned_and_counted(self):
+        """没配私钥 → 不签名（老行为）**但计数**，`on=False` 让 UI 能如实显示未启用。"""
+        srv = make_srv()
+        srv._reply(ADDR, op.build_lost_table([]))
+        msg = op.decode_msg(srv.sock.sent[0][0])
+        self.assertNotIn(downlink.DSIG_FIELD, msg)
+        self.assertEqual(srv.down_unsigned, 1)
+        self.assertEqual(srv.down_signed, 0)
+        self.assertEqual(srv.downlink_view()["on"], False)
 
 
 class TestReport(unittest.TestCase):

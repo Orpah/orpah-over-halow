@@ -52,6 +52,7 @@ from orpah_proto import (ORPAH_UDP_PORT, MAC_BCAST, MSG_REQ_CONNECT,
                          build_lost_table_req, build_found, new_rid,
                          ST_NOT_TRACKED)
 import ratelimit as rl_mod              # 限频（§5.8 的 Router 两行）
+import downlink as down                 # 下行真实性（F-14 B）：验签（来源校验之后的第二道）
 
 LOG = True
 
@@ -67,7 +68,7 @@ class RouterBridge:
     def __init__(self, ap_port, server_port=ORPAH_UDP_PORT,
                  ap_host="127.0.0.1", server_host="127.0.0.1",
                  self_mac=None, on_up=None, on_down=None, on_found=None,
-                 on_up_id=None, rl=None, on_ratelimit=None):
+                 on_up_id=None, rl=None, on_ratelimit=None, down_pub=None):
         self.ap = HostBus(host=ap_host, port=ap_port, name="router")
         self.server_addr = (server_host, server_port)
         self.up_count = 0
@@ -112,6 +113,17 @@ class RouterBridge:
             self._server_ip = str(server_host)
         self.down_rejected = 0              # 被来源校验丢掉的下行报文数（供 UI/日志）
         self.down_rejects = collections.deque(maxlen=10)   # 最近几条（最新在前）
+        # 下行**真实性**校验（B 方案，2026-09-13）：Server 签名 / 本机只持公钥。
+        # `down_pub is None`（没配公钥）→ **无法校验**，照旧收下但计数 `down_unverified`
+        # （如实暴露“这段路现在没有真实性保护”，不假装已启用，也不因此把 demo 搞挂）。
+        # 有公钥 → **fail-closed**：没签名/签名错/过期/重放一律拒（见 downlink.py）。
+        self.down_pub = down_pub
+        self.down_last = {}                 # 报文类型 → 已接受的最后一个 (dts, dn)
+        self.down_verified = 0              # 验签通过并接受的下行条数
+        self.down_unverified = 0            # 没配公钥而接受的条数（未验证）
+        self.down_sig_fail = 0              # 有公钥但被拒的条数
+        self.down_sig_fails = collections.deque(maxlen=10)   # 最近几条（含错误码）
+        self._down_warned = False           # “未配公钥”只吵一次，不刷屏
         # 主动拉表同步用：收到 Server 的 LOST-TABLE（_apply_lost_table）时置位
         self._lost_event = threading.Event()
         # 是否已成功同步过走失表（此后依赖 Server 推送即可；重启后复位为未同步）
@@ -300,12 +312,57 @@ class RouterBridge:
                 break
             self._handle_down(data, addr)
 
-    def _handle_down(self, data, addr):
-        """处理一条下行数据报：**先来源校验，再解析报文**。
+    def _check_down_sig(self, msg, addr):
+        """下行**真实性**校验（B 方案，2026-09-13）→ True = 放行。
 
-        顺序是有意的（A 方案）：伪造者要的是让一张假 LOST-TABLE 进 `_apply_lost_table`
-        （那会替换走失缓存 + 置 `_lost_event` → `_synced=True`），所以在**解析之前**就丢，
-        不给他任何“先解析再判”的机会。返回是否被接受（测试用）。
+        位置：**来源校验之后、动作之前** —— 来源校验挡“不是 Server 地址发来的”（A，便宜），
+        这一步挡“**同源伪造与重放**”（B，贵一点）：A 挡不住同源，而本项目恰恰假定
+        Router 可被改装、同一台机器上什么进程都跑得起来。
+
+        没配公钥时**无法校验**：照旧放行（不让 demo 起不来），但**计数 + 只吵一次** ——
+        “未验证”必须看得见，否则会被误读成“已经防住了”。
+        """
+        if self.down_pub is None:
+            self.down_unverified += 1
+            if not self._down_warned:
+                self._down_warned = True
+                log("下行**未做真实性校验**（没配 Server 公钥 `ORPAH_DOWN_PUB`）："
+                    "只做了来源校验（A）—— 同源伪造/重放挡不住。"
+                    "配上公钥后自动启用签名校验（B）")
+            return True
+        mtype = msg.get("type")
+        v = down.verify(msg, self.down_pub, last=self.down_last.get(mtype))
+        if v["ok"]:
+            self.down_last[mtype] = v["last"]
+            self.down_verified += 1
+            return True
+        self.down_sig_fail += 1
+        rec = {"t": time.strftime("%H:%M:%S"), "err": v["err"], "type": mtype,
+               "from": f"{addr[0]}:{addr[1]}" if addr else "-"}
+        self.down_sig_fails.appendleft(rec)
+        log(f"丢弃下行（签名校验未过 [{rec['err']}]）[{self.down_sig_fail}] "
+            f"{mtype} <- {rec['from']}")
+        return False
+
+    def downlink_view(self):
+        """下行真实性视图（UI/页面用）。
+
+        `on` = **本机到底有没有在验**（配了公钥才为真）。`unverified` 是非 0 时必须看得见：
+        那意味着这段路现在只有来源校验（A），同源伪造/重放挡不住 —— 不得读成“已经防住了”。
+        """
+        return {"on": self.down_pub is not None, "verified": self.down_verified,
+                "unverified": self.down_unverified, "failed": self.down_sig_fail,
+                "rejects": list(self.down_rejects),
+                "sig_fails": list(self.down_sig_fails)}
+
+    def _handle_down(self, data, addr):
+        """处理一条下行数据报：**先来源校验，再解析，再验签**。
+
+        顺序是有意的：
+          ① 来源校验（A）—— 伪造者要的是让一张假 LOST-TABLE 进 `_apply_lost_table`
+             （那会替换走失缓存 + 置 `_lost_event` → `_synced=True`），所以在**解析之前**就丢；
+          ② 解析 → ③ **签名校验（B）**：同源伪造/重放挡在这里（需要解析后才能验，因为预像
+             盖的是整条报文）。返回是否被接受（测试用）。
         """
         if not self._from_server(addr):
             self.down_rejected += 1
@@ -319,6 +376,8 @@ class RouterBridge:
             return False
         msg = decode_msg(data)
         if msg is None:
+            return False
+        if not self._check_down_sig(msg, addr):
             return False
         mtype = msg.get("type")
         if mtype == MSG_LOST_TABLE:

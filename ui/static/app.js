@@ -468,6 +468,17 @@ async function refresh() {
       T("lbl_down_rej").replace("{n}",
         `<b class="${(s.router_down_rejected || 0) > 0 ? "cnt-bad" : "cnt"}">${s.router_down_rejected || 0}</b>`);
     $("rowRouterRej").title = T("lbl_down_rej_tip");
+    // 下行**真实性**（B 方案）：配了公钥才真在验；没配就如实写「未启用」，
+    // 不把“只做了来源校验（A）”读成“已防住”。拒收条数非 0 时标红。
+    const ds = (s.downlink && s.downlink.router) || {};
+    $("rowRouterSig").innerHTML = ds.on
+      ? T("lbl_down_sig").replace("{n}", `<b class="cnt">${ds.verified || 0}</b>`) +
+        ((ds.failed || 0) > 0
+          ? " " + T("lbl_down_sig_fail").replace("{n}", `<b class="cnt-bad">${ds.failed}</b>`)
+          : "")
+      : T("lbl_down_sig_off");
+    $("rowRouterSig").title = ds.on ? T("lbl_down_sig_tip")
+                                    : T("lbl_down_sig_off_tip");
     $("rowRouterFound").innerHTML =
       T("lbl_found").replace("{n}", `<b class="cnt-found">${s.found_total || 0}</b>`);
     $("rowServerCnt").innerHTML =

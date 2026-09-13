@@ -47,6 +47,7 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | Orpah ID：码号/CHECK/签名/防重放/密钥多代轮换吊销 | `orpah_id.py` / `keystore.py` | `demo_id.py`、`test_keys.py` |
 | 降级策略（§8）：按环节坏在哪自动选级 L0→L3；L2 告警、L3 只做覆盖发现（不当人员出现） | `orpah_id.pick_level()` / `counts_as_presence()` + `alerts.id_degraded` | `test_levels.py` + 首页「降级演示」下拉 |
 | 无认证空口防 spoof（14 条用例 = 13 种攻击 + 1 条合法对照，端到端） | `spoof.py`（含防线映射单一源） | `demo_spoof.py`、`test_spoof.py`、`test_attack.py` |
+| **Router 下行真实性（F-14）**：A = 只收 Server 源地址（解析前就丢）；**B = Server 签名 + Router 只持公钥**（防同源伪造与重放；`dts`+`dn` 保新鲜性） | `downlink.py` + `router._check_down_sig` + `server._reply` | `test_downlink.py`、`test_router.py`、`test_server.py`、`demo_l4.py` 第 ⑨ 组 |
 | 设备清册 / 走失案件（立案→发现→找回·撤销→结案，含接手人） | `registry.py` / `cases.py` | 页面 + `test_server.py` |
 | 告警（长未上报 / 案件超时 / 处置超时 / 验签失败率 / 降级上报 / 设备时钟 / **能力声明不一致** / **RSSI 突变** / **校验位连败** / 电量 / 限频丢弃） | `alerts.py` | `test_alerts.py`、`test_levels.py` |
 | **告警通知（出站 Webhook + 页面弹窗）** | `notify.py` + `ui_server._alert_watch` | `test_notify.py` |
@@ -303,6 +304,7 @@ orpah-over-halow/                      # 本项目（ORPAH 业务全链路；纯
 ├── cases.py            # 【业务】案件状态机（立案→发现→找回/撤销→结案；handler 与 status 正交）
 ├── alerts.py           # 【业务】告警规则（无存储、按快照重算；阈值走 ORPAH_ALERT_* 环境变量）
 ├── notify.py           # 【业务】告警**出站**通知（Webhook；边沿触发 + 失败可见、不重试）
+├── downlink.py         # 【安全】下行真实性（F-14 B）：Server 签名 / Router 只持公钥 + (dts,dn) 防重放
 ├── metrics.py          # 【业务】指标纯计算（验签失败率/算法分布/平均 RSSI/处置时长）
 ├── clock.py            # 【业务】设备时钟偏移/漂移估计（纯计算；只估计不改数据，短窗/跳变/噪声里给 None）
 ├── energy.py           # 【业务】能量轴三参数模型（采集/储能/上报代价 → 间隔与降级；参数是**演示标定值**）

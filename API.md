@@ -97,6 +97,28 @@ index 报文流据此把丢失设备 SN 标红；SN 已链接 `registry.html?sn=
 另含 `tsdb: bool`（IoTDB 是否在线）。
 registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 
+### 下行报文的新字段（F-14 B 方案，2026-09-13）
+
+Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多三个字段：
+
+| 字段 | 含义 |
+|---|---|
+| `dts` | Server 签名时刻（epoch 秒）—— Router 要求 `|now−dts| ≤ ORPAH_DOWN_WINDOW`（默认 300）|
+| `dn` | Server 侧**单调计数**（每条下行 +1）—— 与 `dts` 一起防重放 |
+| `dsig` | `base64url(ES256(raw r\|\|s))`，签的预像是 `JCS(报文去掉 dsig)`（**整条报文**）|
+
+- **谁验、谁签**：`server._reply`（**下行唯一出口**）签；`router._check_down_sig`（**来源校验之后、动作之前**）验。
+- **为什么是非对称而不是 HMAC**：威胁模型就是「Router 可被改装」—— 共享密钥放进 Router
+  等于把“给别的 Router 发假表”的能力也给了改机的人；公钥不是秘密。
+- **新鲜性不能省**：只签名的话，**重放一张旧空表**照样能弄瞎 Router（重放不需要私钥）→
+  `(dts, dn)` 必须比上次已接受的那对更大（按报文类型各记）。Server 重启 dn 归零不会卡死（dts 更大）。
+- **两条边界**：① Router 没配公钥（`ORPAH_DOWN_PUB`）→ **无法校验**：照旧收下但计 `down_unverified`
+  + 日志吵一次 + 页面显示未启用（不假装已启用）；② 只管 **Server → Router**，
+  **空口那段（Router → Client）仍无认证**。
+- 环境变量：`ORPAH_DOWN_PUB`（Router 读公钥 PEM 路径；`ui_server` 启动时会把公钥写到这里）、
+  `ORPAH_DOWN_KEY`（Server 读私钥 PEM；不设则现场生成一把）、`ORPAH_DOWN_WINDOW`（秒）。
+- 自检：`test_downlink.py`（44 项）+ `test_router.py` + `test_server.py` + `demo_l4.py` 第 ⑨ 组。
+
 **Orpah ID 相关字段**（index 的「Orpah ID 签名上报」卡片用）：
 
 | 字段 | 说明 |
@@ -112,7 +134,8 @@ registry/cases/index 均 1s 轮询同一数据源（SQLite 持久化）。
 | **`spoof`** | **攻击流量面板（`attack.html`）状态**，2026-09-13：`{injected, lost, wait, waiting[], results{}, recent[], defenses[]}`。`results` = **每种用例最近一次结果**（`{kind, nonce, t, epoch, expect, got, state, ok, line, sn, alg, level, trust}`），`state ∈ accepted/blocked/lost`，**`lost`（没等到结果）时 `ok=null`**（不假装判定过）。**只装攻击报文**：与 `id_reports`（正常上报 + 攻击混排）**分开**，靠 **nonce 认领**（注入时记下、验签回来时对上）—— 正常周期上报永远进不了这张表（实测：`id_report_total` 继续涨，`spoof.injected` 与 `recent` 不动）。`defenses` 随视图下发，页面**不写死**防线清单 |
 | **`ratelimit`** | **限频（§5.8）状态 —— Server 侧**：`{on, params:{sn_rate,sn_burst,router_rate,router_burst,max_keys}, allowed, dropped:{sn,router,total}, sn_table, router_table, top_sn, recent[≤5], since}`。**参数以服务端为单一源**（页面不写死）；`recent` 只 5 条、**不含全表**（桶表可能几千 key，不该每秒重传）|
 | **`ratelimit_rtr`** | **限频状态 —— Router 侧**（§5.8 的行 1/2）：同 `ratelimit` 的形状（`params.sn_*` = 转发按 SN、`params.router_*` = REQ-CONNECT 按源 MAC），另加 `dropped_total` 与 `recent`。**必须与 `ratelimit` 分开报**：两侧参数不同（Router 侧更宽）、丢的后果也不同（砍带宽 vs 砍 CPU），合成一个数就说不清“报文死在哪一段”—— 而且 **Server 侧计数里不含 Router 丢掉的报文** |
-| **`router_down_rejected`** | **被下行来源校验丢掉的下行报文数**（A 方案，2026-09-13）：下行只接受来自 Server 源地址（IP+端口）的报文，别的在**解析之前**就丢。非 0 意味着“有东西不是在从 Server 发包给 Router”—— 页面 Router 行有显示与 tooltip；**它只挡来源，不等于真实性**（同源伪造仍能过，真解要下行带 HMAC/签名，见 SPEC §8 威胁 4 / F-14）|
+| **`router_down_rejected`** | **被下行来源校验丢掉的下行报文数**（A 方案，2026-09-13）：下行只接受来自 Server 源地址（IP+端口）的报文，别的在**解析之前**就丢。非 0 意味着“有东西不是在从 Server 发包给 Router”—— 页面 Router 行有显示与 tooltip；**它只挡来源，不等于真实性**（同源伪造仍能过，那部分由 B 兼）|
+| **`downlink`** | **下行真实性（F-14）状态**（2026-09-13）：`{server: {on,signed,unsigned,n}, router: {on,verified,unverified,failed,rejects[],sig_fails[]}, pub_path, key_src}`。`router.on=false`（没配公钥）或 `unverified>0` **必须看得见** —— 那意味着这段路现在只有来源校验；页面 Router 行显示「下行签名校验 / 未启用（只有来源校验）」 |
 | **`energy`** | 能量轴（免电池客户端，2026-09-13）：`{on, params, state}` —— 形状与 GET `/api/energy` 的三项**一致**（页面同一份渲染代码吃两种来源）。**不含扫描表**（那个在 `energy_axis`，见 §13） |
 | **`energy_axis`** | 能量轴扫描表 `{rows[13], min_harvest_mw, n, speedup, h_max}`（页面画「采集功率 → 上报间隔」表 + 标出当前工作点） |
 

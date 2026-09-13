@@ -50,6 +50,7 @@ import sim                                  # noqa: E402
 
 from server import OrpahServer              # noqa: E402
 from router import RouterBridge             # noqa: E402
+import downlink                             # noqa: E402  下行真实性（F-14 B）
 from client import ClientHost               # noqa: E402
 from waiting import wait_until              # noqa: E402  按截止时间等待（只这一份实现）
 from orpah_proto import (MSG_ACCESS_INFO, MSG_TRACKING_STATUS, MSG_ERROR,
@@ -135,13 +136,14 @@ def main():
 
     # 2) Server（权威走失库 + 去重）
     rec = Downs()
-    srv = OrpahServer(port=UDP_SRV)
+    down_priv, down_pub = downlink.demo_pair()     # 下行签名（F-14 B）
+    srv = OrpahServer(port=UDP_SRV, down_key=down_priv)
     srv.start()
 
     # 3) 两台 Router（各自连自己的 AP host 口，共用 Server）
-    r1 = RouterBridge(ap_port=HOST_A1, server_port=UDP_SRV,
+    r1 = RouterBridge(ap_port=HOST_A1, server_port=UDP_SRV, down_pub=down_pub,
                       on_down=rec.r1_down)
-    r2 = RouterBridge(ap_port=HOST_A2, server_port=UDP_SRV,
+    r2 = RouterBridge(ap_port=HOST_A2, server_port=UDP_SRV, down_pub=down_pub,
                       on_down=rec.r2_down)
     assert r1.start(), "Router1 连不上 AP1 host 口"
     assert r2.start(), "Router2 连不上 AP2 host 口"

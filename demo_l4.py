@@ -50,8 +50,10 @@ import sim                                  # noqa: E402
 from server import OrpahServer              # noqa: E402
 from router import RouterBridge             # noqa: E402
 from client import ClientHost               # noqa: E402
+import downlink                             # noqa: E402  下行真实性（F-14 B）：签名/验签
 from waiting import wait_until, wait_new    # noqa: E402  等待工具（只这一份实现）
 from orpah_proto import (MSG_ACCESS_INFO, MSG_LOST_TABLE_REQ,   # noqa: E402
+                         MSG_LOST_TABLE,
                          build_lost_table, build_lost_table_req, new_rid, encode_msg)
 
 # 端口独立（demo_l1/9401..、demo_l2/95xx、demo_l3/96xx、ui/9401..）
@@ -79,7 +81,10 @@ def main():
     sn = args.sn
 
     # ---- 1) Server：先 mark（此刻没有任何 Router 联系过 → 不会主动推）----
-    srv = OrpahServer(port=UDP_SRV)
+    # 下行真实性（F-14 B，2026-09-13）：Server 持私钥签下行，Router 只持公钥。
+    # 演示里两个角色同进程 → 直接传对象（真机/分进程走 ORPAH_DOWN_PUB 文件）。
+    down_priv, down_pub = downlink.demo_pair()
+    srv = OrpahServer(port=UDP_SRV, down_key=down_priv)
     srv.start()
     assert len(srv.routers) == 0, "初始不应有见过的 Router"
     srv.mark_tracked(sn, note="pull-demo")
@@ -94,7 +99,7 @@ def main():
         threading.Thread(target=_loop, args=(c, stop), daemon=True).start()
 
     access = []                              # Client 收到的 ACCESS-INFO
-    router = RouterBridge(ap_port=HOST_A, server_port=UDP_SRV)
+    router = RouterBridge(ap_port=HOST_A, server_port=UDP_SRV, down_pub=down_pub)
     assert router.start(), "Router 连不上 AP host 口"
     # 启动拉取是否生效：缓存立即含 sn 且 tracked=True，且 Server 收到过拉表请求
     startup_pulled = (router.lost_cache.get(str(sn), {}).get("tracked") is True
@@ -233,6 +238,82 @@ def main():
     for name, passed in down_checks.items():
         print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
 
+    # ---- 9) 下行真实性（B 方案，2026-09-13）：**同源**伪造与重放都进不来 ----
+    # 为什么必须有这一组：A 方案只比源地址，而伪造者可以从**同一个 IP + 同一个端口**发
+    # （本机任何进程、NAT 后面的主机、被改装的那台 Router）→ A 根本看不到区别。
+    # B 用 Server 签名解：Router 只持**公钥**（不是共享密钥）—— 改一台 Router 学不到伪造能力。
+    print("\n--- 下行真实性：Server 签名 + Router 验签（B 方案）---")
+    sig_checks = {}
+    sig_checks["① 本机配了 Server 公钥（真的在验，不是“未启用”）"] = router.down_pub is not None
+    sig_checks["② 前面几组的合法下行都验签通过了"] = router.down_verified > 0
+    sig_checks["③ 已配公钥时不应出现“未验证放行”"] = router.down_unverified == 0
+    cache_b4 = dict(router.lost_cache)
+    rej_b4 = router.down_rejected
+    fail_b4 = router.down_sig_fail
+    ours = None
+    try:
+        # 同源套接字：IP **和**端口都与 Server 相同（SO_REUSEADDR）→ A 方案认不出它
+        try:
+            ours = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            ours.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            ours.bind(("127.0.0.1", UDP_SRV))
+            why = "源 IP+端口与 Server 完全相同（A 认不出）"
+        except OSError:
+            ours = None
+        if ours is None:
+            sig_checks[f"（同源套接字无法 bind :{UDP_SRV} → 本组只能测到“无签名被拒”）"] = None
+        else:
+            # ① 没签名的空表（这正是最阴的那种载荷）
+            ours.sendto(encode_msg(build_lost_table([], rid="RID-FAKE-B")),
+                        ("127.0.0.1", rt_port))
+            got = wait_until(lambda: router.down_sig_fail > fail_b4,
+                             timeout=3.0, interval=0.02)
+            sig_checks[f"① 同源无签名空表被丢（{why}）"] = \
+                got and router.down_rejected == rej_b4
+            sig_checks["② 关键：缓存一动没动（没被空表弄瞎）"] = router.lost_cache == cache_b4
+            # ③ 签名是垃圾（伪造者自己乱签）
+            bad = dict(build_lost_table([], rid="RID-FAKE-C"),
+                       dts=int(time.time()), dn=999999, dsig="AAAA")
+            ours.sendto(encode_msg(bad), ("127.0.0.1", rt_port))
+            got_bad = wait_until(lambda: router.down_sig_fail > fail_b4 + 1,
+                                 timeout=3.0, interval=0.02)
+            sig_checks["③ 伪造签名被丢"] = got_bad
+            # ④ **重放**：拿一条 (dts,dn) 不比上次新的合法签名报文再发一次。
+            #    用真私钥“回拨”只是为了让用例可复现 —— 重放本身**不需要私钥**
+            #    （截获旧报文原样再发即可），这才是 B 必须带 (dts,dn) 的原因。
+            last = router.down_last.get(MSG_LOST_TABLE)
+            sig_checks["④ 前置：本机已接受过 Server 的 LOST-TABLE（有 (dts,dn)）"] = \
+                last is not None
+            if last is not None:
+                replayed = downlink.sign(build_lost_table([], rid="RID-RP"), down_priv,
+                                         last[1], dts=last[0])
+                ours.sendto(encode_msg(replayed), ("127.0.0.1", rt_port))
+                got_rp = wait_until(lambda: router.down_sig_fail > fail_b4 + 2,
+                                    timeout=3.0, interval=0.02)
+                sig_checks["④ 重放（(dts,dn) 不比上次新）被丢"] = \
+                    got_rp and router.down_sig_fails[0]["err"] == "replay"
+                sig_checks["⑤ 重放也没改到缓存"] = router.lost_cache == cache_b4
+    except OSError as e:
+        sig_checks[f"（本组无法执行：{e}）"] = False
+    finally:
+        if ours is not None:
+            ours.close()
+    # 对照：Server 自己推的仍然生效（别把正常下行也挡了）。
+    # 注意 `untrack` 是**保留条目并置 tracked=False**（不是删条目）→ 断言要看 tracked，
+    # 不能写成 `is None`（那会误判成“没生效”）。
+    srv.untrack(sn, push=True)
+    ok_still = wait_until(
+        lambda: router.lost_cache.get(str(sn), {}).get("tracked") is False,
+        timeout=3.0, interval=0.02)
+    sig_checks["⑥ 对照组：Server 来的一定生效（没把正常下行也挡了）"] = ok_still
+    print(f"  验签通过 {router.down_verified} 条 · 被拒 {router.down_sig_fail} 条"
+          f" · 未验证放行 {router.down_unverified} 条")
+    for name, passed in sig_checks.items():
+        if passed is None:
+            print(f"  [SKIP] {name}")
+        else:
+            print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
+
     # ---- 汇总 ----
     print(f"\n=== ORPAH Router 主动拉表 验收 ===")
     checks = {
@@ -243,6 +324,7 @@ def main():
     }
     checks.update(rid_checks)
     checks.update(down_checks)
+    checks.update({k: v for k, v in sig_checks.items() if v is not None})
     for name, passed in checks.items():
         print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
     ok = all(checks.values())

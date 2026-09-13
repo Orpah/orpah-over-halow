@@ -19,6 +19,7 @@
 """
 import os
 import sys
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +27,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import orpah_proto as op
+import downlink
 from router import RouterBridge
 
 SERVER = ("127.0.0.1", 19447)
@@ -57,9 +59,9 @@ class _FakeSock:
         pass
 
 
-def make_rt(server_host="127.0.0.1", server_port=SERVER[1]):
+def make_rt(server_host="127.0.0.1", server_port=SERVER[1], down_pub=None):
     rt = RouterBridge(ap_port=59999, server_host=server_host,
-                      server_port=server_port)
+                      server_port=server_port, down_pub=down_pub)
     rt.udp = _FakeSock()
     return rt
 
@@ -155,6 +157,112 @@ class TestDownlinkSourceCheck(unittest.TestCase):
             rt._handle_down(wire(lost_table_msg([])), (f"10.0.0.{i}", SERVER[1]))
         self.assertEqual(rt.down_rejected, 50)
         self.assertLessEqual(len(rt.down_rejects), 10)
+
+
+class TestDownlinkSignature(unittest.TestCase):
+    """下行真实性（F-14 B 方案，2026-09-13）：**来源对了也要验签**。
+
+    为什么必须与 A（来源校验）分开测：A 只挡“不是 Server 地址发来的”，而同源伪造
+    （本机任何进程 / NAT 后面 / 被改装的那台 Router）在 A 眼里与真 Server **一模一样**。
+    这里全部从 `SERVER` 地址喂包 —— 即在 A 眼里合法 —— 只看 B 能不能拦住。
+    """
+
+    def setUp(self):
+        self.priv, self.pub = downlink.demo_pair()
+
+    def signed(self, entries=None, dn=1, dts=None, rid=None):
+        return wire(downlink.sign(lost_table_msg(entries or [], rid=rid),
+                                  self.priv, dn, dts=dts))
+
+    def test_unsigned_from_server_is_rejected(self):
+        """★ 核心：配了公钥后，**没签名**的下行（哪怕源地址就是 Server）一律丢。"""
+        rt = make_rt(down_pub=self.pub)
+        rt._apply_lost_table(lost_table_msg([{"sn": "CN-WH01-9AF3C1D2", "tracked": True}]))
+        before = dict(rt.lost_cache)
+        rt._handle_down(wire(lost_table_msg([])), SERVER)
+        self.assertEqual(rt.down_sig_fail, 1)
+        self.assertEqual(rt.down_sig_fails[0]["err"], "no_sig")
+        self.assertEqual(rt.lost_cache, before, "未签名的空表改动了走失缓存")
+        self.assertFalse(rt._synced, "未签名的表把 Router 标成“已同步”了")
+        self.assertEqual(rt.down_rejected, 0, "这条不是来源问题（A 认不出它）")
+
+    def test_signed_from_server_is_accepted(self):
+        rt = make_rt(down_pub=self.pub)
+        rt._handle_down(self.signed([{"sn": "CN-WH01-9AF3C1D2", "tracked": True}]), SERVER)
+        self.assertEqual(rt.down_sig_fail, 0)
+        self.assertEqual(rt.down_verified, 1)
+        self.assertTrue(rt.lost_cache.get("CN-WH01-9AF3C1D2", {}).get("tracked"))
+
+    def test_tampered_entries_are_rejected(self):
+        """签名后改内容（把走失标志摸掉）→ 必须拒（预像盖住整条报文）。"""
+        rt = make_rt(down_pub=self.pub)
+        msg = downlink.sign(lost_table_msg([{"sn": "A", "tracked": True}]),
+                            self.priv, 1)
+        msg["entries"] = []                      # 最阴的改法：换成空表
+        rt._handle_down(wire(msg), SERVER)
+        self.assertEqual(rt.down_sig_fails[0]["err"], "bad_sig")
+        self.assertFalse(rt.lost_cache)
+
+    def test_wrong_key_signature_is_rejected(self):
+        rt = make_rt(down_pub=self.pub)
+        other, _ = downlink.demo_pair()
+        rt._handle_down(wire(downlink.sign(lost_table_msg([]), other, 1)), SERVER)
+        self.assertEqual(rt.down_sig_fails[0]["err"], "bad_sig")
+
+    def test_replay_is_rejected(self):
+        """★ 只签名不防重放等于没修：重放一张**旧**的合法签名空表照样能弄瞎 Router。"""
+        rt = make_rt(down_pub=self.pub)
+        now = int(time.time())          # dts 必须在窗口内（否则先被判 stale，测不到重放）
+        rt._handle_down(self.signed([{"sn": "A", "tracked": True}], dn=5, dts=now),
+                        SERVER)
+        self.assertEqual(rt.down_verified, 1)
+        n = rt.down_sig_fail
+        rt._handle_down(self.signed([], dn=5, dts=now), SERVER)       # 原样重放
+        self.assertEqual(rt.down_sig_fail, n + 1)
+        self.assertEqual(rt.down_sig_fails[0]["err"], "replay")
+        self.assertTrue(rt.lost_cache.get("A", {}).get("tracked"), "重放把缓存改了")
+        rt._handle_down(self.signed([], dn=999, dts=now - 5), SERVER)  # 更旧但 dn 更大
+        self.assertEqual(rt.down_sig_fails[0]["err"], "replay")
+        rt._handle_down(self.signed([], dn=6, dts=now), SERVER)       # 同秒下一条 → 放行
+        self.assertEqual(rt.down_last[op.MSG_LOST_TABLE], (now, 6))
+
+    def test_window_env_and_stale(self):
+        """超窗（默认 300s）→ 拒；`window` 可注入（不动全局）。"""
+        rt = make_rt(down_pub=self.pub)
+        v = downlink.verify(downlink.sign(lost_table_msg([]), self.priv, 1,
+                                          dts=1000), self.pub,
+                            now=1000 + downlink.WINDOW_SEC + 1)
+        self.assertEqual(v["err"], "stale")
+
+    def test_no_pubkey_falls_back_but_counts(self):
+        """★ 两条边界必须照实：没配公钥 → 无法校验 → **收下但计数**（不假装已启用）。
+
+        不能默认拒收：真机忘了发公钥就把业务搞死（fail-closed 太硬）；也不能默默收下：
+        那会让人以为这段路已经有真实性保护。计数 + 日志吵一次是这两者之间的折中。
+        """
+        rt = make_rt(down_pub=None)
+        rt._apply_lost_table(lost_table_msg([{"sn": "A", "tracked": True}]))
+        rt._handle_down(wire(lost_table_msg([])), SERVER)
+        self.assertEqual(rt.down_unverified, 1)
+        self.assertEqual(rt.down_sig_fail, 0)
+        self.assertEqual(rt.lost_cache, {}, "未校验时仍应照旧生效（老行为）")
+        self.assertEqual(rt.downlink_view()["on"], False)
+
+    def test_source_check_still_runs_first(self):
+        """来源不对的包应该记在 `down_rejected`（A），而不是 `down_sig_fail`（B）——
+        两个计数分开才能回答“被哪一道拦下的”。"""
+        rt = make_rt(down_pub=self.pub)
+        rt._handle_down(self.signed([]), ("10.0.0.9", SERVER[1]))
+        self.assertEqual(rt.down_rejected, 1)
+        self.assertEqual(rt.down_sig_fail, 0)
+
+    def test_view_reports_state_honestly(self):
+        rt = make_rt(down_pub=self.pub)
+        rt._handle_down(self.signed([]), SERVER)
+        rt._handle_down(wire(lost_table_msg([])), SERVER)
+        v = rt.downlink_view()
+        self.assertTrue(v["on"] and v["verified"] == 1 and v["failed"] == 1)
+        self.assertEqual(v["sig_fails"][0]["err"], "no_sig")
 
 
 if __name__ == "__main__":

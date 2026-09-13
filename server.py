@@ -48,6 +48,7 @@ from orpah_proto import (ORPAH_UDP_PORT, MSG_REPORT, MSG_REQ_CONNECT,
 from alerts import ENERGY_LOW_MV     # 能量轴：低电量阈值（只在“成因推导”里用，避免两处阈值）
 import orpah_id as oid                     # Orpah ID 验签（§9.3）
 import ratelimit as rl_mod                 # 限频（§5.8）：验签**之前**的两条防线
+import downlink as down                    # 下行真实性（F-14 B）：签名（唯一出口 `_reply`）
 
 LOG = True
 
@@ -63,7 +64,7 @@ class OrpahServer:
     def __init__(self, port=ORPAH_UDP_PORT, on_report=None, on_down=None,
                  on_lost=None, on_push=None, on_found=None,
                  keystore=None, id_nonces=None, on_id_report=None,
-                 rl=None, on_ratelimit=None):
+                 rl=None, on_ratelimit=None, down_key=None):
         self.port = port
         self.on_report = on_report          # callable(msg) or None（收到 REPORT）
         self.on_down = on_down              # callable(msg, router_addr) 下行应答
@@ -89,6 +90,14 @@ class OrpahServer:
         self.on_ratelimit = on_ratelimit       # callable(rec) 被限频丢弃
         self.rl_dropped = 0                    # 本实例丢弃总数（= rl 两桶之和，冗余但好读）
         self.rl_drops = deque(maxlen=50)       # 最近被丢弃的（供 UI/事件）
+        # 下行真实性（F-14 B 方案，2026-09-13）：**Server 用私钥签名，Router 只持公钥**。
+        # 为什么不是 HMAC 共享密钥：威胁模型就是「Router 可被改装」——共享密钥进了 Router，
+        # 改一台就拿到给别的 Router 发假表的密钥；公钥不是秘密（见 downlink.py 头注释）。
+        # 没配私钥 → **不签名**（`down_unsigned` 计数，Router 侧没公钥时会照旧收下，两边都如实计数）。
+        self.down_key = down_key
+        self.down_n = 0                        # 单调计数（每条下行 +1；签名反重放用）
+        self.down_signed = 0
+        self.down_unsigned = 0
         self._stop = threading.Event()
         self.sock = None
         # 权威走失库：sn -> {"tracked": bool, "note": str, "since": ts}
@@ -398,8 +407,23 @@ class OrpahServer:
             log(f"下发 LOST-TABLE（{len(entries)} 项）-> {len(addrs)} 台 Router"
                 + (f" rid={rid}" if rid else ""))
 
+    def _sign_down(self, msg):
+        """给一条下行报文签名（B 方案）→ 可能是**副本**（不改原对象）。
+
+        放在 `_reply` 这个**唯一出口**上：以后新增下行类型也不会漏签 ——
+        漏签的后果是 Router 直接拒收（fail-closed），能立刻发现，而不是默默降级。
+        """
+        if self.down_key is None:
+            self.down_unsigned += 1
+            return msg
+        self.down_n += 1
+        out = down.sign(msg, self.down_key, self.down_n)
+        self.down_signed += 1
+        return out
+
     def _reply(self, addr, msg):
-        """向指定 Router 回一条报文（UDP）。"""
+        """向指定 Router 回一条报文（UDP）。**下行唯一出口**（签名在这里加）。"""
+        msg = self._sign_down(msg)
         try:
             self.sock.sendto(encode_msg(msg), addr)
             self.down_count += 1
@@ -408,6 +432,11 @@ class OrpahServer:
             return
         log(f"[down {self.down_count}] {msg.get('type')} sn={msg.get('sn', '-')} "
             f"-> {addr[0]}:{addr[1]}")
+
+    def downlink_view(self):
+        """下行签名视图（UI/页面用）：签了多少、没签多少、公钥从哪来。"""
+        return {"on": self.down_key is not None, "signed": self.down_signed,
+                "unsigned": self.down_unsigned, "n": self.down_n}
 
     def stop(self):
         self._stop.set()

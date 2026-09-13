@@ -59,6 +59,7 @@ import motion                              # noqa: E402  演示用「移动的�
 import spoof                               # noqa: E402  防 spoof：攻击报文构造（脚本/UI 共用）
 import alerts as alr                      # noqa: E402  告警规则引擎（页面红点）
 import notify as ntf                      # noqa: E402  告警通知（出站 Webhook，边沿触发）
+import downlink as down                   # noqa: E402  下行真实性（F-14 B）：Server 签名 / Router 验签
 import clock as clk                       # noqa: E402  设备时钟偏移/漂移估计（纯计算）
 import metrics                            # noqa: E402  指标面板纯计算（/api/metrics）
 import energy as en                       # noqa: E402  能量轴（免电池客户端模型，纯计算）
@@ -202,6 +203,23 @@ class OrpahApp:
         self.notifier = ntf.Notifier()
         self.alert_cache = {"t": "", "counts": alr.summary([]), "alerts": [],
                             "thresholds": alr.thresholds()}
+        # ---- 下行真实性（F-14 B 方案，2026-09-13）：Server 持私钥签名 / Router 只持公钥 ----
+        # 演示里两个角色在**同一进程**里 → 公钥直接传对象；同时把公钥**写盘**
+        # （`ORPAH_DOWN_PUB`，缺省系统临时目录下的固定名），这样另起的 Router 进程
+        # （demo 脚本 / 真机）能读到同一把。公钥不是秘密 —— 私钥才不能这么干。
+        self.down_priv = down.load_priv()          # ORPAH_DOWN_KEY（没配就现场生成一把）
+        self.down_key_src = "ORPAH_DOWN_KEY" if self.down_priv else "generated"
+        if self.down_priv is None:
+            self.down_priv, self.down_pub = down.demo_pair()
+        else:
+            self.down_pub = self.down_priv.public_key()
+        self.down_pub_path = down.default_pub_path()
+        try:
+            down.write_pub(self.down_pub, self.down_pub_path)
+        except OSError as e:                        # 写不了盘也不该拦着 demo 起来
+            self.down_pub_path = ""
+            print(f"[downlink] 公钥写盘失败（{type(e).__name__}: {e}）—— 同进程两个角色不受影响；"
+                  f"另起的 Router 进程拿不到公钥（会走“未校验”那条路，页面会显示出来）")
         # ---- 限频（§5.8，2026-09-13）：与 server 共用同一实例（页面要读它的计数） ----
         self.rl = rl_mod.RateLimiter.from_env()
         self.rl_events = []                # 最近被丢弃的（最新在前，供卡片展示）
@@ -488,6 +506,7 @@ class OrpahApp:
                                on_lost=self._on_lost, on_push=self._on_publish,
                                on_found=self._on_found_server,
                                keystore=self.id_ks, id_nonces=self.id_used,
+                               down_key=self.down_priv,
                                on_id_report=self._on_id_report,
                                rl=self.rl, on_ratelimit=self._on_ratelimit)
         self.srv.start()
@@ -499,6 +518,7 @@ class OrpahApp:
 
         # 3) Router 桥（AP host 口 ⇄ UDP ⇄ Server；双向）
         self.router = RouterBridge(ap_port=HOST_A, server_port=UDP_SRV,
+                                   down_pub=self.down_pub,
                                    on_up=self._on_up, on_down=self._on_down,
                                    on_found=self._on_found_router,
                                    on_up_id=self._on_up_id,
@@ -1208,6 +1228,14 @@ class OrpahApp:
             # 攻击流量（2026-09-13，独立面板 `attack.html`）：**只含攻击报文**——
             # 与上面混排的 `id_reports` 分开，页面不用再从签名上报流里猜哪条是攻击。
             "spoof": self.spoof_view(),
+            # 下行真实性（F-14 B，2026-09-13）：Server 签了多少 + Router 验了多少/拒了多少。
+            # Router 侧 `on=false` 或 `unverified>0` 必须看得见 —— 那意味着这段路
+            # 现在**只有来源校验（A）**，不得读成“已经防住了”。
+            "downlink": {
+                "server": (self.srv.downlink_view() if self.srv else {}),
+                "router": (self.router.downlink_view() if self.router else {}),
+                "pub_path": self.down_pub_path, "key_src": self.down_key_src,
+            },
             "id_revoked": (self.id_ks.is_revoked(self.client.sn)
                            if self.client else False),
         }

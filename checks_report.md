@@ -1,9 +1,9 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-13 14:39:43
-- git HEAD：`4e370ae`
+- 时间：2026-09-13 14:49:47
+- git HEAD：`41bfef0`
 - 解释器：3.13.14 @ C:\Python313\python.exe
-- 结论：**全部通过**（25/25 套件通过）
+- 结论：**全部通过**（26/26 套件通过）
 
 ## 套件结果
 
@@ -18,7 +18,7 @@
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
 | 时钟可信（ts=0 无 RTC） | `test_clock.py` | ✅ PASS | 0.5s | 通过 |
 | IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.6s | 通过 |
-| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.7s | 通过 |
+| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.8s | 通过 |
 | 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.1s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
 | 能量轴（免电池客户端） | `test_energy.py` | ✅ PASS | 0.0s | 通过 |
@@ -27,11 +27,12 @@
 | 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
 | 限频（§5.8 令牌桶 / 两条防线） | `test_ratelimit.py` | ✅ PASS | 0.2s | 通过 |
 | Router 下行路径（来源校验） | `test_router.py` | ✅ PASS | 0.1s | 通过 |
+| 下行真实性（F-14 B：签名/重放/时间窗） | `test_downlink.py` | ✅ PASS | 0.1s | 通过 |
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
-| L1 端到端 | `demo_l1.py` | ✅ PASS | 1.3s | 通过 |
+| L1 端到端 | `demo_l1.py` | ✅ PASS | 1.4s | 通过 |
 | L2 消息流 | `demo_l2.py` | ✅ PASS | 2.2s | 通过 |
-| L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.3s | 通过 |
-| L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.3s | 通过 |
+| L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 3.7s | 通过 |
+| L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.2s | 通过 |
 | 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.7s | 通过 |
 | 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 6.4s | 通过 |
 
@@ -127,15 +128,15 @@
       OK   �Ϸ�ֵ��Ч
     ȫ��ͨ��
 
-### UI 服务器契约 — PASS（0.7s）
+### UI 服务器契约 — PASS（0.8s）
 
-    [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
-    [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
-    [server] [id 2] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
-    [server] [id 3] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
-    [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=high accepted=True
-    [server] [id 1] ORPAH-ID-REPORT <- 127.0.0.1:12345: sn=CN-WH01-9AF3C1D2 alg=ES256 level=0 trust=- accepted=False
-    Ran 29 tests in 0.517s
+    [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
+    [server] [down 2] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
+    [server] [down 3] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
+    [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
+    [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
+    [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
+    Ran 34 tests in 0.591s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -213,25 +214,34 @@
 
 ### Router 下行路径（来源校验） — PASS（0.1s）
 
-    [router] 丢弃来源不明的下行报文 [1] <- -（只接受 Server 127.0.0.1:19447）
-    [router] 丢弃来源不明的下行报文 [1] <- 10.0.0.9:19447（只接受 Server 127.0.0.1:19447）
     [router] LOST-TABLE 更新（1 项）
-    [router] 丢弃来源不明的下行报文 [1] <- 10.0.0.9:19447（只接受 Server 127.0.0.1:19447）
-    [router] LOST-TABLE 更新（1 项）
+    [router] 下行**未做真实性校验**（没配 Server 公钥 `ORPAH_DOWN_PUB`）：只做了来源校验（A）—— 同源伪造/重放挡不住。配上公钥后自动启用签名校验（B）
     [router] LOST-TABLE 更新（0 项）
+    [router] LOST-TABLE 更新（1 项）
+    [router] 丢弃下行（签名校验未过 [replay]）[1] ORPAH-LOST-TABLE <- 127.0.0.1:19447
+    [router] 丢弃下行（签名校验未过 [replay]）[2] ORPAH-LOST-TABLE <- 127.0.0.1:19447
     OK
-    Router 下行路径：9/9 通过
+    Router 下行路径：18/18 通过
+
+### 下行真实性（F-14 B：签名/重放/时间窗） — PASS（0.1s）
+
+    PASS  签名后能验过（ok=True，带回 (dts,dn)）
+    PASS  签名是 base64url(64 字节 raw r||s)，与 Orpah ID 同一格式
+    PASS  签名不改变原报文（sign 返回新 dict）
+    PASS  空表也能签能验（攻击载荷就是空表）
+    PASS  改字段 entries=[{'sn': 'CN-WH01-9AF3C1D2', 'tracked': False}] → bad_sig（预像盖住整条报文）
+    PASS  改字段 entries=[] → bad_sig（预像盖住整条报文）
 
 ### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.2s）
 
-    PASS  字典 zh/en key 集合一致（966 / 966）
+    PASS  字典 zh/en key 集合一致（971 / 971）
     PASS  每个 key 恰好 2 次（zh + en）
     PASS  字典非空且含中文与英文条目（翻译真的两套）
-    PASS  扫描 16 个页面/脚本，引用 909 个 key（含动态前缀家族 13 个）
+    PASS  扫描 16 个页面/脚本，引用 914 个 key（含动态前缀家族 13 个）
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
-### L1 端到端 — PASS（1.3s）
+### L1 端到端 — PASS（1.4s）
 
     === ORPAH L1 验收 ===
     结果: [PASS]
@@ -245,7 +255,7 @@
     分支一(未命中 NOT-TRACKED): PASS
     分支二(命中 TRACKED): PASS
 
-### L3 多 Router 漫游/去重 — PASS（4.3s）
+### L3 多 Router 漫游/去重 — PASS（3.7s）
 
     --- 阶段A：sn=CN-WH01-9AF3C1D2 在 R1 网络（2 条，未 mark）---
     --- 阶段B：sn=CN-WH01-9AF3C1D2 漫游到 R2 网络（seq 续 3）---
@@ -254,7 +264,7 @@
     --- 阶段E：去重测试（重发已接受的 seq=4）---
     --- 阶段F：SN 校验（非法 sn → FORMAT-ERR）---
 
-### L3b 主动拉表 — PASS（1.3s）
+### L3b 主动拉表 — PASS（1.2s）
 
     --- 模拟 Router 重启（清空本地缓存 + 未同步）---
     --- Server untrack sn=CN-WH01-9AF3C1D2（变更推送，Router 无需再拉）---
@@ -267,7 +277,7 @@
 
       无认证空口防 spoof 端到端演示
       被冒充设备 SN : CN-WH01-9AF3C1D2
-      攻击者 SN    : CN-WH01-TFKVGCKV5T-38（未登记 → 服务器不认识）
+      攻击者 SN    : CN-WH01-MZV1780WDV-41（未登记 → 服务器不认识）
       链路          : Client→STA→空口→AP→Router→UDP:19847→Server
       用例数        : 14（含 1 条合法对照）
     [server] 监听 127.0.0.1:19847 (UDP)，等待 ORPAH 报文…

@@ -301,29 +301,24 @@ def preimage_of(report):
 # ---------------------------------------------------------------------------
 # 签名 / 验签原语
 # ---------------------------------------------------------------------------
-def sign_preimage(alg, preimage, signer):
-    """对 preimage 签名，返回 bytes（alg=none 返回 None）。
+def es256_sign(privkey, preimage):
+    """ES256 签名 → **64 字节 raw r||s**（**单一源**：设备上报与下行签名都用它）。
 
-    signer 须提供：alg=ES256 时 .privkey；alg=HS256 时 .hmac_key。
+    为什么单独抽出来（2026-09-13）：`downlink.py`（Server → Router 的下行签名）也要用同一套
+    原语 —— 两份实现就容易出现“一份 r||s、一份 DER”这种对不上的静默错。
     """
-    if alg == ALG_ES256:
-        if not _CRYPTO_OK:
-            raise RuntimeError("ES256 需要 cryptography 库")
-        der = signer.privkey.sign(preimage, ec.ECDSA(hashes.SHA256()))
-        r, s = decode_dss_signature(der)
-        return r.to_bytes(32, "big") + s.to_bytes(32, "big")
-    if alg == ALG_HS256:
-        if not _CRYPTO_OK:
-            raise RuntimeError("HS256 需要 cryptography 库")
-        h = _chmac.HMAC(signer.hmac_key, hashes.SHA256())
-        h.update(preimage)
-        return h.finalize()
-    if alg == ALG_NONE:
-        return None
-    raise ValueError(f"unknown alg: {alg}")
+    if not _CRYPTO_OK:
+        raise RuntimeError("ES256 需要 cryptography 库")
+    der = privkey.sign(preimage, ec.ECDSA(hashes.SHA256()))
+    r, s = decode_dss_signature(der)
+    return r.to_bytes(32, "big") + s.to_bytes(32, "big")
 
 
-def _verify_es256(pubkey, preimage, sig):
+def es256_verify(pubkey, preimage, sig):
+    """sig = **base64url(64 字节 raw r||s)** → bool。任何异常一律 False（不抛）。
+
+    \u26a0 与 `sign_preimage` 的输出格式必须一致（raw r||s → b64url），否则会“静默验不过”。
+    """
     try:
         raw = b64url_decode(sig)
         if len(raw) != 64:
@@ -335,6 +330,29 @@ def _verify_es256(pubkey, preimage, sig):
         return True
     except Exception:
         return False
+
+
+def sign_preimage(alg, preimage, signer):
+    """对 preimage 签名，返回 bytes（alg=none 返回 None）。
+
+    signer 须提供：alg=ES256 时 .privkey；alg=HS256 时 .hmac_key。
+    """
+    if alg == ALG_ES256:
+        return es256_sign(signer.privkey, preimage)
+    if alg == ALG_HS256:
+        if not _CRYPTO_OK:
+            raise RuntimeError("HS256 需要 cryptography 库")
+        h = _chmac.HMAC(signer.hmac_key, hashes.SHA256())
+        h.update(preimage)
+        return h.finalize()
+    if alg == ALG_NONE:
+        return None
+    raise ValueError(f"unknown alg: {alg}")
+
+
+# 兼容旧名（原先这几个是私有的；2026-09-13 起公开，跨模块复用同一份实现）——
+# 保留别名，避免本仓外的调用点（如果有）因改名而断。
+_verify_es256 = es256_verify
 
 
 def _verify_hs256(hmac_key, preimage, sig):
@@ -361,6 +379,34 @@ def pubkey_from_pem(pem):
     if not _CRYPTO_OK:
         raise RuntimeError("pubkey_from_pem 需要 cryptography 库")
     return serialization.load_pem_public_key(pem.encode("ascii"))
+
+
+def privkey_to_pem(privkey):
+    """ECDSA 私钥 → PEM 字符串（PKCS#8，未加密）。
+
+    \u26a0 **只有 demo 才把它落盘**（下行签名用的 Server 私钥）；真机要硬件信任根/权限隔离，
+    本模块不负责保管（见 `downlink.py` 头注释的边界）。
+    """
+    if not _CRYPTO_OK:
+        raise RuntimeError("privkey_to_pem 需要 cryptography 库")
+    return privkey.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()).decode("ascii")
+
+
+def privkey_from_pem(pem):
+    """PEM 字符串 → ECDSA 私钥对象。"""
+    if not _CRYPTO_OK:
+        raise RuntimeError("privkey_from_pem 需要 cryptography 库")
+    return serialization.load_pem_private_key(pem.encode("ascii"), password=None)
+
+
+def gen_privkey():
+    """生成一把 P-256 私钥（下行签名/工具页用；与设备密钥同一曲线）。"""
+    if not _CRYPTO_OK:
+        raise RuntimeError("gen_privkey 需要 cryptography 库")
+    return ec.generate_private_key(ec.SECP256R1())
 
 
 def derive_demo_privkey(sn, gen=1):

@@ -42,6 +42,7 @@ import orpah_id as oid                       # noqa: E402
 import spoof                                 # noqa: E402
 from server import OrpahServer                # noqa: E402
 from router import RouterBridge               # noqa: E402
+import downlink                               # noqa: E402  下行真实性（F-14 B）
 from client import ClientHost                 # noqa: E402
 from waiting import wait_until                # noqa: E402  按截止时间等待（只这一份实现）
 
@@ -139,10 +140,11 @@ def main():
                      ("127.0.0.1", LINK_A), host_port=HOST_B)
     threading.Thread(target=loop_cores, args=([coreA, coreB], stop), daemon=True).start()
 
-    srv = OrpahServer(port=UDP_SRV, keystore=ks, id_nonces=used,
+    down_priv, down_pub = downlink.demo_pair()     # 下行签名（F-14 B）
+    srv = OrpahServer(port=UDP_SRV, keystore=ks, id_nonces=used, down_key=down_priv,
                       on_id_report=verdicts.on_id_report)
     srv.start()
-    router = RouterBridge(ap_port=HOST_A, server_port=UDP_SRV)
+    router = RouterBridge(ap_port=HOST_A, server_port=UDP_SRV, down_pub=down_pub)
     if not router.start():
         print("  Router 连不上 AP host 口，退出")
         return 2

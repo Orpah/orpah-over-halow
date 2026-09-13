@@ -42,6 +42,7 @@ import sim                                  # noqa: E402  (host/sim.py)
 
 from server import OrpahServer, LOG as _SLOG    # noqa: E402
 from router import RouterBridge, LOG as _RLOG   # noqa: E402
+import downlink                                 # noqa: E402  下行真实性（F-14 B）
 from client import ClientHost, LOG as _CLOG      # noqa: E402
 from waiting import wait_until                   # noqa: E402  按截止时间等待（只这一份实现）
 
@@ -74,11 +75,13 @@ def main():
     threading.Thread(target=_loop, args=(coreB, stop), daemon=True).start()
 
     # 2) Server（真实 UDP）
-    srv = OrpahServer(port=UDP_SRV)
+    # 下行真实性（F-14 B）：Server 签 / Router 验。演示里两个角色同进程 → 直接传对象。
+    down_priv, down_pub = downlink.demo_pair()
+    srv = OrpahServer(port=UDP_SRV, down_key=down_priv)
     srv.start()
 
     # 3) Router 桥（连 AP 的 host 口）
-    router = RouterBridge(ap_port=HOST_A, server_port=UDP_SRV)
+    router = RouterBridge(ap_port=HOST_A, server_port=UDP_SRV, down_pub=down_pub)
     assert router.start(), "Router 连不上 AP host 口"
 
     # 4) Client host（连 STA 的 host 口）

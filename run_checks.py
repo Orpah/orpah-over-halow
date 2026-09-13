@@ -54,6 +54,7 @@ SUITES = [
     ("定位内核（pos.js，node 跑原文）", "test_posjs.py", []),
     ("限频（§5.8 令牌桶 / 两条防线）", "test_ratelimit.py", []),
     ("Router 下行路径（来源校验）", "test_router.py", []),
+    ("下行真实性（F-14 B：签名/重放/时间窗）", "test_downlink.py", []),
     ("文案字典（zh/en 一致 + 页面引用无缺失）", "test_i18n.py", []),
 ]
 # 端到端 demo：会起模拟器/占端口，默认不跑
