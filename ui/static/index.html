@@ -63,51 +63,9 @@
 
 <!-- ============ 告警通知（出站 Webhook）+ 当前阈值 ============ -->
 <!-- 阈值**单一源 = alerts.py**（含 env 覆盖）→ 页面只负责显示，不写死数值；
-     与 A/n/噪声走 /api/config 同一个做法。 -->
-<section class="card" id="notifyCard">
-  <h3 data-i18n="notify_title">告警通知（Webhook）</h3>
-  <div class="config-row id-ctl">
-    <label><span data-i18n="notify_url">Webhook 地址</span>
-      <input id="notifyUrl" type="text" spellcheck="false"
-             class="w-lg"
-             placeholder="http://127.0.0.1:8899/hook"></label>
-    <button class="btn" id="btnNotifySave" data-i18n="btn_apply">应用</button>
-    <label><span data-i18n="notify_level">最低推送级别</span>
-      <select id="notifyLevel">
-        <option value="warn">warn</option>
-        <option value="crit">crit</option>
-      </select></label>
-    <button class="btn" id="btnNotifyTest" data-i18n="notify_test">测试发送</button>
-    <label title="只在本机响；浏览器要求先点过页面才会出声">
-      <input type="checkbox" id="notifySound"> <span data-i18n="notify_sound">声音提醒</span></label>
-    <span class="hint" id="notifyMsg"></span>
-  </div>
-  <div class="id-grid">
-    <div class="id-row"><span data-i18n="notify_state">状态</span><b id="notifyState">-</b></div>
-    <div class="id-row"><span data-i18n="notify_sent">已推告警</span><b id="notifySent">-</b></div>
-    <div class="id-row"><span data-i18n="notify_failed">放弃投递</span><b id="notifyFailed" class="bad">-</b></div>
-    <div class="id-row"><span data-i18n="notify_queued">重试队列</span><b id="notifyQueued">-</b></div>
-    <div class="id-row"><span data-i18n="notify_next">下次重试</span><b id="notifyNext">-</b></div>
-    <div class="id-row"><span data-i18n="notify_retried">已重试</span><b id="notifyRetried">-</b></div>
-    <div class="id-row"><span data-i18n="notify_dropped">丢弃待重试</span><b id="notifyDropped" class="bad">-</b></div>
-    <div class="id-row"><span data-i18n="notify_skipped">低于级别未推</span><b id="notifySkipped">-</b></div>
-    <div class="id-row"><span data-i18n="notify_watching">正在跟踪</span><b id="notifyWatch">-</b></div>
-    <div class="id-row full"><span data-i18n="notify_err">最近错误</span><b id="notifyErr">-</b></div>
-  </div>
-  <p class="hint" data-i18n="notify_hint">出站只有一个 HTTP POST：无鉴权；失败会按固定退避（1s/5s/30s）有界重试，试完仍失败才计「放弃投递」——语义是「至少一次」，超时的那次对方可能已经收到，接收端要自己按 key 去重；重试队列只在内存里，进程重启即丢（不做持久化）。「推过的告警」也记在内存里 —— 进程重启后活跃告警会被重推一遍。同一告警持续期间只推一次，级别升高（warn→crit）再推一次。</p>
-  <p class="hint" data-i18n="notify_sound_hint">声音提醒只是本机提示音（默认关，记在本机浏览器里）：关掉页面就没有声音，它不等于「通知已送达」——真正的送达看 Webhook 那一列。</p>
-  <div class="pub-head" data-i18n="notify_recent">最近投递（最新在前）</div>
-  <table>
-    <thead><tr>
-      <th data-i18n="th_time">时间</th><th data-i18n="notify_th_event">事件</th>
-      <th data-i18n="notify_th_alert">告警</th><th data-i18n="notify_th_level">级别</th>
-      <th data-i18n="notify_th_state">结果</th><th data-i18n="notify_th_err">说明</th>
-    </tr></thead>
-    <tbody id="notifyRecent"></tbody>
-  </table>
-  <div class="pub-head" data-i18n="alert_th_head">当前阈值（可用环境变量覆盖）</div>
-  <div class="id-grid" id="alertTh"></div>
-</section>
+     与 A/n/噪声走 /api/config 同一个做法。
+     ★2026-09-13 挪到**页面最后**：它是**配置**（填 Webhook 地址/看阈值表），不是“正在发生什么”。
+     实测它原来排第 2 位（645px 高、窄屏 1249px），把拓扑/报文流挤到第二屏之后。 -->
 
 <div id="alertToast"></div>
 
@@ -155,6 +113,8 @@
 <!-- ============ 报文流 ============ -->
 <section class="card" id="msgsec">
   <h3 data-i18n="msg_title">ORPAH-REPORT 实时报文流</h3>
+  <!-- 最新在前（app.js 每秒重排）；限高滚动：卡片不再被 50 行撑成 1700px -->
+  <div class="scroll-y">
   <table id="msgTable">
     <thead><tr>
       <th data-i18n="th_time">时间</th><th data-i18n="th_seq">序号</th>
@@ -164,11 +124,13 @@
     </tr></thead>
     <tbody id="msgList"></tbody>
   </table>
+  </div>
 </section>
 
 <!-- ============ L2 协议消息流 ============ -->
 <section class="card" id="flowsec">
   <h3 data-i18n="flow_title">L2 协议消息流</h3>
+  <div class="scroll-y">
   <table id="flowTable">
     <thead><tr>
       <th data-i18n="th_time">时间</th><th data-i18n="th_dir">方向</th>
@@ -177,6 +139,7 @@
     </tr></thead>
     <tbody id="flowList"></tbody>
   </table>
+  </div>
 </section>
 
 <!-- ============ Orpah ID 签名上报（真实密钥，只读展示） ============ -->
@@ -244,7 +207,10 @@
     <button class="btn" id="btnRlReset" data-i18n="rl_btn_reset">清零计数</button>
   </div>
   <p class="hint" id="rlMsg" data-i18n="rl_idle">按「刷量」真的连发报文（走真链路）—— 同一 SN 连发命中 per-SN 防线；轮换 SN 则 per-SN 抓不住、由 per-Router 兜住。</p>
-  <p class="hint" data-i18n="sl_hint">设备侧（客户端）自限频是「自愿」的，不是一道防线：一台被改过或失控的设备根本不会做它，协议也要求不了它。它的实际好处只有三个：空口是共享介质（Router 侧虽然会丢，但那些帧已经上过空口、带宽已经花掉）、每次上报都要花电（免电池设备最紧的就是这个）、别去撞上游的桶（撞上等于没被听见还添了流量）。所以它的语义是「延后」而不是丢弃（丢自己的报等于漏报，找人场景不可接受）——计数栏里的「已延后」下一拍还会发。页面上的「刷量」按钮模拟的就是一台失控设备，它明确绕过自限频；那正是这条边界的现场证据：绕过之后才轮到 Router/Server 的桶开始丢。</p>
+  <!-- 两段共 ~2100 字的口径说明收进折叠：现场先看计数与表，要抠「哪条防线/边界在哪」再展开 -->
+  <details class="fold">
+    <summary data-i18n="rl_fold_why">限频口径：两侧与设备侧（哪些限、哪些不限、边界在哪）</summary>
+    <p class="hint" data-i18n="sl_hint">设备侧（客户端）自限频是「自愿」的，不是一道防线：一台被改过或失控的设备根本不会做它，协议也要求不了它。它的实际好处只有三个：空口是共享介质（Router 侧虽然会丢，但那些帧已经上过空口、带宽已经花掉）、每次上报都要花电（免电池设备最紧的就是这个）、别去撞上游的桶（撞上等于没被听见还添了流量）。所以它的语义是「延后」而不是丢弃（丢自己的报等于漏报，找人场景不可接受）——计数栏里的「已延后」下一拍还会发。页面上的「刷量」按钮模拟的就是一台失控设备，它明确绕过自限频；那正是这条边界的现场证据：绕过之后才轮到 Router/Server 的桶开始丢。</p>
   <div class="pub-head" data-i18n="rl_recent_head">最近被丢弃的（最新在前）</div>
   <table>
     <thead><tr>
@@ -256,6 +222,7 @@
     <tbody id="rlRecent"></tbody>
   </table>
   <p class="hint" data-i18n="rl_hint">§5.8 的限频分两处：Router 侧（网口上行）限带宽 —— 转发按 SN、未签名 REQ-CONNECT 按源 MAC；Server 侧限 CPU（ECDSA 验签之前）—— per-SN + per-Router（源地址），两条都过才放行。两边参数不同（Router 侧更宽）是有意的：两边都做窄，报文死在 Router 就看不出「哪道防线拦的」。边界照实说：per-SN 的 key 取自尚未验签的 sn，轮换 SN 就能绕过它；命中走失表的 REQ-CONNECT 与 ORPAH-FOUND 都不限（漏一条等于一个人没被找到）；全体一起被刷时各条防线都会到顶，那时只能靠上游/接入侧，限频不是“防住了”。刷量条数按服务端参数自动取。速度差照实说：仿真空口只有几 条/秒的吞吐，而两个桶补得比它快，所以页面上「轮换刷量」大致拦不下几条（不包装成演示效果）；要看两条线各拦一段，请看离线 demo_ratelimit.py（实测同一 SN 连发 200 条：Router 侧丢 159、Server 侧丢 35）。</p>
+  </details>
 </section>
 
 <!-- ============ 发现记录（走失命中） ============ -->
@@ -359,6 +326,60 @@
     </table>
   </div>
   <p class="hint" data-i18n="en_foot">参数是演示标定值，不是实测（真机标定属阶段二）。横轴 0.1 mW 是「恰好够每 300s 用 ES256 报一次」的门槛。</p>
+</section>
+
+<!-- ============ 告警通知（Webhook）配置 ============
+     放在**最后**：它是配置（填地址/看阈值表），不是“现场正在发生什么”。 -->
+<section class="card" id="notifyCard">
+  <h3 data-i18n="notify_title">告警通知（Webhook）</h3>
+  <div class="config-row id-ctl">
+    <label><span data-i18n="notify_url">Webhook 地址</span>
+      <input id="notifyUrl" type="text" spellcheck="false"
+             class="w-lg"
+             placeholder="http://127.0.0.1:8899/hook"></label>
+    <button class="btn" id="btnNotifySave" data-i18n="btn_apply">应用</button>
+    <label><span data-i18n="notify_level">最低推送级别</span>
+      <select id="notifyLevel">
+        <option value="warn">warn</option>
+        <option value="crit">crit</option>
+      </select></label>
+    <button class="btn" id="btnNotifyTest" data-i18n="notify_test">测试发送</button>
+    <label title="只在本机响；浏览器要求先点过页面才会出声">
+      <input type="checkbox" id="notifySound"> <span data-i18n="notify_sound">声音提醒</span></label>
+    <span class="hint" id="notifyMsg"></span>
+  </div>
+  <div class="id-grid">
+    <div class="id-row"><span data-i18n="notify_state">状态</span><b id="notifyState">-</b></div>
+    <div class="id-row"><span data-i18n="notify_sent">已推告警</span><b id="notifySent">-</b></div>
+    <div class="id-row"><span data-i18n="notify_failed">放弃投递</span><b id="notifyFailed" class="bad">-</b></div>
+    <div class="id-row"><span data-i18n="notify_queued">重试队列</span><b id="notifyQueued">-</b></div>
+    <div class="id-row"><span data-i18n="notify_next">下次重试</span><b id="notifyNext">-</b></div>
+    <div class="id-row"><span data-i18n="notify_retried">已重试</span><b id="notifyRetried">-</b></div>
+    <div class="id-row"><span data-i18n="notify_dropped">丢弃待重试</span><b id="notifyDropped" class="bad">-</b></div>
+    <div class="id-row"><span data-i18n="notify_skipped">低于级别未推</span><b id="notifySkipped">-</b></div>
+    <div class="id-row"><span data-i18n="notify_watching">正在跟踪</span><b id="notifyWatch">-</b></div>
+    <div class="id-row full"><span data-i18n="notify_err">最近错误</span><b id="notifyErr">-</b></div>
+  </div>
+  <!-- 长说明收进折叠：首屏看状态，要抠口径再展开（默认收起） -->
+  <details class="fold">
+    <summary data-i18n="notify_why">推送口径与边界</summary>
+    <p class="hint" data-i18n="notify_hint">出站只有一个 HTTP POST：无鉴权；失败会按固定退避（1s/5s/30s）有界重试，试完仍失败才计「放弃投递」——语义是「至少一次」，超时的那次对方可能已经收到，接收端要自己按 key 去重；重试队列只在内存里，进程重启即丢（不做持久化）。「推过的告警」也记在内存里 —— 进程重启后活跃告警会被重推一遍。同一告警持续期间只推一次，级别升高（warn→crit）再推一次。</p>
+    <p class="hint" data-i18n="notify_sound_hint">声音提醒只是本机提示音（默认关，记在本机浏览器里）：关掉页面就没有声音，它不等于「通知已送达」——真正的送达看 Webhook 那一列。</p>
+  </details>
+  <div class="pub-head" data-i18n="notify_recent">最近投递（最新在前）</div>
+  <table>
+    <thead><tr>
+      <th data-i18n="th_time">时间</th><th data-i18n="notify_th_event">事件</th>
+      <th data-i18n="notify_th_alert">告警</th><th data-i18n="notify_th_level">级别</th>
+      <th data-i18n="notify_th_state">结果</th><th data-i18n="notify_th_err">说明</th>
+    </tr></thead>
+    <tbody id="notifyRecent"></tbody>
+  </table>
+  <!-- 阀值表 20 行：默认收起（要查阀值再展开） -->
+  <details class="fold">
+    <summary data-i18n="alert_th_head">当前阀值（可用环境变量覆盖）</summary>
+    <div class="id-grid" id="alertTh"></div>
+  </details>
 </section>
 
 <script src="ui_i18n.js"></script>

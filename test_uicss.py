@@ -98,6 +98,58 @@ def check_css():
         check(f"{cls} 带 max-width: 100%", bool(m) and "max-width: 100%" in m.group(1))
 
 
+def check_hierarchy():
+    """信息层级（UI ③）的守卫：长口径必须收进折叠、折叠标签成对、长列表要限高。
+
+    为什么用文本检查：这几条坏掉同样**不会让任何测试变红**，但现场体验直接崩 ——
+    卡片里塞 2000 字说明，看的人得滚三屏才见到表；`<details>` 少一个闭合标签则整段
+    后续排版串位（本次实测就漏过一个 `</details>`，页面上看不出来，只能靠数标签）。
+    """
+    print("== 信息层级：长口径折叠 + 标签成对 + 长列表限高 ==")
+    css = strip_comments(open(CSS, encoding="utf-8").read())
+    check("style.css 有 `details.fold` 样式（折叠块）", "details.fold" in css)
+    check("style.css 有 `.scroll-y`（长列表限高滚动）", ".scroll-y" in css)
+
+    # 折叠块里的关键字（都是 >300 字的“口径/图例”类说明；现场先看数据，要抠再展开）
+    folded = {
+        "index.html": ["sl_hint", "rl_hint", "notify_why"],
+        "track.html": ["tk_devmul_hint", "tk_act_hint"],
+        "replay.html": ["rp_legend", "rp_legend_map", "rp_bias_hint", "rp_trust_hint"],
+    }
+    bad_fold, bad_nest, dup = [], [], []
+    for name, keys in folded.items():
+        html = open(os.path.join(STATIC, name), encoding="utf-8").read()
+        # 标签成对（多/少一个都会静默串位）
+        if html.count("<details") != html.count("</details>"):
+            bad_nest.append((name, html.count("<details"), html.count("</details>")))
+        for k in keys:
+            needle = f'data-i18n="{k}"'
+            if html.count(needle) != 1:
+                dup.append((name, k, html.count(needle)))
+                continue
+            i = html.index(needle)
+            # 最近一个 <details 出现在最近一个 </details> 之后 → 这段文字在折叠块里面
+            if html.rfind("<details", 0, i) < html.rfind("</details>", 0, i):
+                bad_fold.append((name, k))
+    check("长口径说明都在 <details class=\"fold\"> 里面（每处只一份）",
+          not bad_fold and not dup, bad_fold + dup)
+    check("每页 <details> 与 </details> 数量相等（漏一个会静默串位）", not bad_nest, bad_nest)
+
+    # 长列表限高：replay 的两个列表（时间轴 / 报文流）用页面内 `ul.tl`，
+    # 首页两张长表用 style.css 的 `.scroll-y`。
+    rp = open(os.path.join(STATIC, "replay.html"), encoding="utf-8").read()
+    tl = css_rule(rp.replace("\n", " "), "ul.tl")
+    check("replay 两个长列表（时间轴 / 报文流）都限高滚动",
+          rp.count('class="tl"') >= 2 and "max-height" in tl, tl[:60])
+    idx = open(os.path.join(STATIC, "index.html"), encoding="utf-8").read()
+    check("首页长表用了 .scroll-y", idx.count('class="scroll-y"') >= 2, idx.count('class="scroll-y"'))
+
+
+def css_rule(css, sel):
+    m = re.search(re.escape(sel) + r"\s*\{([^}]*)\}", css)
+    return m.group(1) if m else ""
+
+
 def check_pages():
     print("== 页面：内联宽度、viewport、共享件 ==")
     pages = sorted(glob.glob(os.path.join(STATIC, "*.html")))
@@ -168,6 +220,7 @@ def main():
     check_css()
     check_pages()
     check_nav()
+    check_hierarchy()
     if FAILS:
         print(f"UI 样式守卫：有问题（{len(FAILS)} 处）")
         return 1

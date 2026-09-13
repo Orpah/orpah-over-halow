@@ -99,6 +99,26 @@ select.w-md, select.w-lg { min-width: 0; }
 .card h3 { margin: 0 0 10px; font-size: 15px; }
 .hint { color: var(--mut); font-size: 12px; font-weight: 400; }
 
+/* ---- 长说明折叠 / 长表限高（2026-09-13，信息层级）----
+   实测背景：首页 12 张卡一列到底 = 8.8 屏；`.hint` 说明文字 replay 3090 / track 1924 / index 1587 字；
+   两张实时表（报文流 1705px / L2 消息流 2027px）把页面撑得很长，而现场真正要看的是**最新几条**。
+   做法：① 长口径写进 `<details class="fold">`（默认收起，要抠细节再展开）；
+   ② 长表给一个限高的滚动容器（`.scroll-y`），卡片高度回到可扫的量级。
+   **只给需要的那几个容器加**——不要给 `.card` 加 `overflow`（会破坏卡内 sticky 表头）。 */
+details.fold { margin: 6px 0; }
+details.fold > summary {
+  cursor: pointer; color: var(--acc); font-size: 12px; padding: 2px 0;
+  list-style: none;               /* 去掉默认三角，用自画的 ▸ 保持对齐 */
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: "\25B8"; margin-right: 6px; display: inline-block; }
+details.fold[open] > summary::before { content: "\25BE"; }
+details.fold > summary:hover { text-decoration: underline; }
+details.fold > :not(summary) { margin-top: 4px; }
+.scroll-y { max-height: 340px; overflow-y: auto; }
+/* 表内滚动时表头跟着滚走：给限高表再加一条细边框提示“这里可以滚” */
+.scroll-y { border-bottom: 1px solid var(--bd); }
+
 /* ---- 拓扑 ---- */
 .topo {
   display: flex; align-items: stretch; justify-content: center; gap: 6px;
