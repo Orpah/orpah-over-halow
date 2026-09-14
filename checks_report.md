@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-14 13:37:42
-- git HEAD：`e0ce43c`
+- 时间：2026-09-14 13:47:05
+- git HEAD：`8ec75c2`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（35/35 套件通过）
 
@@ -10,16 +10,16 @@
 | 套件 | 脚本 | 结果 | 耗时 | 说明 |
 |---|---|---|---|---|
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
-| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.2s | 通过 |
+| 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.1s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
 | 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.7s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 1.5s | 通过 |
 | 告警通知（边沿触发 / Webhook / 失败可见） | `test_notify.py` | ✅ PASS | 0.1s | 通过 |
-| 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.1s | 通过 |
+| 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.0s | 通过 |
 | 时钟可信（ts=0 无 RTC） | `test_clock.py` | ✅ PASS | 0.5s | 通过 |
-| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.5s | 通过 |
+| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.6s | 通过 |
 | UI 服务器契约 | `test_server.py` | ✅ PASS | 0.8s | 通过 |
-| 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.0s | 通过 |
+| 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.1s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
 | 能量轴（免电池客户端） | `test_energy.py` | ✅ PASS | 0.0s | 通过 |
 | 能量标定入口（实测参数 + 出处） | `test_energy_calib.py` | ✅ PASS | 0.1s | 通过 |
@@ -28,21 +28,21 @@
 | 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.3s | 通过 |
 | 地图共享件（map.js：基点/野外包 + maps.py） | `test_mapjs.py` | ✅ PASS | 0.2s | 通过 |
 | 首页转义口径（app.js：esc/alertText 单一出口） | `test_appjs.py` | ✅ PASS | 0.1s | 通过 |
-| 限频（§5.8 令牌桶 / 两条防线） | `test_ratelimit.py` | ✅ PASS | 0.1s | 通过 |
+| 限频（§5.8 令牌桶 / 两条防线） | `test_ratelimit.py` | ✅ PASS | 0.2s | 通过 |
 | 设备侧自限频（§5.8 设备那一环，自愿） | `test_selflimit.py` | ✅ PASS | 0.1s | 通过 |
-| Router 下行路径（来源校验） | `test_router.py` | ✅ PASS | 0.1s | 通过 |
+| Router 下行路径（来源校验） | `test_router.py` | ✅ PASS | 0.2s | 通过 |
 | 下行真实性（F-14 B：签名/重放/时间窗） | `test_downlink.py` | ✅ PASS | 0.1s | 通过 |
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
-| UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 3.2s | 通过 |
+| UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 3.4s | 通过 |
 | 数据新鲜度（freshness.py + fresh.js） | `test_fresh.py` | ✅ PASS | 0.2s | 通过 |
-| 客户端设备仿真器（设备侧旋钮/单一源守卫） | `test_client_sim.py` | ✅ PASS | 8.8s | 通过 |
+| 客户端设备仿真器（设备侧旋钮/单一源守卫） | `test_client_sim.py` | ✅ PASS | 9.9s | 通过 |
 | L1 端到端 | `demo_l1.py` | ✅ PASS | 1.3s | 通过 |
 | L2 消息流 | `demo_l2.py` | ✅ PASS | 2.3s | 通过 |
 | L3 多 Router 漫游/去重 | `demo_l3.py` | ✅ PASS | 4.2s | 通过 |
 | L3b 主动拉表 | `demo_l4.py` | ✅ PASS | 1.2s | 通过 |
 | 防 spoof 空口端到端 | `demo_spoof.py` | ✅ PASS | 1.8s | 通过 |
 | 限频（§5.8）端到端 | `demo_ratelimit.py` | ✅ PASS | 7.6s | 通过 |
-| 客户端设备仿真器端到端 | `demo_client_sim.py` | ✅ PASS | 4.0s | 通过 |
+| 客户端设备仿真器端到端 | `demo_client_sim.py` | ✅ PASS | 3.9s | 通过 |
 | UART/AT 数据面（步骤 b 排练） | `demo_client_uart.py` | ✅ PASS | 8.8s | 通过 |
 
 ## 关键输出
@@ -58,7 +58,7 @@
       OK   truth_at：空输入 → 空表（页面显示“不适用”，不编 0）
     全部通过
 
-### 密钥生命周期 — PASS（0.2s）
+### 密钥生命周期 — PASS（0.1s）
 
     == 1. 签发（幂等） ==
     == 2. 验签（第 1 代） ==
@@ -76,7 +76,8 @@
     == 3. 防线语义 ==
     == 4. 攻击确实改动了报文（不是把合法报文原样发了一遍） ==
     == 5. 顺序无关（revoked 用临时库，不污染传进来的 keystore） ==
-      OK   revoked 排最前 vs 排最后，逐条 (kind, 裁决) 完全一致  （与第 2 节的默认顺序对比；两侧顺序不同，故按集合比）
+    == 6. nonce 缓存：有界 LRU（对齐 §5.5 建议）—— 刷量不能清空历史 ==
+      OK   已知边界（如实：旧 nonce 被挤出后，这条重放**会被受理** —— ts=0 设备上时间窗也帮不上）  got=None accepted=True
     全部通过
 
 ### 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） — PASS（0.7s）
@@ -106,7 +107,7 @@
     PASS  首次出现 → 推一次（event=alert）
     PASS  ★ 同一告警持续存在 → 后续评估**一次都不推**（否则每 3 秒刷一遍）
 
-### 指标面板纯计算 — PASS（0.1s）
+### 指标面板纯计算 — PASS（0.0s）
 
     PASS  签名：总数/通过/被拒
     PASS  签名：失败率 1/4
@@ -126,7 +127,7 @@
       OK   并发：4 写 × 50 条 + 2 读线程 → 无异常且一条不丢
     时钟可信测试全部通过
 
-### IoTDB 审计/时间窗 — PASS（0.5s）
+### IoTDB 审计/时间窗 — PASS（0.6s）
 
     == 1. actor 字段 ==
     == 2. query_events 回读 actor ==
@@ -145,10 +146,10 @@
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
-    Ran 45 tests in 0.500s
+    Ran 45 tests in 0.580s
     OK
 
-### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.0s）
+### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
 
     == 1. 黄金样本（校验位只算 ORG-UNIQUE，不含 CC）==
     == 2. SN 边界（格式：CC-ORG-UNIQUE[-CHECK]，Crockford Base32 去 I L O U）==
@@ -239,7 +240,7 @@
     == 能量标定出处：开页拉整表 / 单一字段表 ==
     == 覆盖（缺口/曲线）：接线不能静默空白 ==
 
-### 限频（§5.8 令牌桶 / 两条防线） — PASS（0.1s）
+### 限频（§5.8 令牌桶 / 两条防线） — PASS（0.2s）
 
     [router] [1] 上行 ORPAH-REPORT sn=CN-WH01-9AF3C1D2 seq=0 -> 127.0.0.1:59998
     [router] [2] 上行 ORPAH-REPORT sn=CN-WH01-9AF3C1D2 seq=1 -> 127.0.0.1:59998
@@ -261,7 +262,7 @@
     Ran 24 tests in 0.007s
     OK
 
-### Router 下行路径（来源校验） — PASS（0.1s）
+### Router 下行路径（来源校验） — PASS（0.2s）
 
     [router] LOST-TABLE 更新（1 项）
     [router] 下行**未做真实性校验**（没配 Server 公钥 `ORPAH_DOWN_PUB`）：只做了来源校验（A）—— 同源伪造/重放挡不住。配上公钥后自动启用签名校验（B）
@@ -290,7 +291,7 @@
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
-### UI 样式/窄屏守卫 — PASS（3.2s）
+### UI 样式/窄屏守卫 — PASS（3.4s）
 
     == style.css：页面不再被写死宽度、窄屏档位齐全 ==
     == 页面：内联宽度、viewport、共享件 ==
@@ -311,7 +312,7 @@
       OK   index 的新鲜度卡在拓扑之前
     数据新鲜度：全部通过
 
-### 客户端设备仿真器（设备侧旋钮/单一源守卫） — PASS（8.8s）
+### 客户端设备仿真器（设备侧旋钮/单一源守卫） — PASS（9.9s）
 
     [client] [rx 1] ORPAH-ACCESS-INFO sn=CN-WH01-9AF3C1D2 status=-
     [client] [rx 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 status=TRACKED
@@ -319,7 +320,7 @@
     [client] [rx 1] ORPAH-FOUND sn=CN-WH01-9AF3C1D2 status=-
     [client] 注入 ORPAH-REQ-CONNECT sn=CN-WH01-9AF3C1D2
     [client] [1] 注入 ORPAH-REPORT sn=CN-WH01-9AF3C1D2 rssi=-55 (102B)
-    Ran 37 tests in 8.621s
+    Ran 37 tests in 9.586s
     OK
 
 ### L1 端到端 — PASS（1.3s）
@@ -358,7 +359,7 @@
 
       无认证空口防 spoof 端到端演示
       被冒充设备 SN : CN-WH01-9AF3C1D2
-      攻击者 SN    : CN-WH01-7JRBQ8SJGN-96（未登记 → 服务器不认识）
+      攻击者 SN    : CN-WH01-ZBSZYV7VV8-49（未登记 → 服务器不认识）
       链路          : Client→STA→空口→AP→Router→UDP:19847→Server
       用例数        : 14（含 1 条合法对照）
     [server] 监听 127.0.0.1:19847 (UDP)，等待 ORPAH 报文…
@@ -376,7 +377,7 @@
       🎉 限频端到端验收全部通过
     ==========================================================================
 
-### 客户端设备仿真器端到端 — PASS（4.0s）
+### 客户端设备仿真器端到端 — PASS（3.9s）
 
     --- 第一轮：设备跑两拍（L2 会话 + 已签 ID 上报）---
     --- 第二轮：mark 走失 sn=CN-WH01-9AF3C1D2 → 设备再跑一拍 ---

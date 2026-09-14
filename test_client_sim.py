@@ -122,11 +122,11 @@ def make_sim(**kw):
 
     默认**关掉**自限频：多数用例要断言"结构"（发了哪几条、什么顺序），
     限流会把条数改小、让断言变成在测限流；限流单独在 `TestSelfLimit` 里显式打开。
+    传输用 `ClientHost(bus=…)` **显式注入**（不再是“构造完再改 `.sta`”）。
     """
     limit = kw.pop("self_limit", False)
-    kw.setdefault("client", ClientHost(sta_port=1, self_limit=limit))
+    kw.setdefault("client", ClientHost(sta_port=1, self_limit=limit, bus=_FakeSta()))
     sim = cs.DeviceSim(sn=SN, log=None, **kw)
-    sim.client.sta = _FakeSta()
     sim.clock = _Clock()
     sim._now = sim.clock.now
     sim._sleep = sim.clock.sleep
@@ -334,7 +334,7 @@ class TestSelfLimit(unittest.TestCase):
         且用 `waiting.wait_until` 等条件（不是猜次数），超时就**可见地失败**。
         """
         lim = RL.DeviceLimiter(enabled=True, min_interval=0.05, burst=1)
-        sim = make_sim(client=ClientHost(sta_port=1, limiter=lim))
+        sim = make_sim(client=ClientHost(sta_port=1, limiter=lim, bus=_FakeSta()))
         sim.cycle()
         n1 = len(sim.client.sta.frames)
         self.assertEqual(n1, 1)                        # 起手只有 1 条能过（突发 1）
@@ -344,7 +344,9 @@ class TestSelfLimit(unittest.TestCase):
             sim.cycle()                                # 每拍重试；桶回补后应当发得出去
             return len(sim.client.sta.frames) > n1
 
-        self.assertTrue(waiting.wait_until(refilled, timeout=2.0, interval=0.02),
+        # 超时 1.0 s：回补只需 50 ms；这里等的是**真实时间**（限流器的桶用 monotonic，
+        # 注入的假时钟管不到它）—— 故不要写大（旧值 2.0 白等）。
+        self.assertTrue(waiting.wait_until(refilled, timeout=1.0, interval=0.02),
                         "延后的条本应在桶回补后发出去（延后 ≠ 丢弃）")
 
 
@@ -395,7 +397,8 @@ class TestConnectAndKeystore(unittest.TestCase):
 
     def test_register_keystore_writes_row(self):
         # Windows：SQLite 连接不放会锁住文件 → 临时目录清理报 PermissionError
-        # （实测踩到）。用 ignore_cleanup_errors，并顺手关掉两边的连接。
+        # （实测踩过）。故：`ignore_cleanup_errors` 兼底 + **try/finally 里先关连接**
+        # （断言失败时也要关，否则清理会因为漏关而失败）。
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             path = os.path.join(d, "ks.db")
             rec = cs.register_keystore(path, SN)
@@ -404,11 +407,13 @@ class TestConnectAndKeystore(unittest.TestCase):
             self.assertEqual(keys[0]["state"], oid.KEY_ACTIVE)
             self.assertTrue(keys[0]["model"].startswith("CH32V203"), keys[0])
             ks = ksdb.KeyStoreDB(path)                # 重新开库读回（不是只看返回值）
-            act = ks.active_of(SN)
-            self.assertEqual(act["model"], "CH32V203+TX-AH+ATECC608B")
-            # 登记的必须是**演示派生**密钥（与仿真器真发出去的那把一致）
-            self.assertEqual(act["pubkey"], oid.Device(sn=SN, demo_key=True).pubkey)
-            ks.db.close()
+            try:
+                act = ks.active_of(SN)
+                self.assertEqual(act["model"], "CH32V203+TX-AH+ATECC608B")
+                # 登记的必须是**演示派生**密钥（与仿真器真发出去的那把一致）
+                self.assertEqual(act["pubkey"], oid.Device(sn=SN, demo_key=True).pubkey)
+            finally:
+                ks.db.close()
 
 
 class TestSingleSourceGuard(unittest.TestCase):

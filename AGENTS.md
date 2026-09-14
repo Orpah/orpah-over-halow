@@ -130,6 +130,15 @@
     后者是为了让第一道防线（格式）也有用例——此前 13 条里没有一条会被它拦下）——
     `demo_spoof.py`（真链路端到端）、`test_spoof.py`（离线逐条）、页面（index 选类型注入 / `attack.html` 面板）共用，
     否则“演示的”与“测的”会漂移。
+  - **nonce 去重缓存 = 有界 LRU（2026-09-14 review 后修，`orpah_id.NonceCache`）**：原来是
+    「满了就 `clear()` **整本清空**」—— 那等于给了攻击者一个**洗掉重放史**的开关：
+    连丢 `per_device`(默认 1024) 条随机 nonce 就把缓存清空，随后**重放一条抓到的报文照样通过**
+    （`ts=0` 的设备没有时间窗，nonce 是**唯一**那道防线，见 SPEC §5.5）。
+    现改为 `OrderedDict` 分桶 + `move_to_end` 触碰 + 超限 `popitem(last=False)` 淘汰**最旧**的一条
+    （SPEC §5.5 推荐的做法），`size(sn)` 供观测；写入位置仍在**验签之前**（对齐 SPEC §9.3 第 3 步）。
+    ★ **如实边界**：有界缓存终究会淘汰**老** nonce → **极高强度**注入（远超容量）后，那条老重放仍可能被收下
+    （`test_spoof.py` §6 专门锁这条事实，不许写成“已防住”；真防线是签名 + 时间窗 + 限频，非 nonce 本身）。
+    ★ 单接收线程（`server._loop`）内调用 → 不加内部锁；**改多线程收包前必须补锁**。
   - 页面入口：index 的 Orpah ID 卡片 →「注入伪造上报」/「跑全部攻击」（走真空口链路，落 `id_reject`）；
     或 **`attack.html` 攻击流量独立面板**（见下条）。
   - **攻击流量独立面板（`attack.html` + `attack.js`，2026-09-13）**：以前攻击结果只能混在首页的
@@ -322,6 +331,13 @@
     `demo_client_uart.py` 用模拟器 AT 控制台把同一套线路协议双向跑一遍（纯 PC 排练）。
     ★ **未在真机验证**：仓里两份记录不一致（`T-Halow-RJ45` 手册有 `AT+TXDATA`，
     `halow-demo` 真机实测说 fmac 的 AT 无用户数据命令）→ 上机首测用 `--dump-lines` 认定。
+    ★ **传输缝 = `ClientHost(bus=…)` 显式注入 + `set_transport()` 校验接口**（2026-09-14 review 后改）：
+    原来靠“构造完再改 `.sta`”，传错对象要到运行中才炸（或**静默发到错的地方**）；
+    现在 `set_transport()` 按 `TRANSPORT_API=(connect,close,send_frame,recv_frame)` 核，缺一个**当场 `TypeError`**
+    （实测有效：`test_selflimit` 的假 STA 少 `recv_frame` → 立刻红，不是跑一半才发现）。
+    ★ **`host_serial.SerialAtBus` 有两把锁，别合并**：`_tx_lock`（AT+数据模式整段序列）与
+    `_lock`（行缓冲/帧队列）。**合成一把 = 死锁**（等 `OK` 时会挡住读线程，而 `OK` 只能由读线程收进来）。
+    重同步填充量 `_RESYNC_FILL = 1700`（来源 `T-Halow-RJ45/tools/thalow_config.py`；多发无害）。
   - **告警处置态（2026-09-12，§三 A 方案）**：`case_overtime` **只在「无人接手」时**才报 ——
     `Case.handler` 是与 `status` **正交**的一维（不是新状态；「处置中」是页面派生显示），
     接手人=自由文本（复用审计 `actor`，**不建 operators 表/不做登录**）。改 `cases` 表列名/语义时记住：

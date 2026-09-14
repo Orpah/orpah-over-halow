@@ -114,6 +114,54 @@ ck("revoked 排最前 vs 排最后，逐条 (kind, 裁决) 完全一致",
    == sorted((r["kind"], r["got"]) for r in rows3),
    "（与第 2 节的默认顺序对比；两侧顺序不同，故按集合比）")
 
+print("== 6. nonce 缓存：有界 LRU（对齐 §5.5 建议）—— 刷量不能清空历史 ==")
+# 为什么单独立一节：`verify_report` 是在**验签之前**把 nonce 记进缓存的（§9.3 第 3 步），
+# 所以**任何人**都能用随机 nonce 刷缓存；而免电池设备 `ts=0` 时**时间窗不生效**（§5.5），
+# nonce 去重是那时**唯一**的防重放手段。旧的 `set.clear()` 会把全部历史一次抹掉
+# → 攻击者刷满 1024 条就能让"抓到的那条合法报文"的重放在 nonce 这一道消失（实测确认过）。
+_sn6 = dev.sn
+nc = oid.NonceCache(per_device=8)
+for i in range(8):
+    nc.add(_sn6, f"N{i:02d}")
+ck("容量内不淘汰（装满 8 条都还在）", nc.size(_sn6) == 8)
+nc.add(_sn6, "N08")
+ck("超过上限只淘汰**最旧**的一条（N00 出局，N01..N08 全在）",
+   (not nc.seen(_sn6, "N00")) and all(nc.seen(_sn6, f"N{i:02d}") for i in range(1, 9)),
+   f"size={nc.size(_sn6)}")
+ck("容量不会无限涨（有界）", nc.size(_sn6) == 8)
+
+nc2 = oid.NonceCache(per_device=16)
+nc2.add(_sn6, "ACCEPTED-THEN-FLOODED")
+for i in range(15):                       # 攻击者刷随机 nonce（远不到容量）
+    nc2.add(_sn6, f"JUNK{i}")
+ck("★ 刷量到接近满桶：**最近受理过的 nonce 还在**（旧实现 set.clear() 会把它一起抹掉）",
+   nc2.seen(_sn6, "ACCEPTED-THEN-FLOODED"), f"size={nc2.size(_sn6)}")
+
+# 端到端：ts=0 设备（时间窗不生效）真重放一遍
+_ks6 = oid.KeyStore()
+_ks6.register(dev, model="CH32V203+TX-AH+ATECC608B", firmware="1.0.3")
+used6 = oid.NonceCache(per_device=8)
+_p6 = dev.report(level=0, ts=0)            # ts=0：跳过时间窗 → 全靠 nonce
+_v6a = oid.verify_report(_p6, _ks6, now=now, used_nonces=used6)
+ck("ts=0 的合法报文先被受理", bool(_v6a.get("accepted")), f"got={_v6a.get('error')}")
+for i in range(6):                         # 刷 6 条垃圾（**不满桶**）
+    _junk = copy.deepcopy(_p6)
+    _junk["payload"]["nonce"] = f"JUNK6-{i}"
+    oid.verify_report(_junk, _ks6, now=now, used_nonces=used6)   # 会 signature_invalid，但 nonce 已入缓存
+_v6b = oid.verify_report(_p6, _ks6, now=now, used_nonces=used6)
+ck("★ 期间被刷了 6 条（不满桶）后重放 → 仍被 nonce 挡下（replay_detected）",
+   _v6b.get("error") == "replay_detected", f"got={_v6b.get('error')}")
+# ★ 如实展示残留边界：容量有界 ⇒ 刷**超过容量**后，被挤出的旧 nonce 重放会被**放行**
+#   （所以不能把 nonce 说成"已防住重放"；真正的防线是签名+时间窗+限频）
+for i in range(20):                        # 这次刷满并超过容量
+    _junk = copy.deepcopy(_p6)
+    _junk["payload"]["nonce"] = f"FLOOD-{i}"
+    oid.verify_report(_junk, _ks6, now=now, used_nonces=used6)
+_v6c = oid.verify_report(_p6, _ks6, now=now, used_nonces=used6)
+ck("已知边界（如实：旧 nonce 被挤出后，这条重放**会被受理** —— ts=0 设备上时间窗也帮不上）",
+   bool(_v6c.get("accepted")) and _v6c.get("error") is None,
+   f"got={_v6c.get('error')} accepted={_v6c.get('accepted')}")
+
 print()
 if FAIL:
     print(f"失败 {len(FAIL)} 项：" + "；".join(FAIL))

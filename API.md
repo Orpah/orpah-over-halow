@@ -260,6 +260,9 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 - `kind` 取自 `spoof.UI_KINDS`（**排除 `revoked`**：页面用的是活密钥库，跑一次会把在跑的设备搞成验不过；
   撤销场景用现有的 `revoke`/`unrevoke` 按钮演示）。
 - `replay` 用**最近一条上报的 nonce**（一定已被 server 记过）→ 必被 nonce 去重拦下。
+- nonce 去重缓存是**有界 LRU**（`orpah_id.NonceCache`，每设备 `per_device` 条，超限淘汰**最旧**）：
+  满了**不清空**（旧实现 `clear()` 等于给攻击者一个“洗掉重放史再重放”的开关）。
+  ★ 如实边界：有界缓存终究会淘汰旧 nonce → 极高强度注入后那条老重放仍可能被收下（`test_spoof.py` §6 锁这条）。
 - 攻击清单与「是哪道防线拦下的」见 `ROADMAP.md` §四；端到端脚本 `demo_spoof.py`、自检 `test_spoof.py`
   与 `test_attack.py`（面板认领逻辑 + 单一源 + 页面守卫）。
 

@@ -26,6 +26,7 @@ import json
 import os
 import re
 import time
+from collections import OrderedDict
 
 try:
     from cryptography.hazmat.primitives.asymmetric import ec
@@ -766,21 +767,52 @@ class KeyStore:
 
 
 class NonceCache:
-    """按 sn 缓存近期 nonce（防重放，§5.5；每设备容量上限）。"""
+    """按 sn 缓存近期 nonce（防重放，§5.5）：**每设备容量上限 + LRU 淘汰**。
+
+    ★ 为什么不是“满了就清空”（2026-09-14 改，用户 review 指出后实测确认）：
+    `verify_report` 是在**验签之前**就把 nonce 记进缓存的（与规范 §9.3 伪代码第 3 步一致），
+    所以**任何人**都能用随机 nonce 刷缓存 —— 而免电池设备 `ts=0` 时**时间窗本就不生效**
+    （§5.5），nonce 去重是那时**唯一**的防重放手段。旧的 `set.clear()` 会把**全部**历史
+    一次抹掉：攻击者只要在抓到一条合法报文后刷满 1024 条随机 nonce，那条报文的重放就能
+    在 nonce 这一道“消失” —— 防线被打穿，且**不报错、不留痕**。
+    LRU 只淘汰**最旧**的一条：刷量最多挤掉旧记录，**动不了最近的历史**
+    （规范 §5.5 的建议也正是“按 sn 缓存近期 nonce（**建议 LRU**，容量 1024/设备）”）。
+
+    ★ 诚实的残留边界：容量有界 ⇒ 高频注入终究能挤出**较旧**的 nonce —— 这是有界缓存的固有
+    代价（不能用“已防住”包装）。真正的防线是“签名 + 时间窗 + 限频（§5.8）”，nonce 只是其中一环。
+
+    并发：服务端由**单接收线程**调用（`server.py::_loop` → `_handle`）→ 不需要内部锁；
+    将来若改成多线程收包，**必须**在这里加锁（`OrderedDict` 并发写会抛 RuntimeError）。
+    """
 
     def __init__(self, per_device=1024):
-        self._per_device = per_device
-        self._cache = {}
+        self._per_device = int(per_device)
+        self._cache = {}                 # sn → OrderedDict(nonce → None)，**最旧在前**
+
+    def _bucket(self, sn):
+        b = self._cache.get(sn)
+        if b is None:
+            b = self._cache[sn] = OrderedDict()
+        return b
 
     def seen(self, sn, nonce):
-        s = self._cache.get(sn)
-        return nonce in s if s else False
+        """见过没？**命中会刷新它的“最近使用”顺序**（LRU 语义）。"""
+        b = self._cache.get(sn)
+        if not b or nonce not in b:
+            return False
+        b.move_to_end(nonce)
+        return True
 
     def add(self, sn, nonce):
-        s = self._cache.setdefault(sn, set())
-        if len(s) >= self._per_device:
-            s.clear()          # 简化：满了清空（真实部署用 LRU）
-        s.add(nonce)
+        b = self._bucket(sn)
+        b[nonce] = None
+        b.move_to_end(nonce)
+        while len(b) > self._per_device:      # 淘汰最旧的（O(1)，不用扫描）
+            b.popitem(last=False)
+
+    def size(self, sn):
+        """该 SN 当前缓存了多少条（观测/测试用）。"""
+        return len(self._cache.get(sn, ()))
 
 
 # ---------------------------------------------------------------------------

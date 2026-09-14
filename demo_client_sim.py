@@ -140,7 +140,6 @@ def main():
     print(f"服务端收到 REPORT={rec.report} 条；ID 上报 {len(rec.id)} 条，"
           f"首条 accepted={first.get('accepted')} alg={first.get('alg')} "
           f"level={first.get('level')} trust={first.get('trust')}")
-
     # 7) mark 走失 → 再跑一拍：设备应当看到 tracked=True + TRACKED
     print(f"\n--- 第二轮：mark 走失 sn={sn} → 设备再跑一拍 ---")
     srv.mark_tracked(sn, note="demo-client-sim")
@@ -156,6 +155,9 @@ def main():
         ("① L2 完成（ACCESS-INFO 到达设备）", ok_tracked0),
         ("① L2 完成（TRACKING-STATUS 到达设备）", ok_status0),
         ("② 服务端收到 REPORT", ok_srv),
+        # 先给一条自己的判据：`rec.id` 为空时后面那些 `first.get(…)` 会全变 None，
+        # 失败信息会指向“ts_src 不对”这种错地方（实际是根本没收到 ID 上报）。
+        ("② 收到 ID 上报（有验签记录；否则后面几条都无从谈起）", bool(rec.id)),
         ("② 已签 ID 上报**验签通过**", ok_id),
         ("③ 无 RTC 设备：ts_src=server（服务端用接收时刻记账）",
          first.get("ts_src") == "server"),

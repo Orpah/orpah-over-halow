@@ -129,6 +129,8 @@ class DeviceSim:
         两条路都走**规范里那条路径**（不许直接写死 level）：
           · 能量模式：能量决定的就是级别本身（HS256）→ 传 `level=1`；
             **与"哪个环节坏了"是两回事** —— 混起来会把"省电"错报成"Slot0 签名失败"。
+            注意：能量模式下**不降级时走 `auto`**（= `pick_level` 全正常 → L0/ES256），
+            只有降级时才强制 L1/HS256；也就是说 `level=None` 并不代表“没选级”。
           · 否则：故障注入模式（`orpah_id.LEVEL_MODES`，§8.2）→ 交给 `pick_level` 选。
         """
         if self.en_on and self.level is not None:
@@ -346,9 +348,7 @@ def main():
         import host_serial
         bus = host_serial.SerialAtBus(args.serial_port, args.baud, name="client_sim")
     client = ClientHost(sta_port=args.sta_port, sta_host=args.sta_host, sn=sn,
-                        rssi=args.rssi, self_limit=not args.no_self_limit)
-    if bus is not None:
-        client.sta = bus                                  # 换掉底层收发（HostBus → SerialAtBus）
+                        rssi=args.rssi, self_limit=not args.no_self_limit, bus=bus)
     sim = DeviceSim(
         sta_host=args.sta_host, sta_port=args.sta_port, sn=sn, rssi=args.rssi,
         every=args.every, cycles=args.cycles,

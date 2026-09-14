@@ -93,7 +93,7 @@ def main():
     # ① 设备经 UART 上行：用设备仿真器真发（它自己组报文、签名、决定节奏）
     devsim = cs.DeviceSim(sn=args.sn, every=2.0, cap_rtc=False, ts_zero=True,
                           battery_mv=3700, log=None)
-    devsim.client.sta = busB                       # ★换底层传输：TCP host 口 → UART/AT
+    devsim.client.set_transport(busB)              # ★换底层传输：TCP host 口 → UART/AT
     devsim.client.on_recv = devsim.on_down
     print("\n--- ① 设备经 AT+TXDATA 发两拍，看 AP 侧是否真收到 ---")
     devsim.run(cycles=2)
@@ -128,7 +128,10 @@ def main():
             p = op.parse_eth_frame(f)
             m = op.decode_msg(p[1]) if p else None
             if m:
-                devsim.on_down(m)                  # 交给设备处理（真链路里由读线程做）
+                # 这条下行是**从模块到 host 的那条线**送进来的；真实客户端里由 `ClientHost._rx_loop`
+                # 收到后调 `on_recv`，本脚本没有那个读线程（是脚本自己扮演的）→ 这里手动交给设备。
+                # 它**只记录、不改行为**（见 DeviceSim.on_down 的说明）。
+                devsim.on_down(m)
             return bool(m and m.get("type") == op.MSG_ACCESS_INFO)
         down_ok = wait_until(_got_down, timeout=5, interval=0.1)
     print(f"AP 侧 send_frame={sent_down}；设备侧收到 ACCESS-INFO={devsim.tracked}")

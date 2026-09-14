@@ -50,8 +50,15 @@ class ClientHost:
 
     def __init__(self, sta_port, sn="CN-WH01-9AF3C1D2", rssi=-55, mac=None,
                  sta_host="127.0.0.1", on_sent=None, on_recv=None,
-                 self_limit=False, limiter=None):
-        self.sta = HostBus(host=sta_host, port=sta_port, name="client")
+                 self_limit=False, limiter=None, bus=None):
+        # ★ **传输是显式注入的**（`bus=`）：真板阶段换 UART/SPI 就是在这里换对象，
+        #   设备逻辑一行不改。接口只要 send_frame / recv_frame / connect / close。
+        #   以前靠“构造完再改 `client.sta`”` 来换（测试里这么干过）—— 那是隐式的：
+        #   将来 `HostBus` 多出一个方法、而新传输没有，就会**静默失效**（不改报错）。
+        #   现在换法只有两种：`bus=`（推荐）或 `set_transport()`（会当场校验接口）。
+        self.sta = bus if bus is not None else HostBus(host=sta_host, port=sta_port, name="client")
+        if bus is not None:
+            self.set_transport(bus)
         self.sn = sn
         self.rssi = rssi
         self.seq = 0
@@ -88,6 +95,17 @@ class ClientHost:
         self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
         self._rx_thread.start()
         return True
+
+    # 传输必须提供的四个方法（换传输时接口不对就**当场报错**，不静默跑）
+    TRANSPORT_API = ("connect", "close", "send_frame", "recv_frame")
+
+    def set_transport(self, bus):
+        """换底层收发（真板阶段用）：TCP host 口 → UART/SPI。接口不对当场报错。"""
+        missing = [m for m in self.TRANSPORT_API if not callable(getattr(bus, m, None))]
+        if missing:
+            raise TypeError(f"传输缺少方法 {missing}；需要 {list(self.TRANSPORT_API)}")
+        self.sta = bus
+        return bus
 
     def close(self):
         self._stop.set()

@@ -28,7 +28,12 @@ from client import ClientHost
 
 
 class _FakeSta:
-    """假 STA host：只记录“上过空口”的帧（`ClientHost` 里我们只用 send_frame）。"""
+    """假 STA host：只记录"上过空口"的帧（`ClientHost` 里我们只用 send_frame）。
+
+    四个方法要齐（`connect/close/send_frame/recv_frame`）：现在传输是**显式注入**的
+    （`ClientHost(bus=…)`），接口不全就**当场报错** —— 少了 `recv_frame` 时实测直接
+    `TypeError`（不会拖到运行中才静默失效）。
+    """
 
     def __init__(self):
         self.frames = []
@@ -40,14 +45,17 @@ class _FakeSta:
         self.frames.append(bytes(eth))
         return True
 
+    def recv_frame(self, timeout=0.0):
+        return None                     # 本套件不测下行
+
     def close(self):
         pass
 
 
 def _client(with_limit=True, **kw):
-    c = ClientHost(sta_port=1, self_limit=with_limit, **kw)
-    c.sta = _FakeSta()                       # 换掉真 socket（构造时并不连，见 host_bus）
-    return c
+    # 传输用 `ClientHost(bus=…)` **显式注入**（不再靠“构造完再改 `.sta`”）；
+    # 它不连 socket，只记帧。
+    return ClientHost(sta_port=1, self_limit=with_limit, bus=_FakeSta(), **kw)
 
 
 class TestDeviceLimiterMath(unittest.TestCase):

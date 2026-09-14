@@ -36,6 +36,10 @@ except Exception:                      # pragma: no cover - 没装时给出可�
     serial = None
 
 LOG_LINES = 200                        # 保留最近多少行控制台输出（排查用）
+# `resync()` 要喂的填充字节数：照抄 `T-Halow-RJ45/tools/thalow_config.py`（它用的就是 1700），
+# 而 1700 = PC 模拟器/固件的 `MAX_FRAME`（最大帧长）。**多喂无害**：不在数据模式时，这些字节
+# 只会被 AT 行解析器当成噪声丢掉；喂够（≥ 任何可能剩余的长度）比喂少更保险。
+_RESYNC_FILL = 1700
 
 
 def _default_factory(port, baud):
@@ -48,6 +52,12 @@ class SerialAtBus:
     """把「AT 控制台 + TXDATA 数据模式 + FRAME:RX 帧打印」包成 host 数据口的样子。
 
     `serial_factory(port, baud)` 可注入（测试用假串口；真机用 pyserial）。
+
+    **锁层级（改这个文件前先读）**：
+      `_tx_lock`（可重入）→ 包含整段 AT 命令 + 数据模式发送；`_lock` 只管行缓冲/帧队列。
+      获取顺序**永远是** `_tx_lock` → `_lock`（`cmd` 等 OK 时会短暂拿 `_lock` 读行）。
+      ⚠ **不要在拿着 `_lock` 的时候去调 `send_frame`/`cmd`**（反序就会死锁）；
+      也不要把两把锁合成一把：`cmd` 等 OK 时会把读线程一起阻塞 → 永远等不到 OK。
     """
 
     def __init__(self, port, baud=115200, name="sta", sysdbg="WNB,1",
@@ -145,7 +155,7 @@ class SerialAtBus:
         for _ in range(int(attempts)):
             try:
                 with self._tx_lock:
-                    self.ser.write(b"\x55" * 1700)
+                    self.ser.write(b"\x55" * _RESYNC_FILL)
             except Exception:
                 return False
             if "OK" in self.cmd("AT", wait=0.5):
