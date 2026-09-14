@@ -9,6 +9,28 @@
 
 > **ORPAH 是技术搜寻手段；demo 项目边界应取最小。**
 
+### 〇b、真机三步走（用户 2026-09-14 定的路线图 — **这是接下来工作的主线**）
+
+用户把"从纯软件到真板"拆成两条各自五步的路线，**先在软件里把两端仿真器跑成"设备"，
+再一步一步换掉底层**（每一步只换一样东西，前一步的判据继续成立）：
+
+| 步 | 客户端（本仓 + 新仓 `orpah-client-demo`） | 路由器（本仓 + `orpah-openwrt-demo`） |
+|---|---|---|
+| a | **在本仓做客户端仿真器** ✅ **已做（2026-09-14）**：`client_sim.py`（`DeviceSim`）+ `demo_client_sim.py`（端到端验收）+ `docs/client_sim.md` | 在本仓做路由器仿真器 → **已有**：`router.py`（`RouterBridge`）+ `demo_l4.py`（拉表/来源校验/签名） |
+| b | PC 经 Type-C 接 **TX-AH 开发板**（PC 当客户端应用） | PC 经 Type-C 接 TX-AH 开发板（PC 当路由器） |
+| c | 淘宝现成 **CH32 开发板 + ATECC608** 经 Type-C 接 TX-AH 板 | `orpah-openwrt-demo` 的路由器软件经 Type-C 接 TX-AH 板 |
+| d | 定制 CH32+ATECC608 载板 经 Type-C 接 TX-AH 板 | 改造现有 OpenWrt 路由器 经 Type-C 接 TX-AH 板 |
+| e | 定制 CH32+ATECC608+TX-AH 一体板 | 定制带 TX-AH 模块的完整路由器板 |
+
+- **每步的判据是同一套**（见 `docs/client_sim.md` §2.3）：设备能周期发 REQ-CONNECT/REPORT；
+  **服务端收到并验签通过**已签 ID 上报；下行 ACCESS-INFO/TRACKING-STATUS 真到达设备。
+  `demo_client_sim.py` 现在就是这套判据的**软件版**（真板阶段只是换链路，断言不变）。
+- **b 的关键未知项 = 物理数据通路**（TX-AH 的 fmac 固件 AT 层没有用户数据命令）：
+  候选① USB→SPI 桥（CH341A/CH347A）走 MACBUS `DATA_TX/DATA_RX`；候选② RJ45 透明桥（WNB 固件）。
+  两条的待验证项见 `docs/real-hw-stage2.md` §4。**未定之前不写"看着已支持"的传输实现。**
+- **本仓在整条路线里的角色**：① 两个仿真器（客户端/路由器）与整条业务链；② 真板阶段的**上位机工装**
+  （`tools/` 那类脚本）与**判据**；③ 协议口径的唯一落笔处。**固件本身在 `orpah-client-demo`。**
+
 - **只做「用无线技术找到人」这一段**：登记走失态 → 下发走失表 → 路由器发现上报 →
   服务器回执落库 → RSSI 定位 → 审计与告警。
   **ORPAH 不是公安办案系统**，不承载警务流程。

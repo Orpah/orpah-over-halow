@@ -239,7 +239,9 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 
 **新增 `id_level`（§8.2 降级策略演示，2026-09-12）**：`{action:"id_level", level:"<模式>"}`
 
-- 模式取值（`ui_server.ID_LEVEL_MODES` 单一源，`/api/status.id_level_modes` 同时给页面）：
+- 模式取值（**单一源 = `orpah_id.LEVEL_MODES`**，2026-09-14 从 `ui_server` 移过去 —— 设备侧
+  `client_sim` 与页面下拉都要用它；`ui_server.ID_LEVEL_MODES` 保留为别名，接口不变。
+  `/api/status.id_level_modes` 仍从这里取，页面下拉据此生成）：
   `auto`（全正常→L0）/ `sign_fail`（Slot0 签名失败→L1）/ `se_fail`（SE 不可用→L2）/ `no_key`（无可用密钥→L3）。
 - **传的是“哪个环节坏了”，不是写死的 level** —— 下一条 ID 上报由 `orpah_id.pick_level()` 按 §8.2 算出级别，
   走的才是规格里那条路径（而不是直接塞一个 level 值）。

@@ -307,6 +307,17 @@
     - **服务端下发的 i18n 键也归 `test_i18n.py` 管**（2026-09-13 新守卫）：告警 `msg` 与阈值 `i18n`
       都不在页面源码里，页面按数据里的键名去查字典 —— 拼错一个字母会在页面上原样显示成
       `alert_th_rssi_jump`。**这个守卫刚加就抓到 4 条既有漏键**（能量/限频/分流告警一直显示原始键名）。
+  - **客户端设备仿真器（真机三步走第 a 步，2026-09-14）**：`client_sim.py`（`DeviceSim`）+
+    `demo_client_sim.py`（端到端验收）+ `docs/client_sim.md`。三条硬规则：
+    ① **不许在仿真器里重写协议** —— 报文/签名/选级/限频/间隔/常态周期全部来自各自单一源
+    （`orpah_proto`、`orpah_id.Device`、`orpah_id.pick_level`+`LEVEL_MODES`、`ratelimit`、
+    `energy.plan`、`energy.NORMAL_INTERVAL_S`）；`test_client_sim.py` 最后一节是**源码守卫**
+    （出现帧/报文字面量、CRC、JCS 就失败）；
+    ② **§8.2 的故障模式表单一源已从 `ui_server` 移到 `orpah_id.LEVEL_MODES`**
+    （设备侧与页面下拉都要用它；`ui_server.ID_LEVEL_MODES` 只是别名，接口不变）；
+    ③ **接真板时只换传输**（`DeviceSim(client=…)` 一个参数）—— 真板传输**未实现**，
+    物理通路（USB→SPI 走 MACBUS / RJ45 桥）未定之前**不写"看着已支持"的传输**；
+    每步的判据固定（服务端验签通过 + 下行真到达 + 上游零丢弃），见 `docs/client_sim.md` §2.3。
   - **告警处置态（2026-09-12，§三 A 方案）**：`case_overtime` **只在「无人接手」时**才报 ——
     `Case.handler` 是与 `status` **正交**的一维（不是新状态；「处置中」是页面派生显示），
     接手人=自由文本（复用审计 `actor`，**不建 operators 表/不做登录**）。改 `cases` 表列名/语义时记住：

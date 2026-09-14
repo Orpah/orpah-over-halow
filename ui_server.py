@@ -143,13 +143,9 @@ UDP_SRV = 19447
 EVENTS = queue.Queue(maxsize=1000)   # SSE 事件（满丢最旧）
 
 # 演示用的降级级别模式（§8.2）：模式 → 喂给 `Device.report()` 的「哪个环节坏了」。
-# 注意不是直接写死 level —— 交给 `orpah_id.pick_level()` 算出来，走的是规格里那条路径。
-ID_LEVEL_MODES = {
-    "auto":      {},                                  # 全正常 → pick_level → L0
-    "sign_fail": {"sign_ok": False},                  # Step2 Slot0 签名失败 → L1
-    "se_fail":   {"se_ok": False},                    # Step1 SE 不可用（有 HMAC）→ L2
-    "no_key":    {"se_ok": False, "hmac_ok": False},   # Step3 无可用密钥 → L3
-}
+# **单一源已移到 `orpah_id.LEVEL_MODES`**（2026-09-14）：设备侧（`client_sim`）与页面下拉
+# 都要用它，放在这里会让别处再抄一份。这里只留别名，便于既有代码/文档/接口引用不变。
+ID_LEVEL_MODES = oid.LEVEL_MODES
 
 
 class OrpahApp:

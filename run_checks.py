@@ -62,6 +62,7 @@ SUITES = [
     ("文案字典（zh/en 一致 + 页面引用无缺失）", "test_i18n.py", []),
     ("UI 样式/窄屏守卫", "test_uicss.py", []),
     ("数据新鲜度（freshness.py + fresh.js）", "test_fresh.py", []),
+    ("客户端设备仿真器（设备侧旋钮/单一源守卫）", "test_client_sim.py", []),
 ]
 # 端到端 demo：会起模拟器/占端口，默认不跑
 E2E = [
@@ -71,6 +72,7 @@ E2E = [
     ("L3b 主动拉表", "demo_l4.py", []),
     ("防 spoof 空口端到端", "demo_spoof.py", []),
     ("限频（§5.8）端到端", "demo_ratelimit.py", []),
+    ("客户端设备仿真器端到端", "demo_client_sim.py", []),
 ]
 UI_PORT = 8901              # orpah-ui；被占用时跑 e2e 会端口串扰
 TIMEOUT = 420               # 单套件超时（秒）

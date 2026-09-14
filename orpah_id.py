@@ -79,6 +79,18 @@ def pick_level(se_ok=True, sign_ok=True, hmac_ok=True):
     return 0, "normal"
 
 
+# §8.2 的**故障注入**：模式名 → 喂给 `pick_level()` 的"哪个环节坏了"。
+# 为什么要有这张表（单一源，2026-09-14 从 `ui_server` 移到这里）：设备侧与页面下拉都要用它，
+# 各写一份就会漂（页面多一个 mode、设备不认识 → 选级静默走 auto）。**传的是故障、不是 level** ——
+# 级别必须由 `pick_level` 算出来，那才是规范里那条路径（直接写死 level 会把演示变成假演）。
+LEVEL_MODES = {
+    "auto":      {},                                  # 全正常 → L0（ES256）
+    "sign_fail": {"sign_ok": False},                  # Step2 Slot0 签名失败 → L1（HS256）
+    "se_fail":   {"se_ok": False},                    # Step1 SE 不可用（有 HMAC）→ L2（HS256）
+    "no_key":    {"se_ok": False, "hmac_ok": False},   # Step3 无可用密钥 → L3（裸上报）
+}
+
+
 def counts_as_presence(result):
     """这条验签结果能否**当作人员出现**（§8.3）。
 
