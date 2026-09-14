@@ -25,9 +25,11 @@
 - **每步的判据是同一套**（见 `docs/client_sim.md` §2.3）：设备能周期发 REQ-CONNECT/REPORT；
   **服务端收到并验签通过**已签 ID 上报；下行 ACCESS-INFO/TRACKING-STATUS 真到达设备。
   `demo_client_sim.py` 现在就是这套判据的**软件版**（真板阶段只是换链路，断言不变）。
-- **b 的关键未知项 = 物理数据通路**（TX-AH 的 fmac 固件 AT 层没有用户数据命令）：
-  候选① USB→SPI 桥（CH341A/CH347A）走 MACBUS `DATA_TX/DATA_RX`；候选② RJ45 透明桥（WNB 固件）。
-  两条的待验证项见 `docs/real-hw-stage2.md` §4。**未定之前不写"看着已支持"的传输实现。**
+- **b 的关键未知项 = 物理数据通路**（用户 2026-09-14 定：**走 UART**）：实现 = `host_serial.SerialAtBus`
+  （上行 `AT+TXDATA=<len>` + 裸以太帧，下行 `FRAME:RX <hex>` 行）；纯 PC 排练 = `demo_client_uart.py`。
+  ★ 仓里两份记录不一致（`T-Halow-RJ45/docs/AT_cmd.md` 有 `AT+TXDATA`；
+  `halow-demo` 真机实测说 TX-AH fmac 的 AT 无用户数据命令）→ **以实测为准**，上机首测用
+  `--dump-lines` 认定三件事（命令写法 / 下行格式 / 数据模式粘性）。
 - **本仓在整条路线里的角色**：① 两个仿真器（客户端/路由器）与整条业务链；② 真板阶段的**上位机工装**
   （`tools/` 那类脚本）与**判据**；③ 协议口径的唯一落笔处。**固件本身在 `orpah-client-demo`。**
 

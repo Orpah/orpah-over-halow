@@ -71,24 +71,51 @@ python demo_client_sim.py        # 约 5 s；退出码 0 = 全过
 L2 双向到达、服务端**验签通过**、无 RTC 设备的 `ts_src=server` 与 `cap_rtc=False`、
 电量到达、mark 后设备看到 `tracked=True`/`TRACKED`、**上游两侧零丢弃**（守规矩的设备不该被限频误伤）。
 
-### 2.3 接真板（步骤 b–e）——**还没做**
+### 2.3 接真板（步骤 b–e）
 
-真板阶段要换的只有**底层传输**（`DeviceSim(client=…)` 这一个参数），设备逻辑不动。
-现在**没有**任何真板传输实现（不写"看着已支持"的东西）。需要先定物理通路，两条候选见
-`docs/real-hw-stage2.md` §4：
+**b 步走 UART（用户 2026-09-14 定）**：PC 经 Type-C 接 TX-AH 开发板的 **AT 串口**，数据面是
+`AT+TXDATA`：
 
-| 候选 | 数据面 | 待确认 |
-|---|---|---|
-| **USB→SPI 桥**（CH341A/CH347A） | MACBUS `DATA_TX`/`DATA_RX`（与 `host_bus.py` 同一套帧语义） | SPI 时序/流控、INT 线怎么读；`halow-demo/simulator/tools/sim_config.py` 有**实验性**的同一思路可参考 |
-| RJ45 透明桥（TH-RJ45/WNB 固件） | 以太网 L2（`0x88B5` 是否透传） | 广播/MTU/RSSI 哪端可读 |
+| 方向 | 线上做什么 |
+|---|---|
+| 上行（host → 模块，DATA_TX） | `AT+TXDATA=<len>` → 等 `OK` → 写**裸以太网帧**（含 14B 以太头，`len` 也含它） |
+| 下行（模块 → host，DATA_RX） | `FRAME:RX <hex>` 行（需先 `AT+SYSDBG=WNB,1` 打开帧打印） |
 
-判据（走通 = 这几条同时成立）：设备能周期发出 REQ-CONNECT/REPORT，**服务端收到并验签通过** ID 上报，
-下行 ACCESS-INFO/TRACKING-STATUS 真到达设备（`snapshot()["tracked"]`/`last_status` 有值）。
-有了真板以后，`demo_client_sim.py` 的断言就是**同一套判据**（只是链路换了）。
+实现 = `host_serial.SerialAtBus`（与 `host_bus.HostBus` **同一套语义、不同线协议**）；
+用法：
+
+```bash
+python client_sim.py --transport serial --serial-port COM13 --baud 115200 --cycles 2 \
+                     --dump-lines 20        # 真机排查：把模块控制台原样打出来
+```
+
+**上机前先排练**（纯 PC，不用板子）：
+
+```bash
+python demo_client_uart.py    # 用模拟器的 AT 控制台跑同一套 AT+TXDATA/FRAME:RX，双向验收
+```
+
+它把两类问题**分开**：① 传输/解析写错了 → 这个脚本能当场抓到；② **真机固件与手册不同** →
+只能上机才知道。上机第一件事用 `--dump-lines` 确认三件事：
+
+1. `AT+TXDATA=<len>` 的**写法**（等号形式？要不要带 `txbw,mcs,priority`？）；
+2. 下行到 host 到底是不是 `FRAME:RX <hex>`（**本仓两份记录不一致**：`T-Halow-RJ45/docs/AT_cmd.md`
+   有 `AT+TXDATA` 且是 1-to-many 模式（要补 14B 以太头），而 `halow-demo/simulator/AGENTS.md`
+   的真机实测写着 TX-AH 的 fmac 固件“AT 只有控制面、没有用户数据命令”→ **以实测为准**）；
+3. 数据模式的**粘性**与恢复（`resync()` 是照抄 `T-Halow-RJ45/tools/thalow_config.py`）。
+
+**判据**（走通 = 这几条同时成立，与步骤 a 的那套一样）：设备能周期发出 REQ-CONNECT/REPORT，
+**服务端收到并验签通过** ID 上报，下行 ACCESS-INFO/TRACKING-STATUS **真到达设备**
+（`snapshot()["tracked"]`/`last_status` 有值），上游两侧零丢弃。
+
+**c/d/e（换 MCU / 换载板 / 一体板）** 只换“谁在跑这套状态机”：固件照 `DeviceSim` 写，
+接口边界仍是同一套（host 数据口 → 模块），所以**判据不变**。
 
 ## 3. 未做 / 未验证（如实）
 
-- **真板传输**（串口 AT / USB→SPI 的 MACBUS 数据面）：未实现 —— 步骤 b 需要它，等物理通路确认。
+- **真板实测**：`host_serial.py`（UART/AT 数据面）按 AT 手册 + 模拟器固件实现，
+  **未在真机验证**；上机首测要确认的三件事见上面 §2.3（另：`AT+TXDATA` 与 fmac 无数据命令
+  这两份记录对不上，以实测为准）。
 - **SE 真实驱动**（ATECC608B I2C）：现在用 P-256 的演示派生密钥（`demo_key=True`）；
   真机是 SE 内生成、**私钥不可导出**（协议 §6.4）。
 - **真实取能/储能标定**：现在是 `energy.py` 的演示标定值（真机标定见 SPEC F-11）。

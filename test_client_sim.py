@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock as mock
 
@@ -27,6 +28,7 @@ if HERE not in sys.path:
 
 import client_sim as cs          # noqa: E402
 import energy as en              # noqa: E402
+import host_serial as hs         # noqa: E402
 import keystore as ksdb          # noqa: E402
 import orpah_id as oid           # noqa: E402
 import orpah_proto as op         # noqa: E402
@@ -62,6 +64,42 @@ class _FakeSta:
 
     def close(self):
         pass
+
+
+class _FakeSerial:
+    """假串口（只扮"线"）：记录写出的字节；`read()` 吐预置的输入流，可切成多块模拟粘包。
+
+    `auto_ok=True` 时，凡是写出去的 `AT+…\r\n` 命令都会"回"一行 OK（模拟模块应答）。
+    它**不实现帧格式**（那是 `orpah_proto`/`host_serial` 的事）。
+    """
+
+    def __init__(self, chunks=None, auto_ok=True):
+        self.written = b""
+        self.inbuf = b""
+        self.chunks = list(chunks or [])
+        self.auto_ok = auto_ok
+        self.closed = False
+
+    def write(self, data):
+        data = bytes(data)
+        self.written += data
+        if self.auto_ok and data.startswith(b"AT+") and data.endswith(b"\r\n"):
+            self.inbuf += b"OK\r\n"
+
+    def read(self, n=256):
+        if not self.inbuf and self.chunks:
+            self.inbuf += self.chunks.pop(0)
+        if not self.inbuf:
+            time.sleep(0.002)          # 模拟串口读超时（别把 CPU 占了）
+            return b""
+        out, self.inbuf = self.inbuf[:n], self.inbuf[n:]
+        return out
+
+    def reset_input_buffer(self):
+        self.inbuf = b""
+
+    def close(self):
+        self.closed = True
 
 
 class _Clock:
@@ -402,6 +440,93 @@ class TestSingleSourceGuard(unittest.TestCase):
         """能量默认值（初值/储能）也不许抄一份。"""
         self.assertIn("en.CHARGE0_MJ if charge_mj is None", self.src)
         self.assertIn("en.STORE_MJ if store_mj is None", self.src)
+
+
+class TestSerialTransport(unittest.TestCase):
+    """真板（步骤 b）的 **UART/AT 数据面**：`AT+TXDATA` 上行 + `FRAME:RX` 下行。
+
+    这些是"真机契约"级别的断言（等号形式、长度含 14B 以太头、**等 OK 才发裸帧**、粘包）——
+    它们错了不会有异常，只会表现为**上机后链路静默失效**，所以离线就要钉死。
+    假串口只扮演"线"，帧本身用 `orpah_proto.build_eth_frame` 真构造。
+    """
+
+    def _bus(self, chunks=None, auto_ok=True, sysdbg=None):
+        fake = _FakeSerial(chunks=chunks, auto_ok=auto_ok)
+        bus = hs.SerialAtBus("COMTEST", 115200, sysdbg=sysdbg,
+                             serial_factory=lambda p, b: fake, log=None)
+        self.assertTrue(bus.connect(retries=1))
+        return bus, fake
+
+    def test_open_failure_is_reported(self):
+        def bad_factory(p, b):
+            raise OSError("no such port")
+        bus = hs.SerialAtBus("COMX", serial_factory=bad_factory, log=None)
+        self.assertFalse(bus.connect(retries=1, interval=0.0))
+
+    def test_send_frame_wire_format(self):
+        """★真机契约：`AT+TXDATA=<len>`（长度**含** 14B 以太头）→ OK → **裸以太帧**。"""
+        bus, fake = self._bus()
+        eth = op.build_eth_frame(b"{}", src_mac=b"\x4A\x06\x59\x00\x00\x01")
+        self.assertTrue(bus.send_frame(eth))
+        self.assertEqual(fake.written, f"AT+TXDATA={len(eth)}\r\n".encode() + eth)
+        self.assertEqual((bus.tx_frames, bus.tx_fail), (1, 0))
+
+    def test_no_ok_means_no_raw_bytes(self):
+        """★没有 OK 就**不许**写裸帧：否则模块会把帧当 AT 命令解析（整条链路静默失效）。"""
+        bus, fake = self._bus(auto_ok=False)
+        bus.cmd_timeout = 0.2
+        eth = op.build_eth_frame(b"{}", src_mac=b"\x4A\x06\x59\x00\x00\x01")
+        self.assertFalse(bus.send_frame(eth))
+        self.assertNotIn(eth, fake.written)               # 裸帧一个字节都没写
+        self.assertIn(b"AT+TXDATA=", fake.written)        # 只发了命令
+        self.assertEqual((bus.tx_frames, bus.tx_fail), (0, 1))
+
+    def test_short_frame_rejected(self):
+        bus, fake = self._bus()
+        self.assertFalse(bus.send_frame(b"\x01\x02\x03"))
+        self.assertEqual(bus.tx_fail, 1)
+        self.assertEqual(fake.written, b"")
+
+    def test_recv_frame_from_frame_rx_line(self):
+        eth = op.build_eth_frame(b'{"type":"ORPAH-ACCESS-INFO"}',
+                                 src_mac=b"\xAA" * 6)
+        line = b"FRAME:RX " + eth.hex().encode() + b"\r\n"
+        bus, _ = self._bus(chunks=[line])
+        got = bus.recv_frame(timeout=2.0)
+        self.assertEqual(got, eth)                        # 收回来的是**同一条**以太网帧
+        self.assertEqual(bus.rx_frames_n, 1)
+
+    def test_frame_rx_split_across_reads(self):
+        """`FRAME:RX` 行被切成两段到达也要拼得出来（串口读是任意切分的）。"""
+        eth = op.build_eth_frame(b'{"x":1}', src_mac=b"\xAA" * 6)
+        head = b"FRAME:RX " + eth.hex().encode()
+        bus, _ = self._bus(chunks=[head[:20], head[20:] + b"\r\n"])
+        self.assertEqual(bus.recv_frame(timeout=2.0), eth)
+
+    def test_junk_and_tx_echo_are_not_data(self):
+        eth = op.build_eth_frame(b'{"x":1}', src_mac=b"\xAA" * 6)
+        bus, _ = self._bus(chunks=[b"garbage line\r\n",
+                                   b"FRAME:TX " + eth.hex().encode() + b"\r\n",
+                                   b"FRAME:RX 0011223344\r\n"])   # 太短：不是以太帧
+        self.assertIsNone(bus.recv_frame(timeout=0.3))
+        self.assertEqual(bus.rx_frames_n, 0)
+        self.assertEqual(bus.bad_lines, 1)                # 只有那条短帧算坏行（TX 回显不算）
+        self.assertTrue(any("garbage" in ln for ln in bus.recent_lines()))  # 原样留着排查
+
+    def test_stats_and_dump(self):
+        bus, _ = self._bus(chunks=[b"AT+VERSION=2.4.1.5\r\n"])
+        time.sleep(0.05)
+        st = bus.stats()
+        self.assertEqual(st["port"], "COMTEST")
+        self.assertEqual([st[k] for k in ("tx_frames", "tx_fail", "rx_frames", "bad_lines")],
+                         [0, 0, 0, 0])
+        self.assertTrue(any("AT+VERSION" in ln for ln in bus.recent_lines(5)))
+
+    def test_connect_sends_sysdbg_when_enabled(self):
+        bus, fake = self._bus(sysdbg="WNB,1")
+        self.assertIn(b"AT+SYSDBG=WNB,1\r\n", fake.written)   # 打开帧打印 → 下行才有得解析
+        bus2, fake2 = self._bus(sysdbg=None)
+        self.assertNotIn(b"SYSDBG", fake2.written)
 
 
 if __name__ == "__main__":

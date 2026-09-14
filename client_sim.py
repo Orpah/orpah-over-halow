@@ -25,10 +25,16 @@ client_sim.py — ORPAH **客户端设备仿真器**（固件的参照实现）
     python client_sim.py --sta-port 9422 --level-mode se_fail  # 演示 §8.2：SE 不可用 → L2
     python client_sim.py --sta-port 9422 --energy --harvest 0.5    # 由能量决定间隔与级别
 
+真板阶段（步骤 b）走 **UART**（不是 SPI）：PC 经 Type-C 接 TX-AH 开发板的 AT 串口，
+数据面 = `AT+TXDATA=<len>` + 裸以太网帧（上行）、`FRAME:RX <hex>` 行（下行）——
+实现见 `host_serial.SerialAtBus`，用法：
+
+    python client_sim.py --transport serial --serial-port COM13 --baud 115200 --cycles 2
+
 未做（如实，见 `docs/client_sim.md`）：
-    · **真板传输**（串口 AT / USB→SPI 的 MACBUS 数据面）—— 步骤 b 需要它，物理通路确认后再加；
-      本文件把"底层收发"留在 `ClientHost`（= `host_bus.HostBus`）这一层，换传输不动设备逻辑。
-    · SE 真实驱动（ATECC608B）—— 现在用 `orpah_id.primitive` 里的 P-256（`demo_key=True` 派生）。
+    · **真机实测**：`host_serial.py` 按 AT 手册 + 模拟器固件实现，**未在真机验证**
+      （首测要确认三件事，见 `host_serial.py` 头注释的 ⚠）。
+    · SE 真实驱动（ATECC608B）—— 现在用 P-256 的演示派生密钥（`demo_key=True`）。
     · 真实取能/储能标定（现在是 `energy.py` 的演示标定值）。
 """
 import argparse
@@ -286,9 +292,16 @@ def register_keystore(path, sn, model="CH32V203+TX-AH+ATECC608B", firmware="sim-
 def main():
     ap = argparse.ArgumentParser(
         description="ORPAH 客户端设备仿真器（连 STA 模块 host 数据口）")
-    ap.add_argument("--sta-host", default="127.0.0.1", help="STA 模块 host 口地址")
+    ap.add_argument("--sta-host", default="127.0.0.1", help="STA 模块 host 口地址（tcp）")
     ap.add_argument("--sta-port", type=int, default=9422,
                     help="STA 模块 host 数据口 TCP 端口（sim.py --host）")
+    ap.add_argument("--transport", choices=["tcp", "serial"], default="tcp",
+                    help="底层传输：tcp=PC 模拟器的 host 口；serial=真板（UART/AT+TXDATA）")
+    ap.add_argument("--serial-port", default="COM3",
+                    help="串口设备名（serial 传输；Windows 如 COM13，Linux 如 /dev/ttyUSB0）")
+    ap.add_argument("--baud", type=int, default=115200, help="串口波特率（serial 传输）")
+    ap.add_argument("--dump-lines", type=int, default=0,
+                    help="退出时打印最近 N 行控制台输出（真机排查用；0=不打印）")
     ap.add_argument("--sn", default="CN-WH01-9AF3C1D2", help="终端序列号（Orpah ID）")
     ap.add_argument("--rssi", type=int, default=-55, help="报文里的链路强度（设备自报）")
     ap.add_argument("--every", type=float, default=None,
@@ -326,6 +339,16 @@ def main():
 
     # `--json`：每拍**实时**一行 NDJSON（便于边跑边看/管道处理），最后再压一行快照。
     ndjson = (lambda r: print(json.dumps(r, ensure_ascii=False), flush=True))
+    bus = None
+    if args.transport == "serial":
+        # 真板（步骤 b）：UART/AT 控制台上的数据面 —— 与 TCP 是**同一套语义、不同线协议**，
+        # 所以只换传输对象，设备逻辑一行不改。
+        import host_serial
+        bus = host_serial.SerialAtBus(args.serial_port, args.baud, name="client_sim")
+    client = ClientHost(sta_port=args.sta_port, sta_host=args.sta_host, sn=sn,
+                        rssi=args.rssi, self_limit=not args.no_self_limit)
+    if bus is not None:
+        client.sta = bus                                  # 换掉底层收发（HostBus → SerialAtBus）
     sim = DeviceSim(
         sta_host=args.sta_host, sta_port=args.sta_port, sn=sn, rssi=args.rssi,
         every=args.every, cycles=args.cycles,
@@ -338,13 +361,19 @@ def main():
         log=(ndjson if args.json else (None if args.quiet else print)))
     sim.speedup = max(1.0, float(args.speedup))
     if not connect(sim):
-        # 连不上 STA 就**如实失败退出**（不静默继续跑出一堆"看着正常"的日志）
-        print(f"[client_sim] 连不上 STA host 口 {args.sta_host}:{args.sta_port}，退出",
-              file=sys.stderr)
+        # 连不上就**如实失败退出**（不静默继续跑出一堆"看着正常"的日志）
+        if args.transport == "serial":
+            print(f"[client_sim] 打不开串口 {args.serial_port}（{args.baud}）—— 检查设备名；"
+                  f"或用 --dump-lines 看控制台原样输出", file=sys.stderr)
+        else:
+            print(f"[client_sim] 连不上 STA host 口 {args.sta_host}:{args.sta_port}，退出",
+                  file=sys.stderr)
         return 1
     lp = sim.client.limiter.snapshot()
     if not args.quiet:
-        print(f"[client_sim] 已连 {args.sta_host}:{args.sta_port}  sn={sn}  "
+        tgt = (f"{args.serial_port}@{args.baud}" if args.transport == "serial"
+               else f"{args.sta_host}:{args.sta_port}")
+        print(f"[client_sim] 已连 {tgt}（{args.transport}）  sn={sn}  "
               f"周期 {sim.every:g}s（设计常态 {en.NORMAL_INTERVAL_S:g}s）  "
               f"自限频 {'开' if lp['on'] else '关'}  "
               f"{'能量模式' if args.energy else '固定级别'}")
@@ -358,6 +387,11 @@ def main():
         print(json.dumps({"snapshot": snap}, ensure_ascii=False))
     elif not args.quiet:
         print("[client_sim] " + json.dumps(snap, ensure_ascii=False))
+    if args.dump_lines and bus is not None:
+        # 真机排查：把模块控制台原样打出来（下行格式/卡数据模式/报错都看得到）
+        print(f"[client_sim] 串口统计 {bus.stats()}")
+        for ln in bus.recent_lines(args.dump_lines):
+            print("  | " + ln)
     return 0
 
 

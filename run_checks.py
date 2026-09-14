@@ -73,6 +73,7 @@ E2E = [
     ("防 spoof 空口端到端", "demo_spoof.py", []),
     ("限频（§5.8）端到端", "demo_ratelimit.py", []),
     ("客户端设备仿真器端到端", "demo_client_sim.py", []),
+    ("UART/AT 数据面（步骤 b 排练）", "demo_client_uart.py", []),
 ]
 UI_PORT = 8901              # orpah-ui；被占用时跑 e2e 会端口串扰
 TIMEOUT = 420               # 单套件超时（秒）

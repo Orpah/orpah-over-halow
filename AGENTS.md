@@ -315,9 +315,13 @@
     （出现帧/报文字面量、CRC、JCS 就失败）；
     ② **§8.2 的故障模式表单一源已从 `ui_server` 移到 `orpah_id.LEVEL_MODES`**
     （设备侧与页面下拉都要用它；`ui_server.ID_LEVEL_MODES` 只是别名，接口不变）；
-    ③ **接真板时只换传输**（`DeviceSim(client=…)` 一个参数）—— 真板传输**未实现**，
-    物理通路（USB→SPI 走 MACBUS / RJ45 桥）未定之前**不写"看着已支持"的传输**；
-    每步的判据固定（服务端验签通过 + 下行真到达 + 上游零丢弃），见 `docs/client_sim.md` §2.3。
+    ③ **接真板时只换传输**（`DeviceSim(client=…)` 一个参数）：b 步走 **UART**（用户 2026-09-14 定）
+    = `host_serial.SerialAtBus` —— 上行 `AT+TXDATA=<len>` + 裸以太帧、下行 `FRAME:RX <hex>` 行；
+    与 TCP host 口**同语义、不同线协议**，**比错一个字段就静默失效** → 
+    `test_client_sim.py::TestSerialTransport` 钉住真机契约（等 OK 才发裸帧/长度含 14B 头/粘包），
+    `demo_client_uart.py` 用模拟器 AT 控制台把同一套线路协议双向跑一遍（纯 PC 排练）。
+    ★ **未在真机验证**：仓里两份记录不一致（`T-Halow-RJ45` 手册有 `AT+TXDATA`，
+    `halow-demo` 真机实测说 fmac 的 AT 无用户数据命令）→ 上机首测用 `--dump-lines` 认定。
   - **告警处置态（2026-09-12，§三 A 方案）**：`case_overtime` **只在「无人接手」时**才报 ——
     `Case.handler` 是与 `status` **正交**的一维（不是新状态；「处置中」是页面派生显示），
     接手人=自由文本（复用审计 `actor`，**不建 operators 表/不做登录**）。改 `cases` 表列名/语义时记住：
