@@ -68,8 +68,16 @@ class RouterBridge:
     def __init__(self, ap_port, server_port=ORPAH_UDP_PORT,
                  ap_host="127.0.0.1", server_host="127.0.0.1",
                  self_mac=None, on_up=None, on_down=None, on_found=None,
-                 on_up_id=None, rl=None, on_ratelimit=None, down_pub=None):
-        self.ap = HostBus(host=ap_host, port=ap_port, name="router")
+                 on_up_id=None, rl=None, on_ratelimit=None, down_pub=None,
+                 bus=None):
+        # ★ 传输是**显式注入**的（`bus=`）：与 `client.ClientHost(bus=…)` 同一模式 ——
+        #   真机阶段把 AP/空口那一侧换成别的传输（如「有线侧裸以太帧」）就换这个对象，
+        #   设备/路由器逻辑一行不改。接口只要 connect/close/send_frame/recv_frame。
+        #   不给 `bus` 时行为与以前完全一致（默认还是 TCP host 口）。
+        self.ap = bus if bus is not None else \
+            HostBus(host=ap_host, port=ap_port, name="router")
+        if bus is not None:
+            self.set_transport(bus)
         self.server_addr = (server_host, server_port)
         self.up_count = 0
         self.down_count = 0
@@ -141,13 +149,29 @@ class RouterBridge:
         # 收到的 Server 主动推送的走失表次数（下发计数，供 UI Router 卡片展示）
         self.lost_push_recv = 0
 
+    # 传输必须提供的四个方法（换传输时接口不对就**当场报错**，不静默跑）
+    TRANSPORT_API = ("connect", "close", "send_frame", "recv_frame")
+
+    def set_transport(self, bus):
+        """换 AP/空口那一侧的传输（真机阶段用）：TCP host 口 → 有线侧裸以太帧 / 别的。"""
+        missing = [m for m in self.TRANSPORT_API if not callable(getattr(bus, m, None))]
+        if missing:
+            raise TypeError(f"传输缺少方法 {missing}；需要 {list(self.TRANSPORT_API)}")
+        self.ap = bus
+        return bus
+
+    def _ap_desc(self):
+        """给日志用的一句描述（注入的传输不一定有 `addr`，比如 `L2Bus`）。"""
+        addr = getattr(self.ap, "addr", None)
+        return f":{addr[1]}" if addr else str(getattr(self.ap, "iface", None) or self.ap)
+
     def start(self):
         if not self.ap.connect():
-            log(f"连不上 AP 模块 host 口 :{self.ap.addr[1]}，退出")
+            log(f"连不上 AP 模块 host 口 {self._ap_desc()}，退出")
             return False
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp.settimeout(0.5)            # 让下行线程可轮询 stop
-        log(f"已连 AP 模块 host 口 :{self.ap.addr[1]}；Server -> "
+        log(f"已连 AP 模块 host 口 {self._ap_desc()}；Server -> "
             f"{self.server_addr[0]}:{self.server_addr[1]}")
         threading.Thread(target=self._air_loop, daemon=True).start()
         threading.Thread(target=self._udp_loop, daemon=True).start()
