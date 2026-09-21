@@ -484,6 +484,9 @@ def evaluate(registry, cases, id_reports, now=None, clock=None, energy=None,
                           need_store_mj=cv.get("need_store_mj"),
                           deg_covers=deg.get("covers"), deg_cover_s=deg.get("cover_s"),
                           deg_need_store_mj=deg.get("need_store_mj"),
+                          # 曲线口径（2026-09-22）：`mode` 决定页面上用“缺口”还是“实测窗口”的措辞
+                          # （曲线下 cover_s/gap_short_s 恒为 None，页面会改走曲线专模版）
+                          curve_mode=curv.get("mode"), window_s=curv.get("window_s"),
                           curve_gap_s=curv.get("longest_gap_s"),
                           dead_at_s=curv.get("dead_at_s"),
                           sustainable=curv.get("sustainable")))

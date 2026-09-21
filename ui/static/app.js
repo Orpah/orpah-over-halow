@@ -756,7 +756,8 @@ function renderCalib(cb) {
     const c = cb.curve || {};
     cvEl.textContent = c.present
       ? T("en_cal_curve_present").replace("{n}", enNum(c.n, 0))
-          .replace("{p}", enNum((c.period_s || 0) / 3600, 1))
+          .replace("{p}", enNum(((c.mode === "period" ? c.period_s : c.window_s) || 0) / 3600, 1))
+        + " · " + T(c.mode === "period" ? "en_cal_curve_mode_period" : "en_cal_curve_mode_profile")
       : T("en_cal_curve_none");
   }
 }
@@ -790,7 +791,11 @@ function renderCover(st, on) {
   };
   // 结论用色 + 文字双通道（红=设计不足 / 橙=得降级 / 绿=覆盖得住）
   const okCls = c.verdict === "ok" ? "ok" : (c.verdict === "degrade" ? "warn" : "lost-yes");
-  const gapH = (c.gap_s || 0) / 3600;
+  const cu = c.curve || null;
+  // 「缺口 / 实测窗口 / 典型周期」三种口径的标签（曲线带 `mode`）：
+  //   把 72h 的**实测窗口**说成「缺口 72 小时」是错的话 ——「缺口」是“取能为 0 的最坏打算”。
+  const spanH = ((cu && cu.window_s) || c.gap_s || 0) / 3600;
+  const spanKey = cu ? (cu.mode === "period" ? "en_cov_period" : "en_cov_window") : "en_cov_gap";
   const defHint = (c.gap_deficit_mw == null) ? "" :
     ` <span class="hint">(${esc(T("en_cov_deficit"))} ${enNum(c.gap_deficit_mw, 3)} mW)</span>`;
   const deg = c.degraded || {};
@@ -803,20 +808,22 @@ function renderCover(st, on) {
   const needDeg = deg.need_store_mj != null
     ? esc("（" + T("en_cov_need_deg") + " " + enNum(deg.need_store_mj / 1000, 1) + " J）") : "";
   box.innerHTML =
-    cell("en_cov_gap", esc(enNum(gapH, 1) + " h") + defHint) +
+    cell(spanKey, esc(enNum(spanH, 1) + " h") + defHint) +
     cell("en_cov_hold", esc(holdTxt(c, c.curve) + shortTxt(c.gap_short_s)), okCls) +
     cell("en_cov_verdict", esc(T("en_cov_verdict_" + (c.verdict || "none")))) +
     cell("en_cov_deg", degTxt) +
     cell("en_cov_need", esc(enNum((c.need_store_mj || 0) / 1000, 1) + " J") + " " + needDeg) +
     cell("en_cov_self", esc(enNum(c.need_harvest_mw, 3) + " mW"));
-  if (c.curve) {
-    const cu = c.curve;
-    const sus = cu.sustainable
-      ? T("en_cov_curve_sus_yes").replace("{n}", enNum(cu.cycle_net_mj, 0))
-      : T("en_cov_curve_sus_no").replace("{n}", enNum(cu.cycle_net_mj, 0));
+  if (cu) {
+    // ★ 三态，**不能把 None 当成 false**（旧写法 `cu.sustainable ? … : …` 会把
+    //   “一段非周期窗口”误报成“不可永续”）：true=可永续 / false=不可永续（拖时间）/ None=**不适用**。
+    const net = enNum(cu.window_net_mj, 0);
+    const sus = (cu.sustainable === true) ? T("en_cov_curve_sus_yes").replace("{n}", net)
+      : (cu.sustainable === false) ? T("en_cov_curve_sus_no").replace("{n}", net)
+        : T("en_cov_curve_sus_na").replace("{n}", net);
     box.innerHTML +=
       cell("en_cov_curve", esc(fmtSilence(cu.longest_gap_s))) +
-      cell("en_cov_curve_sus", esc(sus), cu.sustainable ? "" : "lost-yes");
+      cell("en_cov_curve_sus", esc(sus), cu.sustainable === false ? "lost-yes" : "");
   }
   const msg = $("enCovMsg");
   if (msg) msg.textContent = T("en_cov_msg" + (c.verdict === "ok" ? "_ok"
@@ -1183,10 +1190,14 @@ function alertText(a) {
   delete data.msg;
   if (data.gap !== undefined) data.gap = fmtGap(data.gap);
   // 覆盖告警带的是**秒/mJ**，直接填进模版会显示成「缺口 43200 里只能撑 4000」（页面实测踩到）
-  ["gap_s", "cover_s", "gap_short_s", "dead_at_s", "curve_gap_s", "deg_cover_s"]
+  ["gap_s", "cover_s", "gap_short_s", "dead_at_s", "curve_gap_s", "deg_cover_s", "window_s"]
     .forEach(k => { if (data[k] != null) data[k] = fmtGap(data[k]); });
   if (data.need_store_mj != null) data.need_store_mj = enNum(data.need_store_mj / 1000, 1) + " J";
-  let s = T(a.msg);
+  // ★ 曲线口径下 `cover_s`/`gap_short_s` **恒为 null**（答案在 dead_at_s）⇒ 不能拿主模版去填，
+  //   否则弹窗上会直接露出 “只能撑 null（还差 null）”。曲线另有一份专模版。
+  let tkey = a.msg;
+  if (a.kind === "id_cover_short" && a.dead_at_s != null) tkey = "alert_id_cover_short_curve";
+  let s = T(tkey);
   Object.keys(data).forEach(k => { s = s.split("{" + k + "}").join(String(data[k])); });
   if (a.kind === "id_cover_short") s += coverTail(a);
   return s;

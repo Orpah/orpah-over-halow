@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-09-20 11:05:15
-- git HEAD：`ed37335`
+- 时间：2026-09-22 01:51:40
+- git HEAD：`fd4b16e`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（27/27 套件通过）
 
@@ -12,13 +12,13 @@
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
 | 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.2s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
-| 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.8s | 通过 |
-| 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 1.6s | 通过 |
+| 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.6s | 通过 |
+| 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 1.4s | 通过 |
 | 告警通知（边沿触发 / Webhook / 失败可见） | `test_notify.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.0s | 通过 |
 | 时钟可信（ts=0 无 RTC） | `test_clock.py` | ✅ PASS | 0.5s | 通过 |
-| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.6s | 通过 |
-| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.6s | 通过 |
+| IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.5s | 通过 |
+| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.7s | 通过 |
 | 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.0s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
 | 能量轴（免电池客户端） | `test_energy.py` | ✅ PASS | 0.0s | 通过 |
@@ -26,7 +26,7 @@
 | 抓包解析 / 双源对照 | `test_capture.py` | ✅ PASS | 0.1s | 通过 |
 | 设备时钟漂移（长基线） | `demo_clock.py` | ✅ PASS | 0.1s | 通过 |
 | 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
-| 地图共享件（map.js：基点/野外包 + maps.py） | `test_mapjs.py` | ✅ PASS | 0.2s | 通过 |
+| 地图共享件（map.js：基点/野外包 + maps.py） | `test_mapjs.py` | ✅ PASS | 0.1s | 通过 |
 | 首页转义口径（app.js：esc/alertText 单一出口） | `test_appjs.py` | ✅ PASS | 0.0s | 通过 |
 | 限频（§5.8 令牌桶 / 两条防线） | `test_ratelimit.py` | ✅ PASS | 0.1s | 通过 |
 | 设备侧自限频（§5.8 设备那一环，自愿） | `test_selflimit.py` | ✅ PASS | 0.1s | 通过 |
@@ -35,44 +35,44 @@
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
 | UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 3.0s | 通过 |
 | 数据新鲜度（freshness.py + fresh.js） | `test_fresh.py` | ✅ PASS | 0.1s | 通过 |
-| 客户端设备仿真器（设备侧旋钮/单一源守卫） | `test_client_sim.py` | ✅ PASS | 9.6s | 通过 |
+| 客户端设备仿真器（设备侧旋钮/单一源守卫） | `test_client_sim.py` | ✅ PASS | 9.9s | 通过 |
 
 ## 关键输出
 
 ### 运动/定位数据源 — PASS（0.1s）
 
-    == 1. 构造与几何 ==
-    == 2. pos 确定性与周期性 ==
-    == 3. 连续性（不瞬移） ==
-    == 4. RSSI 路径损耗换算 ==
-    == 4b. 钳位要盖住加噪后的结果（2026-09-12 审查） ==
-    == 5. 多路由器一致（演示数据可用性） ==
-      OK   truth_at：空输入 → 空表（页面显示“不适用”，不编 0）
-    全部通过
+    == 1. �����뼸�� ==
+    == 2. pos ȷ������������ ==
+    == 3. �����ԣ���˲�ƣ� ==
+    == 4. RSSI ·����Ļ��� ==
+    == 4b. ǯλҪ��ס�����Ľ����2026-09-12 ��飩 ==
+    == 5. ��·����һ�£���ʾ���ݿ����ԣ� ==
+      OK   truth_at�������� �� �ձ���ҳ����ʾ�������á������� 0��
+    ȫ��ͨ��
 
 ### 密钥生命周期 — PASS（0.2s）
 
-    == 1. 签发（幂等） ==
-    == 2. 验签（第 1 代） ==
-    == 3. 轮换：旧钥进宽限、新旧都能验 ==
-    == 4. 宽限到期 → 退役 ==
-    == 5. grace_sec=0：旧钥立即失效 ==
-    == 6. 提前强制退役 ==
-      OK   另一代（gen=2）签的报文用第 1 代的库验 → 拒（代次不能串）
+    == 1. ǩ�����ݵȣ� ==
+    == 2. ��ǩ���� 1 ���� ==
+    == 3. �ֻ�����Կ�����ޡ��¾ɶ����� ==
+    == 4. ���޵��� �� ���� ==
+    == 5. grace_sec=0����Կ����ʧЧ ==
+    == 6. ��ǰǿ������ ==
+      OK   ��һ����gen=2��ǩ�ı����õ� 1 ���Ŀ��� �� �ܣ����β��ܴ���
     all key lifecycle tests passed
 
 ### 防 spoof（离线逐条） — PASS（0.1s）
 
-    == 1. 清单自洽 ==
-    == 2. 逐条裁决（离线） ==
-    == 3. 防线语义 ==
-    == 4. 攻击确实改动了报文（不是把合法报文原样发了一遍） ==
-    == 5. 顺序无关（revoked 用临时库，不污染传进来的 keystore） ==
-    == 6. nonce 缓存：有界 LRU（对齐 §5.5 建议）—— 刷量不能清空历史 ==
-      OK   已知边界（如实：旧 nonce 被挤出后，这条重放**会被受理** —— ts=0 设备上时间窗也帮不上）  got=None accepted=True
-    全部通过
+    == 1. �嵥��Ǣ ==
+    == 2. �����þ������ߣ� ==
+    == 3. �������� ==
+    == 4. ����ȷʵ�Ķ��˱��ģ����ǰѺϷ�����ԭ������һ�飩 ==
+    == 5. ˳���޹أ�revoked ����ʱ�⣬����Ⱦ�������� keystore�� ==
+    == 6. nonce ���棺�н� LRU������ ��5.5 ���飩���� ˢ�����������ʷ ==
+      OK   ��֪�߽磨��ʵ���� nonce �������������ط�**�ᱻ����** ���� ts=0 �豸��ʱ�䴰Ҳ�ﲻ�ϣ�  got=None accepted=True
+    ȫ��ͨ��
 
-### 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） — PASS（0.8s）
+### 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） — PASS（0.6s）
 
     == 1. 用例清单（单一源 spoof.py）==
     PASS  用例字段仍是 5 项（脚本/演示都按这个解包）
@@ -81,14 +81,14 @@
     PASS  说明里不出现归因性词（AGENTS §0 术语硬规则）
     PASS  UI 子集排除 revoked（页面用活密钥库，跑一次会把在跑的设备搞成验不过）
 
-### 告警规则（含处置态） — PASS（1.6s）
+### 告警规则（含处置态） — PASS（1.4s）
 
-    PASS  长未上报：启用/走失中的都报，停用/报废不报
-    PASS  长未上报：带 gap 且等级 warn
-    PASS  ★ 两档阈值都**随设计常态周期成比例**（2.5×/5× 60s = 150/300s），不是拍的数字（2026-09-14）
-    PASS  C：默认 no_report 升级阈值 300s（ORPAH_ALERT_NO_REPORT_CRIT_SEC）
-    PASS  C：默认 case_handled 升级阈值 48h（ORPAH_ALERT_CASE_HANDLED_CRIT_SEC；注意与起步阈值 CASE_HANDLED_SEC=24h 是两个不同的量）
-    PASS  C：刚过起步但未到升级点 → warn
+    PASS  ��δ�ϱ�������/��ʧ�еĶ�����ͣ��/���ϲ���
+    PASS  ��δ�ϱ����� gap �ҵȼ� warn
+    PASS  �� ������ֵ��**����Ƴ�̬���ڳɱ���**��2.5��/5�� 60s = 150/300s���������ĵ����֣�2026-09-14��
+    PASS  C��Ĭ�� no_report ������ֵ 300s��ORPAH_ALERT_NO_REPORT_CRIT_SEC��
+    PASS  C��Ĭ�� case_handled ������ֵ 48h��ORPAH_ALERT_CASE_HANDLED_CRIT_SEC��ע��������ֵ CASE_HANDLED_SEC=24h ��������ͬ������
+    PASS  C���չ��𲽵�δ�������� �� warn
 
 ### 告警通知（边沿触发 / Webhook / 失败可见） — PASS（0.1s）
 
@@ -101,12 +101,12 @@
 
 ### 指标面板纯计算 — PASS（0.0s）
 
-    PASS  签名：总数/通过/被拒
-    PASS  签名：失败率 1/4
-    PASS  签名：算法分布
-    PASS  签名：其它类型事件不进统计
-    PASS  签名：取不到 alg → unknown（不猜）
-    PASS  签名：无样本 → fail_ratio=None（不编 0）
+    PASS  ǩ��������/ͨ��/����
+    PASS  ǩ����ʧ���� 1/4
+    PASS  ǩ�����㷨�ֲ�
+    PASS  ǩ�������������¼�����ͳ��
+    PASS  ǩ����ȡ���� alg �� unknown�����£�
+    PASS  ǩ���������� �� fail_ratio=None������ 0��
 
 ### 时钟可信（ts=0 无 RTC） — PASS（0.5s）
 
@@ -119,18 +119,18 @@
       OK   并发：4 写 × 50 条 + 2 读线程 → 无异常且一条不丢
     时钟可信测试全部通过
 
-### IoTDB 审计/时间窗 — PASS（0.6s）
+### IoTDB 审计/时间窗 — PASS（0.5s）
 
-    == 1. actor 字段 ==
-    == 2. query_events 回读 actor ==
-    == 3. 保留期限清理 ==
-    == 4. 时间窗查询（回放用） ==
-    == 6. 路由器侧观测（多路由器定位的数据源） ==
-    == 7. 环境变量解析 ==
-      OK   合法值生效
-    全部通过
+    == 1. actor �ֶ� ==
+    == 2. query_events �ض� actor ==
+    == 3. ������������ ==
+    == 4. ʱ�䴰��ѯ���ط��ã� ==
+    == 6. ·������۲⣨��·������λ������Դ�� ==
+    == 7. ������������ ==
+      OK   �Ϸ�ֵ��Ч
+    ȫ��ͨ��
 
-### UI 服务器契约 — PASS（0.6s）
+### UI 服务器契约 — PASS（0.7s）
 
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 2] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
@@ -138,7 +138,7 @@
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
-    Ran 45 tests in 0.454s
+    Ran 45 tests in 0.525s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.0s）
@@ -152,14 +152,14 @@
 
 ### 降级策略（§8.2 选级 / §8.3 服务端） — PASS（0.1s）
 
-    == 1. §8.2 选级流程（真值表） ==
-    == 2. §8.1 映射表与级别取值域 ==
-    == 3. Device.report 自动选级 ==
-    == 4. §8.3 verify_report 的 degraded / coverage_only ==
-    == 5. counts_as_presence（能不能当“人员出现”） ==
-    == 6. 降级告警（§8.3） ==
-      OK   两条 crit 都在（顺序：同级按 since）  ['case_overtime', 'sig_fail_rate']
-    全部通过
+    == 1. ��8.2 ѡ�����̣���ֵ���� ==
+    == 2. ��8.1 ӳ����뼶��ȡֵ�� ==
+    == 3. Device.report �Զ�ѡ�� ==
+    == 4. ��8.3 verify_report �� degraded / coverage_only ==
+    == 5. counts_as_presence���ܲ��ܵ�����Ա���֡��� ==
+    == 6. �����澯����8.3�� ==
+      OK   ���� crit ���ڣ�˳��ͬ���� since��  ['case_overtime', 'sig_fail_rate']
+    ȫ��ͨ��
 
 ### 能量轴（免电池客户端） — PASS（0.0s）
 
@@ -185,14 +185,14 @@
 
 ### 抓包解析 / 双源对照 — PASS（0.1s）
 
-    == 1. pcap 往返（写→读） ==
-    == 2. 格式错误必须吵（不静默降级） ==
-    == 3. 解析与分类 ==
-    == 4. 双源对照（只算差，不猜映射） ==
-    == 5. 参照 JSON 读取 ==
-    == 6. CLI 冒烟（真跑一遍，退出码要对） ==
-      OK   --json 结构含 summary+rows 且 rows 全量  {'frames': 8, 'orpah': 5, 'by_type': {'ORPAH-REQ-CONNECT': 1, 'ORPAH-REPORT': 2, 'ORPAH-ACCESS-INFO': 1, 'ORPAH-ID-REPORT': 1}, 'errors': {'not-orpah': 1, 'bad-json': 1, 'bad-frame': 1}, 'linktype': 1, 'linktype_name': 'Ethernet'}
-    全部通过
+    == 1. pcap ������д������ ==
+    == 2. ��ʽ������볳������Ĭ������ ==
+    == 3. ��������� ==
+    == 4. ˫Դ���գ�ֻ������ӳ�䣩 ==
+    == 5. ���� JSON ��ȡ ==
+    == 6. CLI ð�̣�����һ�飬�˳���Ҫ�ԣ� ==
+      OK   --json �ṹ�� summary+rows �� rows ȫ��  {'frames': 8, 'orpah': 5, 'by_type': {'ORPAH-REQ-CONNECT': 1, 'ORPAH-REPORT': 2, 'ORPAH-ACCESS-INFO': 1, 'ORPAH-ID-REPORT': 1}, 'errors': {'not-orpah': 1, 'bad-json': 1, 'bad-frame': 1}, 'linktype': 1, 'linktype_name': 'Ethernet'}
+    ȫ��ͨ��
 
 ### 设备时钟漂移（长基线） — PASS（0.1s）
 
@@ -214,7 +214,7 @@
       OK   track.html 人级聚合走 pos.js 的 fusePerson()/fuseText()（单一实现）
       OK   track.html 人级聚合在地图重绘时随刷新（drawMapLoc → drawPersonOnMap）
 
-### 地图共享件（map.js：基点/野外包 + maps.py） — PASS（0.2s）
+### 地图共享件（map.js：基点/野外包 + maps.py） — PASS（0.1s）
 
     == 基点导入/换算/存储（map.js 原文，node 跑） ==
     == 页面守卫（两页一致、入口齐全） ==
@@ -276,10 +276,10 @@
 
 ### 文案字典（zh/en 一致 + 页面引用无缺失） — PASS（0.2s）
 
-    PASS  字典 zh/en key 集合一致（1191 / 1191）
+    PASS  字典 zh/en key 集合一致（1198 / 1198）
     PASS  每个 key 恰好 2 次（zh + en）
     PASS  字典非空且含中文与英文条目（翻译真的两套）
-    PASS  扫描 18 个页面/脚本，引用 1052 个 key（含动态前缀家族 20 个）
+    PASS  扫描 18 个页面/脚本，引用 1053 个 key（含动态前缀家族 20 个）
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
@@ -304,7 +304,7 @@
       OK   index 的新鲜度卡在拓扑之前
     数据新鲜度：全部通过
 
-### 客户端设备仿真器（设备侧旋钮/单一源守卫） — PASS（9.6s）
+### 客户端设备仿真器（设备侧旋钮/单一源守卫） — PASS（9.9s）
 
     [client] [rx 1] ORPAH-ACCESS-INFO sn=CN-WH01-9AF3C1D2 status=-
     [client] [rx 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 status=TRACKED
@@ -312,6 +312,6 @@
     [client] [rx 1] ORPAH-FOUND sn=CN-WH01-9AF3C1D2 status=-
     [client] 注入 ORPAH-REQ-CONNECT sn=CN-WH01-9AF3C1D2
     [client] [1] 注入 ORPAH-REPORT sn=CN-WH01-9AF3C1D2 rssi=-55 (102B)
-    Ran 37 tests in 9.334s
+    Ran 37 tests in 9.692s
     OK
 

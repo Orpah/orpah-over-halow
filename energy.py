@@ -107,8 +107,16 @@ ORPAH 的终端设定是**免电池可穿戴**（项链/鞋/钮扣，靠运动/�
 取能波动有两种给法（两种都收，见 `coverage()`）：
 
 - **最坏缺口**（`gap_s` + `gap_harvest_mw`，缺省）—— 保守：不假装知道中间过程；
-- **实测曲线**（`curve` = `[[t_s, mW], …]` 分段常数，通常 24h）—— 逐段积分，更准；
-  曲线是**实测数据**，所以归标定文件（`energy_calib.py` 的 `harvest_curve`），不归策略输入。
+- **实测曲线**（`curve` = `[[t_s, mW], …]` 分段常数）—— 逐段积分，更准。
+  曲线有两种**口径**（`curve_mode`，见 `CURVE_MODES`，2026-09-22）：
+  · **`"profile"`（默认）= 一段实测窗口**（可非周期：多云天 / 走动不规律 / 连测几天）
+    → 答案里只有"这段窗口会不会断、什么时候断、撑过它要多少储能"，
+    **`sustainable = None`（不适用）** —— 一段非周期窗口没有"周期"可谈，
+    **不适用 ≠ 收支平衡**，页面必须分开说；
+  · **`"period"` = 一个典型周期**（假定周期重复）→ 才给 `sustainable`（周期净收支 ≥ 0）。
+
+  曲线是**实测数据**，所以归标定文件（`energy_calib.py` 的 `harvest_curve`，那里也带 `mode`），
+  不归策略输入。
 
 ## 只算不改
 
@@ -331,8 +339,19 @@ def drain(charge_mj, harvest_mw, interval_s, level, dt_s, store_mj=STORE_MJ,
     return max(0.0, min(float(store_mj), charge))
 
 
-def _sim_curve(curve, charge_mj, overhead_mw, report_mw):
-    """按一条**分段常数**取能曲线推进电量（一个周期）——不断线吗、什么时候断、要多少储能。
+# 取能曲线的**两种口径**（单一源：`coverage()` / `energy_calib` / 页面都引用它）
+#   · "profile"（默认）= 一段**实测窗口**的轮廓（可非周期）⇒ 不谈“永续”
+#   · "period"      = **一个典型周期**，假定周期重复 ⇒ 可谈“周期净收支是否可永续”
+CURVE_MODES = ("profile", "period")
+
+
+def _sim_curve(curve, charge_mj, overhead_mw, report_mw, mode="profile"):
+    """按一条**分段常数**取能曲线推进电量 —— 会不会断线、断在什么时候、要多少储能。
+
+    ★ `mode` 是**两种口径**（2026-09-22 起，`CURVE_MODES` 是单一源），别混：
+      · `"profile"`（**默认，不假设**）= 一段**实测窗口**的轮廓（可非周期：多云天/走动不规律/连测几天）
+        ⇒ `sustainable = None`（**不适用**：一段非周期窗口无从谈“永续”；**不适用 ≠ 收支平衡**）
+      · `"period"` = **一个典型周期**（周期重复）⇒ `sustainable = 周期净收支 ≥ 0`
 
     `curve` = `[[t_s, mW], …]`（**时间非递减**、功率 ≥ 0），段内取**左端点**的功率；
     相邻两点时间相同 = 一个**阶跃**（零长度段，不积分）—— 手写与实测曲线都长这样，
@@ -345,18 +364,21 @@ def _sim_curve(curve, charge_mj, overhead_mw, report_mw):
     | `min_charge_mj` / `dead_at_s` | 周期内最低电量 / **断线时刻**（`None` = 没断） |
     | `longest_gap_s` | 最长的一段"净缺口"（采集 < 开销）时长 |
     | `max_drawdown_mj` | **要不断线所需的最小储能** = 累计净收支的**最大回撤**（运行峰值 − 之后的最低点）。不是简单的"最长缺口 × 开销"：中间能回一点的地方会自动减掉 |
-    | `cycle_net_mj` / `sustainable` | 一个周期的**净收支** / 是否**可永续**（净收支 ≥ 0） |
+    | `window_s` / `window_net_mj` | 曲线跨度（窗口/周期时长）/ **这整段**的净收支 |
+    | `period_s` / `cycle_net_mj` / `sustainable` | **仅 `period` 模式有值**（profile 模式下均为 `None`，理由见上） |
 
     ★ `sustainable=False`（采集不够自给）时，`max_drawdown_mj` 的含义只是"**撑过一个周期**"要的储能 ——
     **再大的储能也只是拖时间**（每个周期都净亏）。这条必须如实传给页面/结论。
     """
+    if mode not in CURVE_MODES:
+        raise ValueError("curve_mode 只能是 %s" % (CURVE_MODES,))
     spend = float(overhead_mw) + float(report_mw)
     gain = 0.0            # 累计净收支（>0 = 在充）
     run_max = dd = 0.0    # 运行峰值 / 最大回撤（= 所需储能）
     charge = float(charge_mj)
     dead_at, min_charge = None, charge
     gap = longest = 0.0
-    net_mj = 0.0                                     # 一个周期的净收支（>0 = 能永续）
+    net_mj = 0.0                                     # 整段的净收支（period 模式下 = 周期净收支）
     for i in range(len(curve) - 1):
         dt = float(curve[i + 1][0]) - float(curve[i][0])
         if dt < 0:
@@ -381,20 +403,32 @@ def _sim_curve(curve, charge_mj, overhead_mw, report_mw):
                 dead_at = (float(curve[i][0]) + before / (-net)) if net < 0 else float(curve[i][0])
             else:
                 min_charge = min(min_charge, charge)
-    return {"min_charge_mj": round(min_charge, 2), "dead_at_s": (None if dead_at is None else round(dead_at, 1)),
-            "max_drawdown_mj": round(dd, 2), "longest_gap_s": round(longest, 1),
-            # ★ 周期净收支 < 0 时，“需要的储能”这个说法不成立（再大也只是拖时间）→ 如实给出去
-            "cycle_net_mj": round(net_mj, 1), "sustainable": net_mj >= -_EPS}
+    span = float(curve[-1][0]) - float(curve[0][0])
+    out = {"min_charge_mj": round(min_charge, 2),
+           "dead_at_s": (None if dead_at is None else round(dead_at, 1)),
+           "max_drawdown_mj": round(dd, 2), "longest_gap_s": round(longest, 1),
+           "window_s": round(span, 1), "window_net_mj": round(net_mj, 1),
+           # ★ 默认（profile）不假设重复 ⇒“可永续”不适用；只有显式当周期看时才有这三个字段
+           "period_s": None, "cycle_net_mj": None, "sustainable": None}
+    if mode == "period":
+        out.update({"period_s": round(span, 1), "cycle_net_mj": round(net_mj, 1),
+                    "sustainable": net_mj >= -_EPS})
+    return out
 
 
-def coverage(p, charge_mj, gap_s=None, gap_harvest_mw=0.0, curve=None, cost=None,
-             max_useful_s=MAX_USEFUL_INTERVAL_S):
+def coverage(p, charge_mj, gap_s=None, gap_harvest_mw=0.0, curve=None, curve_mode="profile",
+             cost=None, max_useful_s=MAX_USEFUL_INTERVAL_S):
     """缺口（取能掉落/夜间）里**会不会断线** + 不够时**降级换覆盖**能多撑多久。
 
     `p` = `plan()` 的结果（常态策略：级别/间隔/固定开销/上报功率都从它来，单一源）。
     两种给法：**最坏缺口** `gap_s`（秒）+ `gap_harvest_mw`（缺口期采集，通常 0）；
-    或者 **实测曲线** `curve`（`[[t_s, mW], …]`）。两个都不给 / `gap_s<=0` → `verdict="none"`
+    或者 **实测曲线** `curve`（`[[t_s, mW], …]`）+ `curve_mode`。两个都不给 / `gap_s<=0` → `verdict="none"`
     （不建模，也**不编数**）。`gap_s<0` 抛 `ValueError`（写错就报）。
+
+    ★ `curve_mode`（见 `CURVE_MODES`）：`"profile"`（**默认**）= 曲线是**一段实测窗口**（可非周期）
+      ⇒ `sustainable=None`（**不适用**）；`"period"` = 曲线是**一个典型周期**（周期重复）
+      ⇒ 给 `sustainable`（周期净收支 ≥ 0）。两种口径下 `max_drawdown_mj` 的含义都是
+      “**撑过这条曲线**所需的最小储能”，但**能不能叫“永续”完全不同**，页面/告警不得混用。
 
     返回：
 
@@ -410,7 +444,8 @@ def coverage(p, charge_mj, gap_s=None, gap_harvest_mw=0.0, curve=None, cost=None
       ★ `extra_s`（降级多撑的时间）**可能为负** —— 常态本来就不报（`interval_s=None`）时，
       “降级”等于把原本不花的报账加上去，反而更早断线。那种情形**不该按“降级换覆盖”理解**，
       要的是加大储能/取能（页面得把这个区分写出来）。 |
-    | `curve` | 有曲线时的积分结果：`min_charge_mj/dead_at_s/max_drawdown_mj/longest_gap_s` |
+    | `curve` | 有曲线时的积分结果：`window_s/window_net_mj/min_charge_mj/dead_at_s/max_drawdown_mj/longest_gap_s`
+      （`period` 模式下另有 `period_s/cycle_net_mj/sustainable`；`profile` 模式下这三个为 `None` = 不适用） |
 
     `verdict` 只描述**能不能不断线**，不描述“能不能维持高质量定位”—— 降级换覆盖是拿
     **信任度与更新频率**换**不断线**（HS256 弱一级、间隔拉到 300s 是最慢档），页面要把这个取舍写出来。
@@ -441,8 +476,8 @@ def coverage(p, charge_mj, gap_s=None, gap_harvest_mw=0.0, curve=None, cost=None
             raise ValueError("取能曲线至少要 2 个点")
         if any(mw < 0 for _, mw in pts):
             raise ValueError("取能曲线的功率不能为负")
-        base = _sim_curve(pts, charge_mj, overhead, report)
-        degb = _sim_curve(pts, charge_mj, overhead, deg_report)
+        base = _sim_curve(pts, charge_mj, overhead, report, curve_mode)
+        degb = _sim_curve(pts, charge_mj, overhead, deg_report, curve_mode)
         ok = base["dead_at_s"] is None
         deg_ok = degb["dead_at_s"] is None
         out.update({
@@ -450,15 +485,14 @@ def coverage(p, charge_mj, gap_s=None, gap_harvest_mw=0.0, curve=None, cost=None
             "gap_s": round(pts[-1][0] - pts[0][0], 1),
             "cover_s": None,            # 曲线路径的答案是“什么时候断”（curve.dead_at_s），不是一把秒数
             "covers": ok,
-            "curve": {"n": len(pts), "period_s": round(pts[-1][0] - pts[0][0], 1), **base},
+            "curve": {"n": len(pts), "mode": curve_mode, **base},
             "need_store_mj": base["max_drawdown_mj"],
             "degraded": {"level": LEVEL_HS, "interval_s": deg_interval,
                          "deficit_mw": round(overhead + deg_report - gap_harvest_mw, 4),
                          "cover_s": None, "covers": deg_ok, "gap_short_s": None,
                          "extra_s": None,
                          "need_store_mj": degb["max_drawdown_mj"],
-                         "curve": {"n": len(pts), "period_s": round(pts[-1][0] - pts[0][0], 1),
-                                   **degb}},
+                         "curve": {"n": len(pts), "mode": curve_mode, **degb}},
         })
         return out
 

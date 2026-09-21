@@ -311,10 +311,13 @@ ck("★ 常态本来就不报时，“降级换覆盖”**无益**（extra_s<0�
    str(en.coverage(P_sil, 1500.0, gap_s=12 * 3600.0)["degraded"]["extra_s"]))
 
 print("== 13. 覆盖：按**实测取能曲线**积分（可选路径）==")
+# ★ 两个口径（`curve_mode`）：这里的 NIGHT_DAY / CC_WEAK 都是“**一个典型周期**”
+#   （典型日、假定周期重复）⇒ 显式写 `curve_mode="period"`，才谈得上“周期净收支/可永续”。
+#   不写 = 默认 `profile`（一段实测窗口，可非周期）→ `sustainable=None`（**不适用**）。
 NIGHT_DAY = [[0, 0.0], [6 * 3600, 0.0], [6 * 3600, 1.2],      # 00:00-06:00 无取能
              [18 * 3600, 1.2], [18 * 3600, 0.0],              # 06:00-18:00 有光
              [24 * 3600, 0.0]]                                # 18:00-24:00 无取能
-cc = en.coverage(P, 1500.0, curve=NIGHT_DAY)
+cc = en.coverage(P, 1500.0, curve=NIGHT_DAY, curve_mode="period")
 ck("最长缺口 = 6 小时（夜）", abs(cc["curve"]["longest_gap_s"] - 21600.0) < 0.1,
    str(cc["curve"]["longest_gap_s"]))
 ck("★ 要撑过这一夜所需储能 = 0.5mW × 6h = 10800 mJ（**不是**“最长缺口×开销”以外的东西："
@@ -329,16 +332,27 @@ ck("储能只有 1500 mJ → 夜里就断（50 分钟，0.5mW 下 1500/0.5=3000s
 ck("★ 降级换覆盖把“撑过这一夜”的储能需求从 10.8 J 降到 3.6 J",
    abs(cc["degraded"]["need_store_mj"] - 3600.0) < 0.5,
    str(cc["degraded"]["need_store_mj"]))
-cc_ok = en.coverage(P, 12000.0, curve=NIGHT_DAY)    # 给足储能（> 10800）
+cc_ok = en.coverage(P, 12000.0, curve=NIGHT_DAY, curve_mode="period")   # 给足储能（> 10800）
 ck("给足储能 → 不断线（dead_at=None）", cc_ok["curve"]["dead_at_s"] is None
    and cc_ok["covers"] and cc_ok["verdict"] == "ok", str(cc_ok["curve"]))
 CC_WEAK = [[0, 0.0], [6 * 3600, 0.0], [6 * 3600, 0.6],
            [18 * 3600, 0.6], [18 * 3600, 0.0], [24 * 3600, 0.0]]
-cw = en.coverage(P, 12000.0, curve=CC_WEAK)
+cw = en.coverage(P, 12000.0, curve=CC_WEAK, curve_mode="period")
 ck("★ 采集不够自给（日均 0.3mW < 支出 0.5mW）→ sustainable=False + 周期净亏 −17.28 J："
    "此时 need_store 只是“撑过一个周期”，**再大的储能也只是拖时间**",
    not cw["curve"]["sustainable"] and abs(cw["curve"]["cycle_net_mj"] + 17280.0) < 1.0
    and cw["verdict"] != "ok", str(cw["curve"]))
+# —— 不改数据、只换口径：数值结论一样，但“能不能叫永续”完全不同 ——
+cc_def = en.coverage(P, 1500.0, curve=NIGHT_DAY)              # 默认 = profile
+ck("★ 默认口径是 profile（**不假设重复**）：同一份“典型日”数据现在也给 window_s，"
+   "但 sustainable=None = **不适用**（不适用 ≠ 收支平衡），period_s/cycle_net_mj 同样为 None",
+   cc_def["curve"]["sustainable"] is None and cc_def["curve"]["period_s"] is None
+   and cc_def["curve"]["cycle_net_mj"] is None
+   and cc_def["curve"]["mode"] == "profile"
+   and abs(cc_def["curve"]["window_s"] - 86400.0) < 0.1
+   and abs(cc_def["curve"]["window_net_mj"] - 8640.0) < 1.0
+   and cc_def["curve"]["longest_gap_s"] == cc["curve"]["longest_gap_s"]
+   and cc_def["need_store_mj"] == cc["need_store_mj"], str(cc_def["curve"]))
 ck("曲线路径不给单值“能撑多久”（不编不适用的秒数）",
    cc["cover_s"] is None and cc["gap_deficit_mw"] is None)
 ck("阶跃写法（相邻同刻点）合法；时间**倒退**才报错",
@@ -354,6 +368,45 @@ for bad, why in (([[0, 0.0], [10, 0.5], [5, 0.0]], "时间倒退"),
 ck("纯函数：同一输入两次结果完全一样（不藏状态）",
    en.coverage(P, 1500.0, gap_s=3600.0) == en.coverage(P, 1500.0, gap_s=3600.0)
    and en.coverage(P, 1500.0, curve=NIGHT_DAY) == en.coverage(P, 1500.0, curve=NIGHT_DAY))
+
+print("== 13b. 非周期/多段曲线（profile）：结论与“当周期看”**不同** ==")
+# 3 天，**不是周期**（三天形状不同）：第 1 天阴（0.15 mW）→ 第 2/3 天晴（1.5 mW）。
+# 每天白天 12h、支出 0.5 mW = 43.2 J/天。⚠ 关键（我第一遍手算就错在这）：**0.15 mW 仍低于支出 0.5 mW**
+#   ⇒ 缺口从 t=0 一直连到第 2 天上午（30 h），不是“白天就算充”。逐段手算：
+#   0-6h −10.8 / 6-18h −15.12 / 18-30h −21.6 ⇒ 最深亏空 **−47.52 J**；
+#   30-42h +43.2 / 42-54h −21.6 / 54-66h +43.2 / 66-72h −10.8 ⇒ 窗口净 **+6.48 J**
+PROFILE3 = [[0, 0.0], [6 * 3600, 0.0], [6 * 3600, 0.15], [18 * 3600, 0.15],
+            [18 * 3600, 0.0], [24 * 3600, 0.0],
+            [30 * 3600, 0.0], [30 * 3600, 1.5], [42 * 3600, 1.5],
+            [42 * 3600, 0.0], [48 * 3600, 0.0],
+            [54 * 3600, 0.0], [54 * 3600, 1.5], [66 * 3600, 1.5],
+            [66 * 3600, 0.0], [72 * 3600, 0.0]]
+cp = en.coverage(P, 50000.0, curve=PROFILE3)          # 储能 50 J > 47.52 J → 撑过整段
+ck("窗口 = 72h（不是“一天”）；窗口净收支 +6.48 J（正），但 **不谈永续**（sustainable=None）",
+   abs(cp["curve"]["window_s"] - 259200.0) < 0.1
+   and abs(cp["curve"]["window_net_mj"] - 6480.0) < 1.0
+   and cp["curve"]["sustainable"] is None and cp["curve"]["period_s"] is None,
+   str(cp["curve"]))
+ck("★ 最长缺口 = **30 h**：第 1 天白天只有 0.15 mW，**仍低于支出** ⇒ 不算充，缺口一直连到第 2 天上午",
+   abs(cp["curve"]["longest_gap_s"] - 108000.0) < 0.1, str(cp["curve"]["longest_gap_s"]))
+ck("★ 撑过整段所需储能 = **47.52 J**（前 30h 一口气净亏；后两天回血也**减不掉**它 —— 它发生在最先）",
+   abs(cp["need_store_mj"] - 47520.0) < 2.0, str(cp["need_store_mj"]))
+ck("给足 50 J → 整段不断线（ok + dead_at=None）",
+   cp["verdict"] == "ok" and cp["curve"]["dead_at_s"] is None, str(cp["curve"]))
+ck("储能只有 1.5 J → 窗口一开头就断（0.5mW 下 3000s）",
+   en.coverage(P, 1500.0, curve=PROFILE3)["curve"]["dead_at_s"] == 3000.0)
+ck("★ 同一份数据换个口径（period）就说“可永续”（窗口净收支为正）—— "
+   "**这就是两种口径的差别**：period 回答不了“这段窗口里会不会断线”",
+   en.coverage(P, 50000.0, curve=PROFILE3, curve_mode="period")["curve"]["sustainable"] is True)
+ck("★ 同一份数据：储能 30 J（< 47.52 J）→ profile 说“会断”（32.4h），period 仍说“可永续” "
+   "（两种口径各说各的，所以口径必须由**数据来源**决定、不得猜）",
+   en.coverage(P, 30000.0, curve=PROFILE3)["curve"]["dead_at_s"] is not None
+   and en.coverage(P, 30000.0, curve=PROFILE3, curve_mode="period")["curve"]["sustainable"] is True)
+try:
+    en.coverage(P, 1500.0, curve=PROFILE3, curve_mode="peroid")
+    ck("curve_mode 拼错 → 报错，不静默当成 profile", False)
+except ValueError:
+    ck("curve_mode 拼错 → 报错，不静默当成 profile", True)
 
 print("== 14. 设计常态（60 s）≠ 底线（300 s）：三档 tier 与两个门槛 ==")
 # 口径（2026-09-14 用户定）：正常情况下客户端每 60 s 连一次 HaLow 路由器；比它慢 = **已降速**，

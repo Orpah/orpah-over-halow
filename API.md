@@ -687,7 +687,7 @@ Server → Router 的三类下行（LOST-TABLE / TRACKING-STATUS / ERROR）多�
 | `id_cap_mismatch` | `warn`（不分级） | 设备**已签**声明「有 RTC」（`cap_rtc is True`），却送出不可用的 `ts`（`ts_ok=false`） | `300` | `ORPAH_ALERT_CAP_MISMATCH_SEC` |
 | `id_energy` | `warn` / `crit` | 设备最后一条**已签**上报的电量低（`mv ≤ low` → warn）/ 已耗尽（`mv ≤ out` → crit）；数据带 `mv`/`silence_in_s`（还能撑多久） | `3300` / `3100` | `ORPAH_ALERT_ENERGY_LOW_MV` / `ORPAH_ALERT_ENERGY_OUT_MV` |
 | `no_report_energy` | `warn`（**不升级 crit**） | 设备沉默**且**最后一条已签电量低 → **疑似没电**（等它取能），与 `no_report` **分流**（处置相反，不得合并） | 同 `no_report`（`150`） | `ORPAH_ALERT_NO_REPORT_SEC` |
-| `id_cover_short` | `warn` / `crit` | **覆盖（不断线）不足**（SPEC §5.2 E4③）：模型算出缺口里撑不过 → `degrade`（降级换覆盖够）warn / `short`（降级也不够）crit。**设计不足**，不是“作息”。数据：`verdict/gap_s/cover_s/gap_short_s/need_store_mj/deg_covers/deg_cover_s/deg_need_store_mj/curve_gap_s/dead_at_s/sustainable`（**不重算**，直接取 `state.cover`；且要求该 SN 有**已签**电量） | — | — |
+| `id_cover_short` | `warn` / `crit` | **覆盖（不断线）不足**（SPEC §5.2 E4③）：模型算出缺口里撑不过 → `degrade`（降级换覆盖够）warn / `short`（降级也不够）crit。**设计不足**，不是“作息”。数据：`verdict/gap_s/cover_s/gap_short_s/need_store_mj/deg_covers/deg_cover_s/deg_need_store_mj/curve_mode/window_s/curve_gap_s/dead_at_s/sustainable`（**不重算**，直接取 `state.cover`；且要求该 SN 有**已签**电量）。⚠ 曲线口径下 `cover_s`/`gap_short_s` 恒为 `null` ⇒ 页面改用专模版（`alert_id_cover_short_curve`），不拿主模版去填 “null” | — | — |
 | `ratelimit` | `warn` | 最近 N 秒内出现过**限频丢弃**（**两侧合并**，无论哪条防线）→ **只陈述事实、不归因**（大流量 ≠ 攻击）；数据带 `which` / `dropped_sn` / `dropped_router` / `sn` / `router` | `60` | `ORPAH_ALERT_RL_SEC` |
 
 ⚠ **默认值分两类，别看混**：
@@ -1149,10 +1149,18 @@ POST /api/truth   body {"times":[t1,t2,…]}                    → 指定时刻
 > `verdict`（`ok`/`degrade`/`short`/`none`）、`gap_deficit_mw`、`cover_s`、`covers`、`gap_short_s`、
 > **`need_store_mj`**（覆盖该缺口所需的最小储能）、`need_harvest_mw`（自给自足的线）、
 > `degraded{level,interval_s,deficit_mw,cover_s,covers,gap_short_s,extra_s,need_store_mj}`、
-> `curve{n,period_s,min_charge_mj,dead_at_s,max_drawdown_mj,longest_gap_s,cycle_net_mj,sustainable}`。
+> `curve{n,mode,window_s,window_net_mj,min_charge_mj,dead_at_s,max_drawdown_mj,longest_gap_s}`
+> （`period` 口径下另有 `period_s`/`cycle_net_mj`/`sustainable`）。
+> ★ **曲线的两种口径**（2026-09-22 新增，`curve_mode`；标定文件里写 `harvest_curve.mode`）：
+> `profile`（**默认，不假设**）= **一段实测窗口**（可非周期：多云天/走动不规律/连测几天）
+> ⇒ `sustainable = null` = **不适用**（一段非周期窗口没有“周期”可谈）；
+> `period` = **一个典型周期**（假定周期重复）⇒ 才给 `sustainable`（周期净收支 ≥ 0）。
+> 两种口径的数值结论（`dead_at_s`/`max_drawdown_mj`）相同，但**能不能叫“永续”完全不同** ——
+> 口径必须由**数据来源**决定、不得猜、不得互相替代（页面按 `mode` 换标签：缺口 / 实测窗口 / 典型周期）。
 > ★ **`short` = 设计不足**（要出警的），不是“正常作息”；★ 曲线路径下 `cover_s` / `gap_deficit_mw` 为
-> **`null` = 不适用**（答案是 `curve.dead_at_s`），**不要**当成“永远够”；★ `sustainable=false` 时
-> “需要多少储能”不成立（再大也只是拖时间）；★ `degraded.extra_s` 可能为负（常态本来就不报 → 降级无益）。
+> **`null` = 不适用**（答案是 `curve.dead_at_s`），**不要**当成“永远够”；★ `sustainable=false`（仅
+> `period` 口径会出现）时“需要多少储能”不成立（再大也只是拖时间）；★ `degraded.extra_s` 可能为负
+> （常态本来就不报 → 降级无益）。
 
 ### `axis`（扫描表：这就是「能量轴」这个名字）
 

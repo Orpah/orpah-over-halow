@@ -680,8 +680,11 @@ class OrpahApp:
                                         cost=self.cal.cost, listen_mw=p["listen_mw"])
         # 覆盖（不断线，2026-09-13）：缺口场景（page/env 给的 gap_s）或**实测取能曲线**
         # （标定文件里的 harvest_curve）——两者都给时曲线优先（它更准，且本来就是测出来的）。
+        # ★ 2026-09-22：曲线带**口径**（`curve_mode`：profile=一段实测窗口 / period=一个典型周期）——
+        #   两种口径下 `sustainable` 的含义不同（profile 下为 None = 不适用），所以必须透传，
+        #   不能让页面/告警把“一段非周期窗口”误读成“可永续”。
         cover = en.coverage(p, self.en_charge, gap_s=self.en_gap_s, curve=self.cal.curve,
-                            cost=self.cal.cost)
+                            curve_mode=self.cal.curve_mode, cost=self.cal.cost)
         self.id_battery_mv = en.mv_of(self.en_charge, self.en_store,
                                       self.cal.cell_empty_mv, self.cal.cell_full_mv)
         self.id_level_energy = 1 if p["degraded"] else None   # 1 = HS256（§8.2 的 L1 算法）

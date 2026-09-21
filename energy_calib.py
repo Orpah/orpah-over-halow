@@ -29,7 +29,8 @@ JSON。路径由 **`ORPAH_ENERGY_CALIB`** 指定；没设就找仓库根目录�
   "report": {"ES256": {"active_ma": 12, "report_ms": 45},  // → 2.00 mJ
              "HS256": {"active_ma": 12, "report_ms": 22}}, // → 0.98 mJ
   "listen": {"listen_ma": 12, "listen_ms": 200},          // 听窗口 200ms @12mA → 8.88 mJ/次
-  "harvest_curve": {"period_s": 86400, "points": [[0, 0], [21600, 0], [21600, 1.2],
+  "harvest_curve": {"mode": "period",                // period=一个典型周期（周期重复）/ profile=一段实测窗口
+                     "period_s": 86400, "points": [[0, 0], [21600, 0], [21600, 1.2],
                                                   [64800, 1.2], [64800, 0], [86400, 0]]},
   "store_mj": 2000, "charge0_mj": 1500,
   "cell": {"empty_mv": 3000, "full_mv": 4200}
@@ -45,6 +46,16 @@ JSON。路径由 **`ORPAH_ENERGY_CALIB`** 指定；没设就找仓库根目录�
 要多少储能）—— 归标定文件，因为它是测出来的数据，不是策略选择。不给就只用“最坏缺口”
 参数（保守：不假装知道中间过程）。⚠ 它**不**计入那 8 项标定的计数（它是时间序列，不是单值），
 页面单独一行显示。
+
+★ **`mode` 必须选一个**（不同口径下结论不同，不得默认当成“周期”）：
+
+| `mode` | 这条曲线是什么 | 结果里有什么 |
+|---|---|---|
+| `"profile"`（**缺省，不假设**）| **一段实测窗口**的轮廓（可非周期：多云天/走动不规律/连测几天）| 窗口跳度、这段窗口会不会断、**撑过它要多少储能**；**不谈“永续”**（`sustainable=None` = 不适用）|
+| `"period"` | **一个典型周期**（如“典型日”，假定周期重复）| 另有 `周期净收支` 与`可永续`（≥0）|
+
+两种都是**实测数据**；区别只是“这段数据代表一个周期，还是就是那一段窗口”。
+真机实测往往是后者（天气/走动不会干净重复）—— 那就别写成 `period`。
 
 等价写法（已有换算结果时）：`"sleep": {"sleep_mw": 0.03}`、
 `"report": {"ES256": {"cost_mj": 2.0}}`、`"listen": {"listen_mj": 6.0}`；`v_mv`
@@ -140,7 +151,8 @@ NOTE_KEYS = {
 ERROR_KINDS = ("read", "parse", "not_object", "schema", "field_type",
                "field_range", "raw_incomplete", "source_type",
                "charge_gt_store", "cell_order",
-               "curve_shape", "curve_point", "curve_negative", "curve_order")
+               "curve_shape", "curve_point", "curve_negative", "curve_order",
+               "curve_mode")
 
 
 def i18n_keys():
@@ -211,6 +223,7 @@ class Calib(object):
         self.notes = []                       # [{key, args}]
         self.calc = {}                        # fid -> 算式字符串（仅实测项）
         self.curve = None                     # 实测取能曲线 [[t_s, mW], …]（可选，不计入 8 项计数）
+        self.curve_mode = "profile"            # 曲线口径：profile=一段实测窗口 / period=一个典型周期
         self.values = self.demo_values()
         self.prov = {f: "demo" for f in FIELD_IDS}
 
@@ -312,8 +325,10 @@ class Calib(object):
     def view(self):
         cv = None
         if self.curve:
-            cv = {"present": True, "n": len(self.curve),
-                  "period_s": round(self.curve[-1][0] - self.curve[0][0], 1)}
+            span = round(self.curve[-1][0] - self.curve[0][0], 1)
+            cv = {"present": True, "n": len(self.curve), "mode": self.curve_mode,
+                  # window_s 两种模式都有（= 曲线跳度）；period_s 只在 period 模式有意义
+                  "window_s": span, "period_s": (span if self.curve_mode == "period" else None)}
         return {
             "schema": SCHEMA,
             "exists": self.exists,
@@ -533,10 +548,18 @@ def load(path=None):
         c._bad("cell_full_mv", "cell_order",
                lo="%g" % eff["cell_empty_mv"], hi="%g" % eff["cell_full_mv"])
 
-    # --- 实测取能曲线（可选；形状/时序/功率全查，坏了**整份不采用**）---
+    # --- 实测取能曲线（可选；形状/时序/功率/口径全查，坏了**整份不采用**）---
     hc = doc.get("harvest_curve")
+    cmode = "profile"          # 缺省：**不假设**周期的实测窗口
     if hc is not None:
         pts = hc.get("points") if isinstance(hc, dict) else hc
+        if isinstance(hc, dict) and "mode" in hc:
+            mv = hc.get("mode")
+            if isinstance(mv, str) and mv in en.CURVE_MODES:
+                cmode = mv
+            else:
+                # 写错口径 → 坏文件（不是静默当成 period：两种口径的结论不一样）
+                c._bad(None, "curve_mode", got=repr(mv), allow="/".join(en.CURVE_MODES))
         if not isinstance(pts, list):
             c._bad(None, "curve_shape", detail=type(pts).__name__)
         elif len(pts) < 2:
@@ -566,11 +589,14 @@ def load(path=None):
         c.prov = {f: "demo" for f in FIELD_IDS}
         c.calc = {}
         c.curve = None
+        c.curve_mode = "profile"
         return c
     c.values.update(vals)
     c.prov.update(prov)
     c.calc = calc
     c.curve = curve
+    if curve is not None:
+        c.curve_mode = cmode                    # 口径随曲线一起生效
     n = sum(1 for f in FIELD_IDS if c.prov[f] == "measured")
     c.source = "measured" if n == c.n_total else ("mixed" if n else "none")
     return c
@@ -593,7 +619,9 @@ def main():
     for e in c.errors:
         print("  !! " + e["key"] + " " + json.dumps(e["args"], ensure_ascii=False))
     if c.curve:
-        print("  取能曲线：%d 点，周期 %.0f s" % (len(c.curve), c.curve[-1][0] - c.curve[0][0]))
+        print("  取能曲线：%d 点，%s %.0f s（mode=%s）"
+              % (len(c.curve), "周期" if c.curve_mode == "period" else "窗口",
+                 c.curve[-1][0] - c.curve[0][0], c.curve_mode))
     return 0 if c.ok else 1
 
 

@@ -222,8 +222,10 @@ CURVE = {"period_s": 86400, "points": [[0, 0.0], [21600, 0.0], [21600, 1.2],
 cv = load_obj({"schema": ecal.SCHEMA, "sleep": {"sleep_mw": 0.03},
                "harvest_curve": CURVE}, "cv.json")
 ck("曲线载入（6 点；阶跃写法合法）", cv.ok and len(cv.curve) == 6, str(cv.curve))
-ck("view 里单独给曲线摘要（n / period_s）",
-   cv.view()["curve"] == {"present": True, "n": 6, "period_s": 86400.0},
+ck("view 里单独给曲线摘要（n / 口径 / 窗口跨度）—— 不写 mode 时**不得**当成 period",
+   cv.view()["curve"] == {"present": True, "n": 6, "mode": "profile",
+                          "window_s": 86400.0, "period_s": None}
+   and cv.curve_mode == "profile",
    str(cv.view()["curve"]))
 ck("summary 里也提到曲线（免得只报 1/8 项看着像没标定）",
    "取能曲线 6 点" in cv.summary(), cv.summary())
@@ -232,6 +234,10 @@ ck("★ 曲线**不计入**那 8 项计数（它是时间序列，不是单值�
 ck("裸数组形式也收（`\"harvest_curve\": [[t, mW], …]`）",
    load_obj({"schema": ecal.SCHEMA, "harvest_curve": [[0, 0.0], [10, 1.0]]},
             "cv2.json").curve == [[0.0, 0.0], [10.0, 1.0]])
+ck("mode 显式写 period → 按周期口径（period_s 有值、才算“可永续”）",
+   load_obj({"schema": ecal.SCHEMA,
+             "harvest_curve": {"mode": "period", "points": [[0, 0.0], [10, 1.0]]}},
+            "cvp.json").view()["curve"]["period_s"] == 10.0)
 ck("不给曲线 → None + view.present=False（**不是错误**）",
    load_obj({"schema": ecal.SCHEMA, "sleep": {"sleep_mw": 0.03}},
             "cv3.json").view()["curve"] == {"present": False})
@@ -241,7 +247,10 @@ for bad, kind, why in (
         ({"points": [[0, 0.0], [5, 1.0, 2]]}, "curve_point", "点不是二元组"),
         ({"points": [[0, 0.0], ["x", 1.0]]}, "curve_point", "点里有非数字"),
         ({"points": [[0, 0.0], [5, -1.0]]}, "curve_negative", "功率为负"),
-        ({"points": [[0, 0.0], [10, 0.5], [5, 0.0]]}, "curve_order", "时间倒退")):
+        ({"points": [[0, 0.0], [10, 0.5], [5, 0.0]]}, "curve_order", "时间倒退"),
+        # ★ 口径写错 → 坏文件（不静默当成 profile/period：两种口径的结论不一样）
+        ({"mode": "peroid", "points": [[0, 0.0], [10, 1.0]]}, "curve_mode", "mode 拼错"),
+        ({"mode": 1, "points": [[0, 0.0], [10, 1.0]]}, "curve_mode", "mode 不是字符串")):
     cc = load_obj({"schema": ecal.SCHEMA, "sleep": {"sleep_mw": 0.03},
                    "harvest_curve": bad}, "cvbad.json")
     ck("坏曲线（%s）→ %s + **整份不采用**（值回演示、曲线也不留）" % (why, kind),
