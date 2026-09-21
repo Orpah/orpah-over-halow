@@ -44,8 +44,8 @@ SHOTS = [
      "首页 · 限频三段：Server（省 CPU）/ Router（省带宽）/ 设备侧（自愿延后，不是防线）"),
     ("/track.html", "#canvas", "ui-track.png", ("click", "#btnRun"), 9000, None,
      "定位与轨迹 · 页面内本地模拟跑一遍（蓝方块=站位、绿线=真实轨迹、红线=估计轨迹、黄虚线=95% 椭圆）"),
-    ("/replay.html", "#canvasReplay", "ui-replay.png", None, 6000, "tsdb",
-     "回放 · 轨迹与搜索半径（读 IoTDB 时间窗；没有 IoTDB 时这张跳过）"),
+    ("/replay.html", "#canvasReplay", "ui-replay.png", ("click", "#rpPlay"), 11000, "tsdb",
+     "回放 · 轨迹与搜索半径（读 IoTDB 时间窗；先点「▶ 播放」让光标走一段 —— 回放只看光标之前的样本）"),
     ("/attack.html", "#atTable", "ui-attack.png", None, 0, None,
      "攻击流量面板 · 用例清单（只截静态；不注入，避免改了密钥库状态）"),
 ]
