@@ -14,6 +14,24 @@
 
 ## 一图流（L1 数据通路）
 
+```mermaid
+flowchart LR
+  subgraph PC["一个进程就能全跑（ui_server.py 内嵌整条链路，零硬件）"]
+    C["client.py<br/>Orpah ID 签名上报"] -->|"以太网帧 0x88B5（host 口）"| S["STA 模拟器<br/>vendor/halow/sim.py"]
+    S -->|"虚拟空口（TCP）<br/>AA 55 … CRC8"| A["AP 模拟器"]
+    A -->|"host 口"| R["router.py<br/>走失表缓存 + 转发限频（省带宽）"]
+    R -->|"UDP 19447"| V["server.py<br/>权威走失库 + 验签 + 限频（省 CPU）"]
+    V -->|"下行（签名 + dts/dn 保新鲜）"| R
+    R -.->|"注入空口（L2 下行）"| S
+  end
+  V --> DB[("SQLite 元数据<br/>+ IoTDB 时序/事件")]
+  U["ui_server.py<br/>HTTP/SSE :8901"] --- C
+  U --- V
+  U --- B["浏览器 12 页<br/>拓扑 / 定位 / 回放 / 攻击 …"]
+```
+
+文件级对照（各段实际是哪个脚本、帧格式怎么走）：
+
 ```
 [Client host]  --注入以太网帧-->  [STA 模块]  --HaLow 虚拟空口-->  [AP 模块]  --host口-->  [Router 桥]  --UDP-->  [Server]
   client.py      ORPAH-REPORT      sim.py B       二层透明桥          sim.py A        router.py       真实 UDP        server.py
@@ -29,6 +47,11 @@ AP 空口 → STA 模块收 → host 口推给 Client。
 | Router | TH-RJ45：AP + RJ45 网口上行 | `router.py` + AP 模拟器（host 口 = 网口上行） |
 | Server | 云端/本地 Python | `server.py`（真实 UDP socket + 权威走失库） |
 | 链路 | 802.11ah 空口 | 模拟器「虚拟空口」（TCP，帧格式同固件 sim_link） |
+
+首页就是这个拓扑（图 = 本机 `python ui_server.py --every 2` 的**真实页面**；数据是本 demo 的
+**模拟/仿真**，不是实测）—— 蓝/橙/浅灰白三色 = L2 上行 / Orpah ID / 发现，各链路计数分开算：
+
+[![首页：三层拓扑与按内容分色的计数](docs/images/ui-index-topology.png)](docs/images/ui-index-topology.png)
 
 ---
 
@@ -92,6 +115,28 @@ GET：`/api/status`、`/api/registry`、`/api/cases`、`/api/stations`、`/api/k
 `/api/alerts`、`/api/metrics`、`/api/replay`、`/api/checksum`、`/api/ts/query`、`/api/ts/events`、`/api/events`(SSE)；
 POST：`/api/ctl`（暂停/改 SN·间隔/走失表 mark·untrack/密钥吊销/重放与伪造 ID 上报/防 spoof/限频刷量/**告警通知配置·测试发送**）、
 `/api/upload`、`/api/registry`、`/api/cases`、`/api/stations`、`/api/keys`、`/api/sig`。
+
+### 界面（截图，`python shots.py` 一键重出）
+
+> 下面都是**真实页面**的截图（不是手绘 UI），数据是本 demo 跑出来的**模拟/仿真**，不是实测。
+> 重出：另开一个终端 `python ui_server.py --every 2 --no-browser`，然后 `python shots.py`
+> —— 页面/区域/等待写在 `shots.py` 的 `SHOTS` 表里；**图没内容（黑屏、被截）脚本直接报错**。
+> 本机 IoTDB 不可用时，回放页那张会**自动跳过**并打印原因。
+
+定位与轨迹（`track.html`）：页面内本地模拟跑一遍 —— 蓝方块=站位、绿线=真实轨迹、红线=估计轨迹、
+黄虚线=95% 置信椭圆：
+
+[![定位与轨迹：站位、真实轨迹与估计轨迹](docs/images/ui-track.png)](docs/images/ui-track.png)
+
+攻击流量面板（`attack.html`）：13 条攻击 + 1 条合法对照，每行给「期望裁决」与「被哪道防线拦下」
+（这张**只截静态清单**，不注入 —— 清单里的 `revoked` 用例会改密钥库状态）：
+
+[![攻击流量面板：用例清单与期望裁决](docs/images/ui-attack.png)](docs/images/ui-attack.png)
+
+限频（首页「限频」卡，§5.8）：**三段各吃自己的桶** —— Server 侧（省 CPU）/ Router 侧（省带宽）/
+**设备侧自愿自限频（是延后不是丢弃，也不是防线）**：
+
+[![限频：Server / Router / 设备侧三段](docs/images/ui-index-rl.png)](docs/images/ui-index-rl.png)
 
 ## 前端共享件（单一源，改一处多页生效）
 
