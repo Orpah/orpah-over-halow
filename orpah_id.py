@@ -70,7 +70,7 @@ def pick_level(se_ok=True, sign_ok=True, hmac_ok=True):
 
     §8.2 的流程照字面实现：
       Step1 SE（ATECC608B）I2C 通信失败 → 看 CH32 有无 HMAC 密钥：有→L2 / 无→L3
-      Step2 SE 通、`atcab_sign(Slot0)` 失败 → L1（改用 Slot 5 的 HMAC）
+      Step2 SE 通、`atcab_sign(Slot0)` 失败 → L1（改用 Slot 4 的 HMAC）
       Step2 SE 通、签名成功 → L0（正常 ECDSA）
     """
     if not se_ok:
@@ -498,7 +498,7 @@ class Device:
             self.hmac_key = derive_demo_hmac(self.sn, self.gen)
         else:
             self.privkey = ec.generate_private_key(ec.SECP256R1())
-            self.hmac_key = os.urandom(32)      # Slot 5 / CH32 保护区（降级 HS256）
+            self.hmac_key = os.urandom(32)      # Slot 4 / CH32 保护区（降级 HS256）
         self.pubkey = self.privkey.public_key()
 
     def sign(self, alg, preimage):
