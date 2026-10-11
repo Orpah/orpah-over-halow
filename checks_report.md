@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-10-11 18:10:55
-- git HEAD：`16626f2`
+- 时间：2026-10-11 20:24:33
+- git HEAD：`28c25dc`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（27/27 套件通过）
 
@@ -12,13 +12,13 @@
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
 | 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.1s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
-| 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.6s | 通过 |
-| 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 1.4s | 通过 |
+| 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.7s | 通过 |
+| 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 1.5s | 通过 |
 | 告警通知（边沿触发 / Webhook / 失败可见） | `test_notify.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.0s | 通过 |
 | 时钟可信（ts=0 无 RTC） | `test_clock.py` | ✅ PASS | 0.5s | 通过 |
 | IoTDB 审计/时间窗 | `test_tsdb_audit.py` | ✅ PASS | 0.5s | 通过 |
-| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.6s | 通过 |
+| UI 服务器契约 | `test_server.py` | ✅ PASS | 0.7s | 通过 |
 | 批量合规用例（黄金样本/SN 边界/报文） | `checks_batch.py` | ✅ PASS | 0.1s | 通过 |
 | 降级策略（§8.2 选级 / §8.3 服务端） | `test_levels.py` | ✅ PASS | 0.1s | 通过 |
 | 能量轴（免电池客户端） | `test_energy.py` | ✅ PASS | 0.0s | 通过 |
@@ -27,15 +27,15 @@
 | 设备时钟漂移（长基线） | `demo_clock.py` | ✅ PASS | 0.1s | 通过 |
 | 定位内核（pos.js，node 跑原文） | `test_posjs.py` | ✅ PASS | 0.2s | 通过 |
 | 地图共享件（map.js：基点/野外包 + maps.py） | `test_mapjs.py` | ✅ PASS | 0.2s | 通过 |
-| 首页转义口径（app.js：esc/alertText 单一出口） | `test_appjs.py` | ✅ PASS | 0.1s | 通过 |
+| 首页转义口径（app.js：esc/alertText 单一出口） | `test_appjs.py` | ✅ PASS | 0.0s | 通过 |
 | 限频（§5.8 令牌桶 / 两条防线） | `test_ratelimit.py` | ✅ PASS | 0.1s | 通过 |
 | 设备侧自限频（§5.8 设备那一环，自愿） | `test_selflimit.py` | ✅ PASS | 0.1s | 通过 |
 | Router 下行路径（来源校验） | `test_router.py` | ✅ PASS | 0.1s | 通过 |
 | 下行真实性（F-14 B：签名/重放/时间窗） | `test_downlink.py` | ✅ PASS | 0.1s | 通过 |
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
-| UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 3.1s | 通过 |
+| UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 3.2s | 通过 |
 | 数据新鲜度（freshness.py + fresh.js） | `test_fresh.py` | ✅ PASS | 0.2s | 通过 |
-| 客户端设备仿真器（设备侧旋钮/单一源守卫） | `test_client_sim.py` | ✅ PASS | 9.9s | 通过 |
+| 客户端设备仿真器（设备侧旋钮/单一源守卫） | `test_client_sim.py` | ✅ PASS | 10.0s | 通过 |
 
 ## 关键输出
 
@@ -72,7 +72,7 @@
       OK   已知边界（如实：旧 nonce 被挤出后，这条重放**会被受理** —— ts=0 设备上时间窗也帮不上）  got=None accepted=True
     全部通过
 
-### 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） — PASS（0.6s）
+### 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） — PASS（0.7s）
 
     == 1. 用例清单（单一源 spoof.py）==
     PASS  用例字段仍是 5 项（脚本/演示都按这个解包）
@@ -81,7 +81,7 @@
     PASS  说明里不出现归因性词（AGENTS §0 术语硬规则）
     PASS  UI 子集排除 revoked（页面用活密钥库，跑一次会把在跑的设备搞成验不过）
 
-### 告警规则（含处置态） — PASS（1.4s）
+### 告警规则（含处置态） — PASS（1.5s）
 
     PASS  长未上报：启用/走失中的都报，停用/报废不报
     PASS  长未上报：带 gap 且等级 warn
@@ -130,7 +130,7 @@
       OK   合法值生效
     全部通过
 
-### UI 服务器契约 — PASS（0.6s）
+### UI 服务器契约 — PASS（0.7s）
 
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 2] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
@@ -138,12 +138,13 @@
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
-    Ran 45 tests in 0.456s
+    Ran 45 tests in 0.522s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
 
     == 1. 黄金样本（校验位只算 ORG-UNIQUE，不含 CC）==
+    == 1b. 校验位口径（协议 v1.21：1 位 = Damm32，不再用 Luhn mod 32）==
     == 2. SN 边界（格式：CC-ORG-UNIQUE[-CHECK]，Crockford Base32 去 I L O U）==
     == 3. SN 解析（注册时按 SN 回填 cc/org，不信任前端传值）==
     == 4. 报文编解码边界（通用 JSON 公共头）==
@@ -223,7 +224,7 @@
       OK   replay.html：开页拉包列表（loadPacks）
       OK   replay.html：调 packInit(cb) 接线（map.js 顶层碰不了 DOM；换包要重建图层）
 
-### 首页转义口径（app.js：esc/alertText 单一出口） — PASS（0.1s）
+### 首页转义口径（app.js：esc/alertText 单一出口） — PASS（0.0s）
 
     == 转义唯一实现（esc 覆盖字符） ==
     == alertText：调用点必须包 esc、体内不许再包 ==
@@ -283,7 +284,7 @@
     PASS  页面引用的 key 全部在字典里
     PASS  i18n 文案值里不含 Markdown 标记（**）
 
-### UI 样式/窄屏守卫 — PASS（3.1s）
+### UI 样式/窄屏守卫 — PASS（3.2s）
 
     == style.css：页面不再被写死宽度、窄屏档位齐全 ==
     == 页面：内联宽度、viewport、共享件 ==
@@ -304,7 +305,7 @@
       OK   index 的新鲜度卡在拓扑之前
     数据新鲜度：全部通过
 
-### 客户端设备仿真器（设备侧旋钮/单一源守卫） — PASS（9.9s）
+### 客户端设备仿真器（设备侧旋钮/单一源守卫） — PASS（10.0s）
 
     [client] [rx 1] ORPAH-ACCESS-INFO sn=CN-WH01-9AF3C1D2 status=-
     [client] [rx 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 status=TRACKED
@@ -312,6 +313,6 @@
     [client] [rx 1] ORPAH-FOUND sn=CN-WH01-9AF3C1D2 status=-
     [client] 注入 ORPAH-REQ-CONNECT sn=CN-WH01-9AF3C1D2
     [client] [1] 注入 ORPAH-REPORT sn=CN-WH01-9AF3C1D2 rssi=-55 (102B)
-    Ran 37 tests in 9.503s
+    Ran 37 tests in 9.581s
     OK
 

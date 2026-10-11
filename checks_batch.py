@@ -79,6 +79,36 @@ ck("luhn32：相邻换位被检出",
    and luhn32.luhn32_verify(GOLD_ORG_UNIQUE + "-E") is True)
 
 # ---------------------------------------------------------------------------
+print("== 1b. 校验位口径（协议 v1.21：1 位 = Damm32，不再用 Luhn mod 32）==")
+# 背景（2026-10-11 实测）：协议 §3 允许 1 位用 Damm32，而实现原先按“CHECK 长度”选算法
+# （1 位一律走 Luhn32）⇒ 把 Damm32 的 SN 全判不合格，连本规范黄金样本都被拒。
+import orpah_id as _oid          # noqa: E402  （就地 import：本节的判据都属于它）
+
+ck("黄金样本的 1 位 Damm32 SN 必须通过 verify_check",
+   _oid.verify_check(GOLD_SN + "-B") is True, GOLD_SN + "-B")
+ck("2 位 Mod97 的 SN 仍必须通过 verify_check",
+   _oid.verify_check(GOLD_SN + "-21") is True, GOLD_SN + "-21")
+ck("compute_check(..., 'damm32') == 黄金样本 B",
+   _oid.compute_check(GOLD_ORG_UNIQUE, "damm32") == "B",
+   _oid.compute_check(GOLD_ORG_UNIQUE, "damm32"))
+
+# 真机已入库的 4 颗（1 位 Damm32）—— 必须全部通过
+for _sn in ("CN-T1AN1V-Y85RKWXTWV-N", "CN-T1AN1V-SEM5KMA1NK-D",
+            "CN-T1AN1V-P9ZSPVPGWS-P", "CN-T1AN1V-X3HANM2E20-H"):
+    ck(f"真机 SN 通过 verify_check：{_sn}", _oid.verify_check(_sn) is True)
+
+# 改坏就必须被挡（改 CHECK / 改 UNIQUE 各一例）
+for _sn in ("CN-T1AN1V-X3HANM2E20-J", "CN-T1AN1V-X3HANM2E21-H"):
+    ck(f"改坏一位必须被拒：{_sn}", _oid.verify_check(_sn) is False)
+
+# 反向锁：**不能再按 Luhn32 验**。反例 = 黄金样本 ORG-UNIQUE 的 Luhn32 值 `E`
+# （该串 Damm32 真值是 `B` ⇒ `E` 属于“Luhn32 合法、Damm32 不合法”）⇒ 必须被拒。
+# 注：不能用 X3HANM2E20 那种串当反例 —— 实测它在两种算法下**同值**（碰巧），没有区分度。
+ck("Luhn32 合法但 Damm32 不合法的 SN 必须被拒（反向锁）",
+   _oid.verify_check_luhn32("WH01-9AF3C1D2-E") is True
+   and _oid.verify_check("CN-WH01-9AF3C1D2-E") is False)
+
+# ---------------------------------------------------------------------------
 print("== 2. SN 边界（格式：CC-ORG-UNIQUE[-CHECK]，Crockford Base32 去 I L O U）==")
 # (sn, 期望 sn_err 结果；None = 合法)
 SN_CASES = [

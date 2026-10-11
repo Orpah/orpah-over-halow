@@ -261,8 +261,28 @@ def verify_check_luhn32(org_unique_check):
     return _luhn_sum(digits) % 32 == 0
 
 
+def _damm32_module():
+    """延迟 import 同目录的 `damm32.py`（协议 §3.2 定稿的 1 位校验算法，见 v1.21 修订）。
+
+    **缺了要大声失败**：以前 1 位校验按 Luhn mod 32 验，会把 **Damm32 的 SN 全部判为不合格**
+    （连协议黄金样本 `CN-WH01-9AF3C1D2-B` 都被拒）。所以这里不能静默降级成 False。
+    """
+    import damm32 as _m
+
+    return _m
+
+
 def compute_check(org_unique, algo="mod97"):
-    """给 ORG-UNIQUE（不含 CC）算校验码：algo="mod97"（2 位）或 "luhn32"（1 位）。"""
+    """给 ORG-UNIQUE（不含 CC）算校验码。
+
+    algo：
+      · `"damm32"` — **1 位**，协议 §3.2（v1.21 定稿）**1 位校验的唯一算法**
+      · `"mod97"` — **2 位**（十进制 `02`–`98`）
+      · `"luhn32"` — 1 位，**不再用于 SN 校验位**（仅为历史/对照保留；它只检单字错、
+        不检相邻换位，且长度上无法与 Damm32 区分）
+    """
+    if algo == "damm32":
+        return _damm32_module().damm32_check(org_unique)
     if algo == "mod97":
         return compute_check_mod97(org_unique)
     if algo == "luhn32":
@@ -271,9 +291,17 @@ def compute_check(org_unique, algo="mod97"):
 
 
 def verify_check(sn):
-    """整串 SN（CC-ORG-UNIQUE[-CHECK]）按 CHECK 长度选择算法验证。
+    """整串 SN（CC-ORG-UNIQUE[-CHECK]）按 CHECK 长度验证。
 
-    CC 不参与校验（校验位只算 ORG-UNIQUE）：0 位=无校验(通过)；1 位=Luhn32；2 位=Mod97。
+    CC 不参与校验（校验位只算 ORG-UNIQUE）：
+
+    - 0 位 = 无校验（通过）
+    - **1 位 = Damm32**（协议 §3 于 v1.21 定稿：1 位**唯一**算法）
+    - 2 位 = Mod 97
+
+    ★ 2026-10-11 实测修正：此前 1 位分支走 `verify_check_luhn32`，而协议允许的 Damm32 一律
+    被判不合格（连黄金样本 `CN-WH01-9AF3C1D2-B` 也拒），真机 SN 只有“碰巧 Luhn32 与 Damm32
+    同值”的才过。口径以协议为准。
     """
     p = parse_sn(sn)
     if p is None:
@@ -282,7 +310,7 @@ def verify_check(sn):
         return True
     body = f"{p['org']}-{p['unique']}-{p['check']}"   # 不含 CC
     if len(p["check"]) == 1:
-        return verify_check_luhn32(body)
+        return _damm32_module().damm32_verify(body)
     if len(p["check"]) == 2:
         return verify_check_mod97(body)
     return False
