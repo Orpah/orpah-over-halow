@@ -354,7 +354,7 @@
     ★★ **CI = 第三方环境交叉验证**（2026-10-12 加 ✓）：`.github/workflows/checks.yml` ——
     `ubuntu-latest` / `windows-latest` / `macos-latest` 三栏（`fail-fast: false` ✓）各跑**同一份**
     `python run_checks.py` ✓ **再加**一步 `--e2e` ✓（真 UDP 那几组 ✓）。三栏**不带** `--bench`（本仓没有台架 ✓）。
-    ★ 本仓最值钱的是 **Windows 栏** ✓：AGENTS §5 记的那几条都是 **Windows 专属**（`subprocess`
+    ★ **Windows 栏**量的是 AGENTS §5 记的那几条 **Windows 专属**假设（`subprocess`
     按 GBK 解码 ✗、`shutil.which("sh")` 找到 WSL 的 bash ✗、任务 JSON 吃双引号 ✗）—— 它们平常
     只在**一台**机器上被验过 ✗ ⇒ 干净机器上跑一遍才知道是真是假 ✓。
     **它不证明** ✗：① 不是真机（本仓是纯 PC 链路；`--e2e` 走 `vendor/halow/sim.py` 的**空口仿真副本** ✓）；
