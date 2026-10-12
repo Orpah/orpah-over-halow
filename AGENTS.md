@@ -542,6 +542,20 @@
       5.2 µs/条）→ 限频层自己变成 CPU 放大器。改 `OrderedDict` + `move_to_end`/`popitem(last=False)`。
     - **「限频不是封禁」是回归锁**：`test_ratelimit.py` 里“默认参数下正常流量零丢弃”
       （Server 侧 120s、Router 侧 60s 各一条）+ “桶回补后立刻放行”两条不许改坏。
+    - ★★ **对账判据要锚在「到达」上，不要锚在「发出」上**（2026-10-12 **三系统 CI** 上量出来的 ✓，
+      `demo_ratelimit.py` 第 [2] 组）：原来断言 `接受 + 丢(两侧) >= 发出(200)` ✗ —— 它隐含了
+      “harness（空口仿真 / 空口+UDP）**一条不丢**”这个**从未验证过**的假设 ✗：
+      macOS arm64 的 CI runner 上实测 **200 条里 19 条从没进过任何一侧的计数** ✗（181/200 ✓），
+      而 Linux / Windows 恰好跟得上 ✓ ⇒ 那条断言**只在「机器够快」时成立** ✗。
+      ⇒ 现在改成**两个恒等式**（都锚在“到达”上 ✓、与平台无关 ✓）：
+      `RouterBridge.rx_id_count == rl_dropped_id + id_up_count` ✓、
+      `OrpahServer.rx_id_count == id_report_total + rl_dropped_id` ✓；
+      差额（发出−到达 Router、到达 Router−到达 Server）**只报告不判错** ✓（可见地写出来 ✓）——
+      那是空口仿真与 UDP 的丢，**不属于我们的账** ✓；差额若 >0 则明说“**验签被拒 or 记账漏洞**” ✗。
+      另：连发改成**小簇让出**（每 20 条等 Router 入口把前面这批收下去再发 ✓，软等待 ✓ 不判失败 ✓）——
+      桶是 40/5s ⇒ “连发”的语义不变 ✓，但不再把 harness 的 socket 挤爆 ✗。
+      ★ 一般化：**判据要锚在「观测得到的事实」上** ✓，别锚在「我以为会发生的事」上 ✗
+      （同源教训：`test_tsdb_audit.py` 以为“没装包会跳过” ✗、`run_checks.py` 以为“子进程是 UTF-8” ✗）。
     - **讲「上游有额度」必须按*整条路径*判（2026-09-13 实测，`demo_ratelimit.wait_budget`）**：
       一条已签 ID-REPORT 要依次过**三个**桶 —— Router 转发（按 SN，burst 40）、
       Server per-SN（burst 5）、Server per-Router（源地址，burst 10）。

@@ -98,6 +98,17 @@ class RouterBridge:
             router_burst=rl_mod.RTR_MAC_BURST)
         self.on_ratelimit = on_ratelimit    # callable(rec)：被本机限频丢弃（供 UI 记事件）
         self.rl_dropped = 0                 # 本机丢弃总数（转发侧 + probe 侧）
+        # ★★ 2026-10-12（macOS 的 CI runner 上量出来的 ✗）：补两个"ID-REPORT 专用"计数，
+        #   让**对账锚在"到达"上** ✓ —— 恒等式（与平台无关 ✓）：
+        #       `rx_id_count == rl_dropped_id + id_up_count`
+        #   为什么：原来演示的判据是 `接受 + 丢(两侧) >= 发出 200` ✗，它隐含了
+        #   "harness（空口仿真 / UDP）一条不丢"这个**从未验证过**的假设 ✗ ——
+        #   macOS arm64 上实测 200 条里有 **19 条从没进过任何一侧的计数** ✗（比如 181/200），
+        #   ⇒ 那个判据只在"机器够快"时成立 ✗（Linux / Windows 恰好跟得上 ✓）。
+        #   ⇒ 锚在"到达"上：既能查出**我们自己的记账漏洞**（到达 ≠ 丢 + 转发 ✓），
+        #     又不会把 harness 的丢包算到我们头上 ✓（差额`发出 − 到达`只报告 ✓）。
+        self.rx_id_count = 0            # 到达本 Router 的 ORPAH-ID-REPORT 条数（限频检查之前 ✓）
+        self.rl_dropped_id = 0          # 其中被 Router 侧限频丢弃的条数
         # 最近被丢弃的（最新在前；与 server.rl_drops 对称，供 UI/演示看“哪条防线”）
         self.rl_drops = collections.deque(maxlen=20)
         # 本地走失缓存（Server LOST-TABLE 下发）：sn -> tracked(bool)
@@ -250,6 +261,7 @@ class RouterBridge:
                 self.on_up(msg)
             return
         if mtype == MSG_ID_REPORT:
+            self.rx_id_count += 1       # 到达即计（**在限频检查之前** ✓，恒等式见 __init__ 那段）
             # 已签 orpah-id-report：Router 只透传（不改 hdr/payload/sig），
             # Server 侧验签（§9.3）。不占 REPORT 上行计数（up_count），
             # 但它是真实进 UDP 的帧 → 单独计 id_up_count（UI 把 UDP 段按内容分色显示）。
@@ -263,6 +275,9 @@ class RouterBridge:
             try:
                 self.udp.sendto(encode_msg(msg), self.server_addr)
             except OSError as e:
+                # ★ 转发失败也算"丢"✓ —— 否则`到达 ≠ 丢 + 转发`✗（恒等式会平白破掉 ✓）
+                self.rl_dropped += 1
+                self.rl_dropped_id += 1
                 log(f"转发 Server 失败: {e}")
                 return
             self.id_up_count += 1
@@ -286,6 +301,8 @@ class RouterBridge:
                "sn": sn or "-", "router": mac or "-", "which": which,
                "retry_after": None if retry == float("inf") else round(retry, 2)}
         self.rl_dropped += 1
+        if kind == "id-report":
+            self.rl_dropped_id += 1     # 按类型分开计（恒等式要用它 ✓）
         self.rl_drops.appendleft(rec)
         log(f"限频丢弃（Router 侧）[{self.rl_dropped}] {kind} sn={rec['sn']} "
             f"mac={rec['router']}（{which} 防线，{rec['retry_after']}s 后可再试）")

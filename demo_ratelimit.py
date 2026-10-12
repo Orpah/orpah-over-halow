@@ -193,23 +193,54 @@ def main():
         print(f"\n[2] 同一 SN 连发 {args.flood} 条 → Router 侧砍带宽、Server 侧砍 CPU")
         srv.rl.reset_counters()
         rl_d0, rtr_d0 = srv.rl_dropped, router.rl_dropped
+        # ★★ 2026-10-12 改判据（**macOS 的 CI runner 上量出来的** ✗）：改成**锚在"到达"上** ✓。
+        #   原来断言 `接受 + 丢(两侧) >= 200` ✗ —— 它隐含了"harness（空口仿真 / 空口+UDP）
+        #   一条不丢"这个**从未验证过**的假设 ✗：macOS arm64 实测 200 条里 **19 条从没进过
+        #   任何一侧的计数** ✗（181/200 ✓），而 Linux / Windows 恰好跟得上 ✓
+        #   ⇒ 那条断言只在"机器够快"时成立 ✗（与判据本身要表达的"两侧各拦一段"无关 ✗）。
+        #   现在改成**两个恒等式**（都能查我们自己的记账漏洞 ✓，又不会把 harness 的丢包
+        #   算到我们头上 ✓）：
+        #     Router: 到达 == 转发(id_up_count) + Router 丢(id)
+        #     Server: 到达 == 接受(id_report_total) + Server 丢(id)
+        #   差额（发出 − 到达 Router、到达 Router − 到达 Server）**只报告不判错** ✓ ——
+        #   那是空口仿真与 UDP 的丢 ✓，不属于我们的账 ✓（可见地写出来 ✓，不藏 ✗）。
+        rx_r0, drop_r0, fwd_0 = router.rx_id_count, router.rl_dropped_id, router.id_up_count
+        rx_s0, drop_s0 = srv.rx_id_count, srv.rl_dropped_id
         n1 = sink.count()
         for _ in range(args.flood):
             # force=True：本组模拟的就是“一台失控/被改的设备连发” —— 它**不做**自限频，
             # 否则这一组根本不会撞上 Router/Server 的桶（那正是下面第 [7] 组的对照）。
             client.send_id_report(dev.report(), force=True)
-        # 判据：**两侧合计**把这批处理/丢弃完（Router 侧丢的不会到 Server，不能只看 server）。
-        # 2026-09-13 实测踩过：只等 server 侧计数，Router 侧一开就永远等不到。
+            # ★ 小簇让出（2026-10-12，同上）：每 20 条等 Router 入口把前面这批**收下去**再发 ✓。
+            #   桶是 40/5s ⇒ 让出 20 条量级完全不影响"连发"的语义 ✓，但不再把 harness 的
+            #   socket 缓冲挤爆 ✗（那正是 macOS 上丢 19 条的原因方向 ✓）。
+            #   ⚠ 这个等待是**软**的：`wait_until` 超时就继续发 ✓（不拿它判失败 ✗）——
+            #     它只负责"别把机器压垮" ✓，判据在下面两个恒等式里 ✓。
+            if (_ + 1) % 20 == 0:
+                wait_until(lambda: router.rx_id_count - rx_r0 >= _ + 1,
+                           timeout=2.0, interval=0.005)
+        # 判据 ①：Router 自己的账要平（到达 = 转发 + 丢）
         done = wait_until(
-            lambda: (sink.count() - n1) + (srv.rl_dropped - rl_d0)
-            + (router.rl_dropped - rtr_d0) >= args.flood,
+            lambda: (router.rx_id_count - rx_r0)
+            == (router.id_up_count - fwd_0) + (router.rl_dropped_id - drop_r0),
+            timeout=30.0, interval=0.02)
+        rx_r = router.rx_id_count - rx_r0
+        fwd = router.id_up_count - fwd_0
+        d_rtr = router.rl_dropped_id - drop_r0
+        check("Router 侧对账（到达 = 转发 + 丢，锚在“到达”上）", done,
+              f"到达 {rx_r} = 转发 {fwd} + 丢 {d_rtr}"
+              f"（发出 {args.flood} ⇒ 前段丢 {args.flood - rx_r} 条 = 空口仿真/UDP，不计我们的账）")
+        # 判据 ②：Server 自己的账要平（到达 = 接受 + 丢）
+        done_s = wait_until(
+            lambda: (srv.rx_id_count - rx_s0)
+            == (sink.count() - n1) + (srv.rl_dropped_id - drop_s0),
             timeout=30.0, interval=0.02)
         acc = sink.count() - n1
-        d_srv = srv.rl_dropped - rl_d0
-        d_rtr = router.rl_dropped - rtr_d0
-        check("这批被两侧合计对账完（超时可见地失败，不静默）", done,
-              f"接受 {acc} + 丢(Router {d_rtr} / Server {d_srv}) "
-              f"= {acc + d_rtr + d_srv}/{args.flood}")
+        d_srv = srv.rl_dropped_id - drop_s0
+        rx_s = srv.rx_id_count - rx_s0
+        check("Server 侧对账（到达 = 接受 + 丢；差额若 >0 = 验签被拒 or 记账漏洞）", done_s,
+              f"到达 {rx_s} = 接受 {acc} + 丢 {d_srv}"
+              f"（Router 转发 {fwd} ⇒ 这一段丢 {fwd - rx_s} 条，同样不计我们的账）")
         check("Router 侧先砍带宽（第一道，§5.8 行 2）", d_rtr > 0,
               f"Router 丢 {d_rtr} 条（per-SN 桶容量 {rtr.sn.burst:.0f}）")
         check("Server 侧也拦下一段（两条线都动，这才叫分层）", d_srv > 0,

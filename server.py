@@ -82,6 +82,12 @@ class OrpahServer:
         self.id_nonces = id_nonces if id_nonces is not None else oid.NonceCache()
         self.on_id_report = on_id_report
         self.id_report_total = 0
+        # ★★ 2026-10-12（与 router.py 同名计数对称 ✓）：让"到达 = 接受 + 丢"这条恒等式成立 ✓：
+        #   `rx_id_count == id_report_total + rl_dropped_id`
+        #   ⚠ 若哪天出现"到了但既没接受也没限频丢"（比如**验签被拒**），差额会 > 0 ✓ ——
+        #     那种情况 err 信息里会明说"验签被拒 or 记账漏洞" ✗（不是静默放过 ✓）。
+        self.rx_id_count = 0            # 到达本 Server 的 ORPAH-ID-REPORT 条数（限频检查之前 ✓）
+        self.rl_dropped_id = 0          # 其中被 Server 侧限频丢弃的条数
         self.id_reports = deque(maxlen=20)     # 环形（appendleft 自动截断，线程安全）
         # 限频（§5.8，2026-09-13）：**验签之前**的两条防线（per-SN + per-Router）。
         # 只作用于 REPORT / ID-REPORT；**ORPAH-FOUND 故意不限**（发现走失是业务关键事件，
@@ -192,6 +198,8 @@ class OrpahServer:
         # 代价必须说明：per-SN 桶的 key 来自**未验签**的 payload.sn → 轮换 SN 能绕过它，
         # 所以另有 per-Router 桶（源地址）兜底；两条都过才放行（见 ratelimit.py）。
         if mtype in (MSG_REPORT, MSG_ID_REPORT):
+            if mtype == MSG_ID_REPORT:
+                self.rx_id_count += 1   # 到达即计（**在限频检查之前** ✓，恒等式见 __init__）
             dec = self.rl.check(sn=sn, router=addr[0],
                                 kind="id" if mtype == MSG_ID_REPORT else "report")
             if not dec.ok:
@@ -252,6 +260,8 @@ class OrpahServer:
                "router": f"{addr[0]}:{addr[1]}", "which": which,
                "retry_after": None if retry == float("inf") else round(retry, 2)}
         self.rl_dropped += 1
+        if mtype == MSG_ID_REPORT:
+            self.rl_dropped_id += 1     # 按类型分开计（恒等式要用它 ✓）
         self.rl_drops.appendleft(rec)
         log(f"限频丢弃 [{self.rl_dropped}] {mtype} sn={rec['sn']} "
             f"<- {rec['router']}（{which} 防线，{rec['retry_after']}s 后可再试）")
