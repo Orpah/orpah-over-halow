@@ -1,7 +1,7 @@
 # ORPAH 批量合规测试报告
 
-- 时间：2026-10-12 01:02:34
-- git HEAD：`72b8600`
+- 时间：2026-10-12 15:26:49
+- git HEAD：`006e155`
 - 解释器：3.13.14 @ C:\Python313\python.exe
 - 结论：**全部通过**（27/27 套件通过）
 
@@ -12,7 +12,7 @@
 | 运动/定位数据源 | `test_motion.py` | ✅ PASS | 0.1s | 通过 |
 | 密钥生命周期 | `test_keys.py` | ✅ PASS | 0.1s | 通过 |
 | 防 spoof（离线逐条） | `test_spoof.py` | ✅ PASS | 0.1s | 通过 |
-| 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 1.3s | 通过 |
+| 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） | `test_attack.py` | ✅ PASS | 0.7s | 通过 |
 | 告警规则（含处置态） | `test_alerts.py` | ✅ PASS | 1.4s | 通过 |
 | 告警通知（边沿触发 / Webhook / 失败可见） | `test_notify.py` | ✅ PASS | 0.1s | 通过 |
 | 指标面板纯计算 | `test_metrics.py` | ✅ PASS | 0.0s | 通过 |
@@ -35,7 +35,7 @@
 | 文案字典（zh/en 一致 + 页面引用无缺失） | `test_i18n.py` | ✅ PASS | 0.2s | 通过 |
 | UI 样式/窄屏守卫 | `test_uicss.py` | ✅ PASS | 3.1s | 通过 |
 | 数据新鲜度（freshness.py + fresh.js） | `test_fresh.py` | ✅ PASS | 0.1s | 通过 |
-| 客户端设备仿真器（设备侧旋钮/单一源守卫） | `test_client_sim.py` | ✅ PASS | 10.5s | 通过 |
+| 客户端设备仿真器（设备侧旋钮/单一源守卫） | `test_client_sim.py` | ✅ PASS | 9.4s | 通过 |
 
 ## 关键输出
 
@@ -72,7 +72,7 @@
       OK   ��֪�߽磨��ʵ���� nonce �������������ط�**�ᱻ����** ���� ts=0 �豸��ʱ�䴰Ҳ�ﲻ�ϣ�  got=None accepted=True
     ȫ��ͨ��
 
-### 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） — PASS（1.3s）
+### 攻击流量面板（认领逻辑 / 单一源 / 页面守卫） — PASS（0.7s）
 
     == 1. 用例清单（单一源 spoof.py）==
     PASS  用例字段仍是 5 项（脚本/演示都按这个解包）
@@ -138,7 +138,7 @@
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-LOST-TABLE sn=- -> 127.0.0.1:12345
     [server] [down 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 -> 127.0.0.1:12345
-    Ran 45 tests in 0.427s
+    Ran 45 tests in 0.448s
     OK
 
 ### 批量合规用例（黄金样本/SN 边界/报文） — PASS（0.1s）
@@ -305,7 +305,7 @@
       OK   index 的新鲜度卡在拓扑之前
     数据新鲜度：全部通过
 
-### 客户端设备仿真器（设备侧旋钮/单一源守卫） — PASS（10.5s）
+### 客户端设备仿真器（设备侧旋钮/单一源守卫） — PASS（9.4s）
 
     [client] [rx 1] ORPAH-ACCESS-INFO sn=CN-WH01-9AF3C1D2 status=-
     [client] [rx 1] ORPAH-TRACKING-STATUS sn=CN-WH01-9AF3C1D2 status=TRACKED
@@ -313,6 +313,6 @@
     [client] [rx 1] ORPAH-FOUND sn=CN-WH01-9AF3C1D2 status=-
     [client] 注入 ORPAH-REQ-CONNECT sn=CN-WH01-9AF3C1D2
     [client] [1] 注入 ORPAH-REPORT sn=CN-WH01-9AF3C1D2 rssi=-55 (102B)
-    Ran 37 tests in 10.226s
+    Ran 37 tests in 9.175s
     OK
 

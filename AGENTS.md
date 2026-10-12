@@ -351,6 +351,15 @@
     （有些脚本自己 catch 异常还往下跑，只看退出码会漏）；② `--e2e`（L1/L2/L3/L3b/防 spoof/限频）
     **必须先在别的终端停掉 orpah-ui** —— demo 与它（:8901 那套端口）串扰会跑出假失败，
     脚本自己也检查并拒绝（退出码 2）。
+    ★★ **CI = 第三方环境交叉验证**（2026-10-12 加 ✓）：`.github/workflows/checks.yml` ——
+    `ubuntu-latest` / `windows-latest` / `macos-latest` 三栏（`fail-fast: false` ✓）各跑**同一份**
+    `python run_checks.py` ✓ **再加**一步 `--e2e` ✓（真 UDP 那几组 ✓）。三栏**不带** `--bench`（本仓没有台架 ✓）。
+    ★ 本仓最值钱的是 **Windows 栏** ✓：AGENTS §5 记的那几条都是 **Windows 专属**（`subprocess`
+    按 GBK 解码 ✗、`shutil.which("sh")` 找到 WSL 的 bash ✗、任务 JSON 吃双引号 ✗）—— 它们平常
+    只在**一台**机器上被验过 ✗ ⇒ 干净机器上跑一遍才知道是真是假 ✓。
+    **它不证明** ✗：① 不是真机（本仓是纯 PC 链路；`--e2e` 走 `vendor/halow/sim.py` 的**空口仿真副本** ✓）；
+    ② IoTDB 那几栏没跑 ✗（CI 没装 `iotdb` ⇒ 落库用例**可见地跳过** ✓）；③ **没有 `orpah.db`** ✗
+    （密钥库不入库 ⇒ CI 是**重新播种**的新库 ✓，若某套件暗地里依赖本机那份库的状态 ⇒ 这里就会红 ✓）。
   - **时钟可信（2026-09-12，无 RTC 设备）**：设备 `ts=0`/缺失 → 协议层跳过时间窗（`verify_report` 已做），
     但**存什么时间必须走唯一入口** `orpah_proto.effective_ts(ts, rx)`（返回 `(ts, src)`）——
     以前 `write_report`/路由器观测/`registry.touch` 各自 `time.time()` 兜底，会有偏差且导致

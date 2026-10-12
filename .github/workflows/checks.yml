@@ -1,0 +1,74 @@
+# 第三方环境交叉验证 —— ★ 先读这段：它**证明什么**、**不证明什么**
+#
+# 证明 ✓：换一台机器、换一套系统之后，本仓那批**离线闸门**照样全过 ——
+#   `python run_checks.py`（27 个套件 + 批量合规用例）与 `--e2e`（L1/L2/L3/防 spoof/限频，
+#   走假 AP + 假 Server 的**真 UDP**）✓。这就是"自己机器上过 = 自证"补不上的那一环 ✓。
+#
+# ★ 本仓最该被 CI 抓的，是 **Windows 与 POSIX 的差异**（AGENTS §5 记的那几条，都只在一台机器上被验过 ✗）：
+#   · `subprocess` 输出默认按 GBK/936 解码 ✗ ⇒ 读线程 `UnicodeDecodeError`、`stderr` 变 `None`；
+#   · `shutil.which("sh")` 会找到 **WSL 的 bash.exe** ✗（它看不到 `F:/…` 路径 ⇒ 假失败）；
+#   · 文本一律 UTF-8、打印中文要先 `sys.stdout.reconfigure` ✗。
+# ⇒ 三栏（Linux / Windows / macOS）跑的是**同一份** `run_checks.py` ✓，口径只有一份 ✓。
+#
+# 不证明 ✗（三条，都别读成"CI 绿 = 能用"）：
+#   ① **不是真机** ✗ —— 本仓是**纯 PC 业务链路**（不碰空口/硬件 ✓）；`--e2e` 走的是
+#      `vendor/halow/sim.py` 那份**空口仿真副本** ✓（真机在 `halow-demo`，本仓不吃它 ✓）。
+#   ② **IoTDB 那几栏没跑** ✗ —— CI 里没装 `iotdb` 包 ⇒ 落库相关用例会**可见地跳过** ✓
+#      （本仓口径：缺东西要**明确跳过**，不许默默当通过 ✗ ⇒ 日志里能看到"跳过" ✓）。
+#   ③ **没有 `orpah.db`** ✗ —— 密钥库**不入库**（`.gitignore` ✓）⇒ CI 上是**重新播种**的新库 ✓；
+#      若某个套件暗地里依赖本机那份库的状态 ✗ ⇒ 这里就会红 ✓（那正是要量出来的事 ✓）。
+#
+# 说明：`--e2e` 会起固定端口的假 AP / 假 Server（UDP 19447 等 ✓）⇒ 需要端口空闲 ✓；
+#   所以它单独一步 —— 日志里能一眼看出"红的是离线闸门还是端到端" ✓。
+name: checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false            # 一个系统红，别的照样跑完 ✓（三栏一起看才有意义 ✓）
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+          - os: windows-latest
+            label: Windows（★ 本仓最值钱的一栏：AGENTS §5 那些 Windows 专属坑 ✓）
+          - os: macos-latest
+            label: macOS
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: 装依赖（ES256/验签要用 cryptography；串口工具要用 pyserial）
+        run: python -m pip install --upgrade pip cryptography pyserial
+
+      - name: 记下这台机器的版本（日志留痕，便于"上次用的是什么"一眼可查）
+        shell: pwsh
+        run: |
+          Write-Host "OS     : $($env:RUNNER_OS) $($env:ImageOS)"
+          Write-Host "python : $(python --version 2>&1)"
+          Write-Host "git    : $(git --version 2>&1)"
+
+      - name: 一键闸门（离线套件；口径 = 退出码 0 且输出无 FAIL/Traceback）
+        run: python run_checks.py
+
+      - name: 端到端那几组（真 UDP：L1/L2/L3/防 spoof/限频）
+        run: python run_checks.py --e2e
+
+      - name: 把报告捞出来（失败时也留档；三栏各一份）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checks_report-${{ matrix.os }}
+          path: checks_report.md
+          if-no-files-found: warn

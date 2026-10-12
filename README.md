@@ -218,6 +218,18 @@ gdal2tiles.py --profile=mercator -z 12-17 --xyz source.tif ui/static/maps/现场
 密钥生命周期、防 spoof 清单、告警规则、指标计算、时钟归一化、IoTDB 时间窗、UI 契约
 （用例表见 `checks_batch.py`，各模块自检见 `test_*.py`）。
 
+**CI（GitHub Actions）= 同一套闸门，换机器 / 换系统再跑一遍** ✓ ——
+`.github/workflows/checks.yml` 是 **Linux / Windows / macOS 三栏**（`fail-fast: false` ✓），
+各跑**同一份** `python run_checks.py` ✓ **再加**一步 `--e2e` ✓（L1/L2/L3/防 spoof/限频，真 UDP ✓）。
+价值 = 换环境仍全过 ✓（补上"自己机器上过"这一环 ✗）。
+★ 本仓最值钱的是 **Windows 栏** ✓：AGENTS §5 那条记的都是 Windows 专属坑（`subprocess` 按 GBK
+解码 ✗、`shutil.which("sh")` 找到 WSL 的 bash ✗、任务 JSON 吃双引号 ✗）—— 它们平常只在**一台**
+机器上被验过 ✗ ⇒ 干净机器跑一遍才知道是真是假 ✓。
+★ **三条它不证明** ✗：① **不是真机** ✗（本仓是纯 PC 业务链路；`--e2e` 走 `vendor/halow/sim.py`
+那份**空口仿真副本** ✓，真机在 `halow-demo` ✓）；② IoTDB 那几栏没跑 ✗（CI 里没装 `iotdb` ⇒
+落库用例**可见地跳过** ✓）；③ **没有 `orpah.db`** ✗（密钥库不入库 ⇒ CI 上是**重新播种**的新库 ✓，
+若某套件暗地里依赖本机那份库的状态 ⇒ 这里就会红 ✓）。
+
 ---
 
 ## L1 做什么
