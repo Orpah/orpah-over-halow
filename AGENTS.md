@@ -358,7 +358,10 @@
     按 GBK 解码 ✗、`shutil.which("sh")` 找到 WSL 的 bash ✗、任务 JSON 吃双引号 ✗）—— 它们平常
     只在**一台**机器上被验过 ✗ ⇒ 干净机器上跑一遍才知道是真是假 ✓。
     **它不证明** ✗：① 不是真机（本仓是纯 PC 链路；`--e2e` 走 `vendor/halow/sim.py` 的**空口仿真副本** ✓）；
-    ② IoTDB 那几栏没跑 ✗（CI 没装 `iotdb` ⇒ 落库用例**可见地跳过** ✓）；③ **没有 `orpah.db`** ✗
+    ② IoTDB 那几栏：CI 里没装 `iotdb` ⇒ **不能用“自己会跳过”来假设** ✗ —— 首次跑实测
+    `test_tsdb_audit.py` **直接 IndexError** ✗（`write_event()` 用了只在装了包时才存在的 `TSDataType.TEXT` ✗
+    ⇒ `NameError` 被 `except` 静默吞掉 ⇒ 写入返回 False ✗）；**已修**：那个套件自己把用到的 iotdb
+    名字补成假货 ✓（生产代码不动 ✓）；③ **没有 `orpah.db`** ✗
     （密钥库不入库 ⇒ CI 是**重新播种**的新库 ✓，若某套件暗地里依赖本机那份库的状态 ⇒ 这里就会红 ✓）。
   - **时钟可信（2026-09-12，无 RTC 设备）**：设备 `ts=0`/缺失 → 协议层跳过时间窗（`verify_report` 已做），
     但**存什么时间必须走唯一入口** `orpah_proto.effective_ts(ts, rx)`（返回 `(ts, src)`）——

@@ -179,9 +179,22 @@ def run_suite(label, script, args, e2e=False, verbose=False):
     cmd = [sys.executable, script] + args
     print(f"\n=== {label}  ({script} {' '.join(args)})")
     t0 = time.time()
+    # ★★ 2026-10-12（三系统 CI 抓出来的 ✗）：**子进程必须显式吃 UTF-8** ✓ ——
+    #   本文件自己第 31 行有 `reconfigure` ✓，但**子套件不一定有** ✗（实测：只有 12 个套件做了 ✗）。
+    #   CI 的 Windows runner 默认 locale = **cp1252** ✗（不是本机的 cp936 ⇒ 所以本机一直"碰巧能过" ✗）
+    #   ⇒ 没做 reconfigure 的套件，**第一句** `print("== …中文…==")` 就抛
+    #     `UnicodeEncodeError: 'charmap' codec can't encode characters in position 6-10` ✗
+    #     ⇒ Windows 栏当场红 5 条 ✓（而 Linux / macOS 的 locale 是 UTF-8 ⇒ 那边只有 IoTDB 那条红 ✓）。
+    #   ⇒ 口径：**runner 给子进程强制 UTF-8**（一处管住全部 ✓，将来新增套件也不会再踩 ✓）：
+    #     `PYTHONUTF8=1`（Python 的 UTF-8 模式）+ `PYTHONIOENCODING=utf-8`（stdout/stderr）。
+    #   ★ 为什么不在 workflow 里设环境变量 ✗：那样只在 CI 成立 ✗ —— 换一台 cp1252 的机器照样炸 ✓；
+    #     这是"本仓的套件本来就该能跑"的事 ✓（跟 AGENTS §5 那几条 Windows 坑同源 ✓）。
+    env = dict(os.environ)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     try:
         p = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=TIMEOUT)
+                           encoding="utf-8", errors="replace", timeout=TIMEOUT, env=env)
         out, rc = (p.stdout or "") + (p.stderr or ""), p.returncode
     except subprocess.TimeoutExpired:
         out, rc = f"(超时 {TIMEOUT}s)", None

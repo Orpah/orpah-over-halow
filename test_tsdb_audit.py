@@ -12,6 +12,30 @@ import time
 
 import tsdb
 
+# ★★ 2026-10-12：**CI 抓出来的真缺陷** ✗ —— 本套件开头自称"不依赖真实 IoTDB"，但它其实
+#   **依赖 iotdb 的两个名字** ✗：`tsdb.write_event()` 里面用了 `TSDataType.TEXT` ✗，
+#   而 `TSDataType` 只在**装了包**时才存在 ✓。没装包时（CI 就是 ✗）那句抛 `NameError`
+#   ⇒ 被 `write_event` 里的 `except Exception` **静默吞掉** ✗ ⇒ 返回 False、
+#   `t.session.inserts` 是空的 ⇒ 本套件在 CI 上直接
+#   `IndexError: list index out of range` ✗（本机装了包 ⇒ 一路"碰巧能过" ✗）。
+#   ⇒ 这里把用到的两个名字补成假货 ✓：**生产代码一行不动** ✓，判据仍是"我们自己的代码路径" ✓
+#     （假 Session 只记调用 ✓，不会真连库 ✓）。
+#   ★ 反例提醒：正因它**只在本机装包的条件下**才过，所以"本机 27/27 ✓"从来不能证明它 ✓
+#     —— 这正是要三系统 CI 的理由之一 ✓。
+if not getattr(tsdb, "_HAS_IOTDB", False):
+
+    class _FakeTSDataType:               # write_event / write_report 里用到的枚举
+        TEXT = "TEXT"
+        FLOAT = "FLOAT"
+        INT64 = "INT64"
+
+    class _FakeSession:                  # 只有 _connect() 会用到；本套件不会走到它
+        def __init__(self, *a, **kw):
+            raise RuntimeError("fake session：本套件只用注入的假 Session ✓")
+
+    tsdb.TSDataType = _FakeTSDataType
+    tsdb.Session = _FakeSession
+
 FAIL = []
 
 

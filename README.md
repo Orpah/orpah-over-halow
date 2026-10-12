@@ -226,8 +226,9 @@ gdal2tiles.py --profile=mercator -z 12-17 --xyz source.tif ui/static/maps/现场
 解码 ✗、`shutil.which("sh")` 找到 WSL 的 bash ✗、任务 JSON 吃双引号 ✗）—— 它们平常只在**一台**
 机器上被验过 ✗ ⇒ 干净机器跑一遍才知道是真是假 ✓。
 ★ **三条它不证明** ✗：① **不是真机** ✗（本仓是纯 PC 业务链路；`--e2e` 走 `vendor/halow/sim.py`
-那份**空口仿真副本** ✓，真机在 `halow-demo` ✓）；② IoTDB 那几栏没跑 ✗（CI 里没装 `iotdb` ⇒
-落库用例**可见地跳过** ✓）；③ **没有 `orpah.db`** ✗（密钥库不入库 ⇒ CI 上是**重新播种**的新库 ✓，
+那份**空口仿真副本** ✓，真机在 `halow-demo` ✓）；② IoTDB 那几栏：CI 里没装 `iotdb` ⇒ **不能靠
+“自己会跳过”** ✗ —— 首次跑实测 `test_tsdb_audit.py` **直接 IndexError** ✗（已修：该套件自己把用到的
+iotdb 名字补成假货 ✓）；③ **没有 `orpah.db`** ✗（密钥库不入库 ⇒ CI 上是**重新播种**的新库 ✓，
 若某套件暗地里依赖本机那份库的状态 ⇒ 这里就会红 ✓）。
 
 ---
